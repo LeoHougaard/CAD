@@ -666,6 +666,15 @@ impl GcsSystem {
     /// Validate all entity references in a constraint.
     fn validate_constraint(&self, c: &Constraint) -> Result<(), SketchError> {
         match c {
+            Constraint::Midpoint(point, start, end) => {
+                self.check_point(*point)?;
+                self.check_point(*start)?;
+                self.check_point(*end)?;
+            }
+            Constraint::ArcMidpoint(point, arc, _) => {
+                self.check_point(*point)?;
+                self.check_arc(*arc)?;
+            }
             Constraint::Radius(c, _) => self.check_circle(*c)?,
             Constraint::EqualRadius(a, b) => {
                 self.check_circle(*a)?;
@@ -829,6 +838,8 @@ fn build_snapshot_from_params(
 /// Check if a constraint references a specific point.
 fn constraint_references_point(c: &Constraint, id: PointId) -> bool {
     match c {
+        Constraint::Midpoint(point, start, end) => [*point, *start, *end].contains(&id),
+        Constraint::ArcMidpoint(point, _, _) => *point == id,
         Constraint::DistanceX(a, b, _) | Constraint::DistanceY(a, b, _) => *a == id || *b == id,
         Constraint::Radius(..)
         | Constraint::EqualRadius(..)
@@ -859,6 +870,7 @@ fn constraint_references_point(c: &Constraint, id: PointId) -> bool {
 /// Check if a constraint references a specific line.
 fn constraint_references_line(c: &Constraint, id: LineId) -> bool {
     match c {
+        Constraint::Midpoint(..) | Constraint::ArcMidpoint(..) => false,
         Constraint::EqualLength(a, b) => *a == id || *b == id,
         Constraint::TangentLineCircle(l, _, _) => *l == id,
         Constraint::Radius(..)
@@ -890,6 +902,7 @@ fn constraint_references_line(c: &Constraint, id: LineId) -> bool {
 /// Check if a constraint references a specific circle.
 fn constraint_references_circle(c: &Constraint, id: CircleId) -> bool {
     match c {
+        Constraint::Midpoint(..) | Constraint::ArcMidpoint(..) => false,
         Constraint::Radius(c, _) | Constraint::TangentLineCircle(_, c, _) => *c == id,
         Constraint::EqualRadius(a, b) => *a == id || *b == id,
         Constraint::EqualLength(..) | Constraint::DistanceX(..) | Constraint::DistanceY(..) => {
@@ -922,6 +935,8 @@ fn constraint_references_circle(c: &Constraint, id: CircleId) -> bool {
 /// Check if a constraint references a specific arc.
 fn constraint_references_arc(c: &Constraint, id: ArcId) -> bool {
     match c {
+        Constraint::Midpoint(..) => false,
+        Constraint::ArcMidpoint(_, arc, _) => *arc == id,
         Constraint::Radius(..)
         | Constraint::EqualRadius(..)
         | Constraint::EqualLength(..)

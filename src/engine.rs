@@ -1,10 +1,12 @@
 //! Native geometry execution. This module knows operations, never feature types.
 mod construction_planes;
 mod edge_setback;
+mod boolean_prisms;
 mod feature_controls;
+mod reference_placement;
 mod sweep_loft;
 use crate::{
-    model::{reference_matches, Document, Feature, Plane, Result},
+    model::{canonical_reference, reference_matches, Document, Feature, Plane, Result},
     plugins::{Numbers, Registry},
     sketch::{self, ResolvedSketch, p3, v3},
 };
@@ -83,7 +85,7 @@ pub struct Part {
     pub feature: String,
     /// Only actual contributors may supply persistent geometric references.
     pub source_features: BTreeSet<String>,
-    /// Exact profile namespaces; these are separate from feature dependencies.
+    /// Placed reference scopes; independent of feature dependencies and keys.
     pub reference_sources: BTreeSet<String>,
 }
 #[derive(Clone)]
@@ -412,7 +414,7 @@ impl Geometry {
                 "Intersect" => ops::boolean::BooleanOp::Intersect,
                 _ => return Err(format!("Unknown operation {mode}")),
             };
-            let result = ops::boolean::boolean(&mut self.topo, op, base, solid).map_err(err)?;
+            let result = self.boolean_solid(op,base,solid)?;
             self.parts[i].solid = result;
             self.parts[i].feature = f.id.clone();
             self.parts[i].source_features.insert(f.id.clone());
@@ -429,6 +431,11 @@ impl Geometry {
             plane.validate()?;
             return Ok(plane.shifted(offset));
         }
+        if let Some(value) = p.get("support_ref").filter(|v| !v.is_null()) {
+            let reference: crate::model::PlaneReference = serde_json::from_value(value.clone())
+                .map_err(|e| format!("Invalid sketch support reference: {e}"))?;
+            return Ok(self.resolve_plane_reference(&reference)?.shifted(offset));
+        }
         let support = text(p, "support", "");
         if let Some(plane) = self.planes.get(support) {
             return Ok(plane.shifted(offset));
@@ -436,44 +443,31 @@ impl Geometry {
         if support.is_empty() {
             return Ok(Plane::named(text(p, "plane", "Top"), offset));
         }
-        let anchor = self
-            .anchors
-            .iter()
-            .find(|(key, _, _)| reference_matches(key, support))
-            .ok_or_else(|| {
-                format!("Sketch support '{support}' is missing. Select a new plane or face.")
-            })?;
-        let mut matches = 0;
-        let mut conflicting_orientation = false;
+        let mut result: Option<Plane> = None;
         for part in &self.parts {
             for (id, key) in self.face_keys(part.solid)? {
-                if !reference_matches(&key, support) {
+                if !reference_matches(&key, support)
+                    && !reference_matches(construction_planes::source_face_key(&key), support) {
                     continue;
                 }
-                let face = self.topo.face(id).map_err(err)?;
-                if let FaceSurface::Plane { normal, d } = face.surface()
-                    && plane_matches(&anchor.1, *normal, *d)
-                {
-                    matches += 1;
-                    let sign = if face.is_reversed() { -1. } else { 1. };
-                    let outward = [normal.x() * sign, normal.y() * sign, normal.z() * sign];
-                    conflicting_orientation |= dot(anchor.1.normal, outward) < 1. - 1e-6;
+                let plane = self.face_plane_frame(&part.key, id, &key)?;
+                if self.anchors.iter().any(|(logical, anchor, source)|
+                    part.reference_sources.contains(source)
+                        && reference_matches(logical, construction_planes::source_face_key(&key))
+                        && dot(anchor.normal, plane.normal) < 1. - 1e-6) {
+                    return Err("Sketch support changed orientation; select its owning face".into());
                 }
+                if let Some(existing) = &result {
+                    let same = |a: [f64; 3], b: [f64; 3]| dot(sub(a, b), sub(a, b)) < 1e-14;
+                    if !same(existing.origin, plane.origin) || !same(existing.u, plane.u)
+                        || !same(existing.normal, plane.normal) {
+                        return Err("Sketch support has conflicting placed frames; select its owning face".into());
+                    }
+                } else { result = Some(plane); }
             }
         }
-        if matches == 0 || conflicting_orientation {
-            let reason = if conflicting_orientation {
-                "with conflicting orientation"
-            } else {
-                "on the original plane"
-            };
-            return Err(format!(
-                "Sketch support resolves to {matches} faces {reason}. Repair the reference instead of guessing."
-            ));
-        }
-        // A boolean can split a support into coplanar faces. The sketch needs
-        // their common oriented plane, while its original frame stays stable.
-        Ok(anchor.1.shifted(offset))
+        result.map(|plane| plane.shifted(offset)).ok_or_else(||
+            format!("Sketch support '{support}' is missing. Select a new plane or face."))
     }
     fn register_extrude_anchors(&mut self, source: &str, sk: &ResolvedSketch, start: f64, end: f64, legacy: bool) {
         let sign = if end > start { 1. } else { -1. };
@@ -643,8 +637,11 @@ impl Geometry {
                         )
                     });
                 let result = if op == "fillet" {
-                    ops::blend_ops::fillet_v2(&mut self.topo, solid, &edges, num(p, "radius", 2.))
-                        .map(|r| r.solid)
+                    let result = ops::blend_ops::fillet_v2(&mut self.topo, solid, &edges, num(p, "radius", 2.)).map_err(err)?;
+                    if result.is_partial || !result.failed.is_empty() {
+                        return Err(format!("Fillet could not blend every selected edge: {}",result.failed.iter().map(|(_,error)|error.to_string()).collect::<Vec<_>>().join("; ")));
+                    }
+                    Ok(result.solid)
                 } else if self.has_analytic_chamfer_rims(solid, &edges)?
                     || (planar
                         && !solid_faces(&self.topo, solid)
@@ -666,14 +663,18 @@ impl Geometry {
                     )? {
                         Ok(result)
                     } else {
-                        ops::blend_ops::chamfer_v2(
+                        let result = ops::blend_ops::chamfer_v2(
                             &mut self.topo,
                             solid,
                             &edges,
                             num(p, "distance", 2.),
                             num(p, "distance", 2.),
                         )
-                        .map(|r| r.solid)
+                        .map_err(err)?;
+                        if result.is_partial || !result.failed.is_empty() {
+                            return Err(format!("Chamfer could not blend every selected edge: {}",result.failed.iter().map(|(_,error)|error.to_string()).collect::<Vec<_>>().join("; ")));
+                        }
+                        Ok(result.solid)
                     }
                 }
                 .map_err(err)?;
@@ -725,7 +726,6 @@ impl Geometry {
             "mirror" | "pattern" | "transform" => {
                 let i = self.target(text(p, "target", ""))?;
                 let original = self.parts[i].clone();
-                let reference_sources = original.reference_sources.clone();
                 let mut source_features = original.source_features.clone();
                 source_features.insert(f.id.clone());
                 let mut produced = vec![];
@@ -738,6 +738,9 @@ impl Geometry {
                         v3(plane.normal),
                     )
                     .map_err(err)?;
+                    let reference_sources = self.place_references(&original.reference_sources,
+                        &reference_placement::reflection(&plane),
+                        &format!("{}:instance:0", f.id), flag(p, "keep"))?;
                     if flag(p, "keep") {
                         let key = format!("{}:0", f.id);
                         self.parts.push(Part {
@@ -752,6 +755,7 @@ impl Geometry {
                     } else {
                         self.parts[i].solid = result;
                         self.parts[i].source_features = source_features.clone();
+                        self.parts[i].reference_sources = reference_sources;
                         produced.push(original.key);
                     }
                 } else if op == "pattern" {
@@ -782,6 +786,10 @@ impl Geometry {
                             ),
                         )
                         .map_err(err)?;
+                        let reference_sources = self.place_references(&original.reference_sources,
+                            &Mat4::translation(axis[0] * spacing * n as f64,
+                                axis[1] * spacing * n as f64, axis[2] * spacing * n as f64),
+                            &format!("{}:instance:{n}", f.id), true)?;
                         let key = format!("{}:{n}", f.id);
                         self.parts.push(Part {
                             key: key.clone(),
@@ -802,6 +810,9 @@ impl Geometry {
                         &Mat4::translation(num(p, "x", 0.), num(p, "y", 0.), num(p, "z", 0.)),
                     )
                     .map_err(err)?;
+                    let reference_sources = self.place_references(&original.reference_sources,
+                        &Mat4::translation(num(p, "x", 0.), num(p, "y", 0.), num(p, "z", 0.)),
+                        &format!("{}:instance:0", f.id), flag(p, "copy"))?;
                     if flag(p, "copy") {
                         let key = format!("{}:0", f.id);
                         self.parts.push(Part {
@@ -816,6 +827,7 @@ impl Geometry {
                     } else {
                         self.parts[i].solid = result;
                         self.parts[i].source_features = source_features;
+                        self.parts[i].reference_sources = reference_sources;
                         produced.push(original.key);
                     }
                 }
@@ -847,7 +859,7 @@ impl Geometry {
             .and_then(|key| self.parts.iter().find(|part| part.key == key))
             .map(|part| &part.reference_sources);
         let allowed = |source: &str| sources.is_some_and(|s| s.contains(source));
-        solid_faces(&self.topo, solid)
+        let mut named = solid_faces(&self.topo, solid)
             .map_err(err)?
             .into_iter()
             .map(|id| {
@@ -876,7 +888,12 @@ impl Geometry {
                             for anchor in &self.edge_anchors {
                                 if let Some(side) = &anchor.side
                                     && allowed(&anchor.source)
-                                    && anchor.matches(&self.topo, edge)
+                                    && (anchor.matches(&self.topo, edge)
+                                        || (self.topo.edge(edge).is_ok_and(|edge| {
+                                            if let (Some((center,normal,radius,_)),EdgeCurve::Circle(circle))=(&anchor.circle,edge.curve()) {
+                                                (circle.center()-*center).length()<1e-7 && (circle.radius()-radius).abs()<1e-7 && circle.normal().cross(*normal).length()<1e-7
+                                            } else {false}
+                                        })))
                                 {
                                     sources.insert(side.clone());
                                 }
@@ -900,7 +917,52 @@ impl Geometry {
                 };
                 Ok((id, key))
             })
-            .collect()
+            .collect::<Result<Vec<_>>>()?;
+        let mut counts = BTreeMap::new();
+        for (_, key) in &named { *counts.entry(key.clone()).or_insert(0usize) += 1; }
+        if counts.values().all(|&count| count == 1) { return Ok(named); }
+
+        // A support surface can bound disconnected patches of the same solid.
+        // Identify those patches by source boundary lineage, never by coordinates,
+        // arena order or a nearest-face guess. Connected same-domain fragments
+        // must already have been unified by the Boolean topology operation.
+        let mut uses: HashMap<EdgeId, Vec<usize>> = HashMap::new();
+        for (index, (id, _)) in named.iter().enumerate() {
+            for edge in face_edges(&self.topo, *id).map_err(err)? {
+                uses.entry(edge).or_default().push(index);
+            }
+        }
+        let mut keys = Vec::with_capacity(named.len());
+        for (index, (id, key)) in named.iter().enumerate() {
+            if counts[key] == 1 || key.contains("untracked:") {
+                keys.push(key.clone());
+                continue;
+            }
+            let mut boundary = Vec::new();
+            for edge in face_edges(&self.topo, *id).map_err(err)? {
+                let mut labels: Vec<_> = uses[&edge].iter().filter(|&&i| i != index)
+                    .map(|&i| &named[i].1).filter(|k| !k.contains("untracked:"))
+                    .map(|k| format!("face:{}", canonical_reference(k))).collect();
+                labels.extend(self.edge_anchors.iter()
+                    .filter(|a| allowed(&a.source) && a.matches(&self.topo, edge))
+                    .map(|a| format!("edge:{}", canonical_reference(&a.key))));
+                labels.sort(); labels.dedup();
+                boundary.push(labels);
+            }
+            boundary.sort();
+            keys.push(if boundary.iter().all(Vec::is_empty) {
+                format!("untracked:ambiguous-face:{key}")
+            } else {
+                format!("{key}:patch:{}", crate::plugins::source_hash(&serde_json::to_string(&boundary).map_err(err)?))
+            });
+        }
+        counts.clear();
+        for key in &keys { *counts.entry(key.clone()).or_insert(0usize) += 1; }
+        for ((id, key), candidate) in named.iter_mut().zip(keys) {
+            *key = if counts[&candidate] == 1 { candidate }
+                else { format!("untracked:ambiguous-face:{candidate}:{}", id.index()) };
+        }
+        Ok(named)
     }
     pub fn edge_keys(&self, solid: SolidId) -> Result<Vec<(EdgeId, String)>> {
         let owner = self
@@ -922,12 +984,20 @@ impl Geometry {
             .filter(|(_, k)| reference_matches(k, key))
             .map(|(id, _)| *id)
             .collect();
+        if hits.is_empty() {
+            let sources = &self.parts[self.target(owner)?].reference_sources;
+            hits.extend(available.iter().filter(|(_, actual)|
+                reference_placement::reference_alias(actual, key))
+                .filter(|(id, _)| self.edge_anchors.iter().any(|anchor|
+                    sources.contains(&anchor.source) && anchor.matches(&self.topo, *id)))
+                .map(|(id, _)| *id));
+        }
         // A formerly untracked adjacent face may acquire its correct source name.
         // Retain old explicit source-edge aliases, bounded by the same contributors.
         if hits.is_empty() && !key.contains("untracked:") {
             let sources = &self.parts[self.target(owner)?].reference_sources;
             for anchor in self.edge_anchors.iter().filter(|a| {
-                reference_matches(&a.key, key) && sources.contains(&a.source)
+                reference_placement::reference_alias(&a.key, key) && sources.contains(&a.source)
             }) {
                 for id in solid_edges(&self.topo, solid).map_err(err)? {
                     if anchor.matches(&self.topo, id) {
@@ -950,12 +1020,20 @@ impl Geometry {
         owner: Option<&str>,
     ) -> Result<Vec<(EdgeId, String)>> {
         let faces = self.face_keys_scoped(solid, owner)?;
+        self.edge_keys_from_faces(solid, owner, &faces)
+    }
+    fn edge_keys_from_faces(
+        &self,
+        solid: SolidId,
+        owner: Option<&str>,
+        faces: &[(FaceId, String)],
+    ) -> Result<Vec<(EdgeId, String)>> {
         let sources = owner
             .and_then(|key| self.parts.iter().find(|part| part.key == key))
             .map(|part| &part.reference_sources);
         let mut adjacent: HashMap<EdgeId, Vec<String>> = HashMap::new();
         for (id, key) in faces {
-            for edge in face_edges(&self.topo, id).map_err(err)? {
+            for edge in face_edges(&self.topo, *id).map_err(err)? {
                 adjacent.entry(edge).or_default().push(key.clone());
             }
         }
@@ -1029,7 +1107,9 @@ impl Geometry {
                 .collect();
             let mut faces = vec![];
             let mut normals = Vec::with_capacity(mesh.indices.len());
-            for (i, (id, key)) in self.face_keys(part.solid)?.into_iter().enumerate() {
+            let owner = self.parts.iter().find(|p| p.solid == part.solid).map(|p| p.key.as_str());
+            let named_faces = self.face_keys_scoped(part.solid, owner)?;
+            for (i, (id, key)) in named_faces.iter().cloned().enumerate() {
                 let face = self.topo.face(id).map_err(err)?;
                 let mut cache = HashMap::new();
                 for &vertex in &mesh.indices[offsets[i] as usize..offsets[i + 1] as usize] {
@@ -1049,10 +1129,7 @@ impl Geometry {
                 let plane = if key.starts_with("untracked:") {
                     None
                 } else {
-                    self.anchors
-                        .iter()
-                        .find(|(k, _, _)| reference_matches(k, &key))
-                        .map(|(_, p, _)| p.clone())
+                    self.face_plane_frame(&part.key, id, &key).ok()
                 };
                 faces.push(FaceView {
                     key,
@@ -1066,7 +1143,7 @@ impl Geometry {
             }
             let mut edges = vec![];
             let uses = edge_to_face_map(&self.topo, part.solid).map_err(err)?;
-            for (id, key) in self.edge_keys(part.solid)? {
+            for (id, key) in self.edge_keys_from_faces(part.solid, owner, &named_faces)? {
                 let seam = uses
                     .get(&id.index())
                     .is_some_and(|faces| faces.len() == 2 && faces[0] == faces[1]);

@@ -57,8 +57,9 @@ An editor owns a snapshot of its surrounding workspace. All features use the sam
 preview, commit and cancel path. Preview applies the same feature replacement as
 commit to a cloned document, then limits evaluation to the edited feature. It
 never removes later feature definitions or mutates the saved rollback bar.
-Ending the session restores camera, visibility, display flags and selection
-filter, and returns the full scene while regeneration runs. Cancel restores the
+Ending the session restores visibility, display flags and selection filter,
+and returns the full scene while regeneration runs. Automatic sketch framing
+returns to the previous view unless the user deliberately navigated during the edit. Cancel restores the
 previous selection; commit selects the edited feature. Committing an edit keeps
 an existing manual rollback bar; inserting at that bar advances it one feature.
 Even accepting an unchanged feature rebuilds the surrounding history.
@@ -101,3 +102,75 @@ Shared trimmed endpoints anchor analytic intersections directly, avoiding the
 quadratic cancellation at tangency. Saved references accept a redundant contact
 label only when both original curve endpoints identify the same junction; genuine
 splits, crossing branches and part owners remain distinct.
+
+## Onshape workflow and solid-boundary audit
+
+Baseline: `eaf751b`, 390 passing checks and Windows/Linux CI. Subsequent user
+testing still found failures. That baseline does not establish Onshape parity.
+
+The reference is observable Onshape behavior, using its
+[selection rules](https://cad.onshape.com/help/Content/Home/selection.htm),
+[feature dialogs](https://cad.onshape.com/help/Content/Home/dialogs.htm),
+[sketch constraints](https://cad.onshape.com/help/Content/Sketch/working_with_constraints.htm),
+[Extrude](https://cad.onshape.com/help/Content/PartStudio/extrude.htm),
+[Revolve](https://cad.onshape.com/help/Content/PartStudio/revolve.htm),
+[Boolean](https://cad.onshape.com/help/Content/PartStudio/boolean.htm) and
+[Fillet](https://cad.onshape.com/help/Content/PartStudio/fillet.htm).
+Direct comparison in the supplied account is tracked separately from reading
+these references; unavailable browser automation is not a completed comparison.
+
+The design contract is independent of the example set. A solid has shared
+vertices and edges, connected closed face wires, consistent shell orientation,
+and exact supported curve/surface representations. Boolean construction must
+remove internal boundaries and retain the ownership of surviving boundaries.
+Canonicalization may replace a representation only when equivalence is proved,
+not by visually fitting samples. A feature commits a complete valid result or
+retains its previous geometry. Tests and independent imports check these
+contracts; they are not a substitute for them or a proof of every possible
+floating-point geometry case.
+
+| Shared cause | Baseline evidence | Required outcome |
+| --- | --- | --- |
+| Arbitrary feature inputs | Starting a command fills the most recent sketch, or uses an implicit last body/axis | Use deliberate selections and an explicit active-sketch handoff; empty inputs remain empty |
+| Input routing | Sketch roles are omitted from generic selection routing; Revolve uses a separate axis click path | Every exposed reference input uses the same activation, selection, highlighting, clear and restoration rules |
+| Rendered sketch selection | Clear can hide an edited feature's source; a selected region behind a body can be toggled off but cannot be clicked back on | Keep the editing source visible independently of current input values; use the same visible sketch set for drawing and profile picking |
+| Constraint activation | Missing midpoint; toolbar/search/keyboard differ in applying preselection | Persistent midpoint and point geometry; consistent selection-first and tool-first constraint activation |
+| Circular blend boundaries | Inner circular rim cases disagree with analytic volume and independent STEP mass | Correct material side and orientation at both ends and directions; exact boundaries and independent verification |
+| Partial geometry results | Blend failures can be ignored when some edges succeed | Commit the requested feature completely or preserve the previous solid and report the failure |
+| Boolean result boundaries | Saved model has six redundant connected same-surface faces; remaining disconnected coplanar faces also share references | Verify connected oriented wires, removal of internal boundaries, supported face unification, and downstream edits; do not infer correctness from appearance or face count alone |
+| Placed references | A moved body can leave its attached sketch at the original location or lose selectable cap references | Transform reference frames with their owning occurrence; keep copied occurrences distinct through later joins and upstream edits |
+
+Verification must include positive and rejected operations, multiple profiles,
+independent scopes, clear/reselect, preview/commit/cancel, upstream edits,
+save/reopen, exact solid validity and independent STEP measurements. Pixel owns
+native interaction checks. Automated construction, screenshots of generated
+models and direct Onshape interaction remain distinct evidence.
+
+Native workflow testing also found two shared camera failures. Fit considered
+origin planes before visible sketch geometry, and accepting a normal feature
+restored the entry camera even after a deliberate fit. Fit now uses visible
+sketches and solids, excluding hidden parts. Editing records automatic sketch
+framing separately. It restores the earlier camera only while that automatic
+view remains unchanged, preserving deliberate navigation on accept or cancel.
+
+A plane alone is not a face identity. Disconnected coplanar wall patches retain
+separate references derived from neighboring source faces and exact source-edge
+lineage. The signature excludes coordinates and arena allocation order. If the
+known lineage still cannot distinguish patches, the operation requires a repaired
+reference instead of choosing one by proximity.
+
+The frozen application source for this pass is
+`18f32bddacc3762f007bbac17e83c962c2a6d4858121a450c552a700c41cf4d6`.
+Windows passed 438 checks with no failures or ignored tests, strict all-target
+Clippy, and the build without desktop features. The ten-project timing table is
+updated in [end-user projects](end-user-projects.md).
+
+Native Pixel checks on the preceding UI build covered Clear and reselect,
+occluded-region toggling, mixed face/region extrusion, an open Sweep path behind
+a body, Apply/Cancel camera behavior, and connected constrained dragging. Pan
+translated the image by the requested 60 by 40 pixels; inverse navigation
+restored 99.9991% of the viewport pixels. That interaction run used source
+`4536953`, before the final kernel update, and does not stand in for the final
+build's geometry checks. Physical SpaceMouse feel and direct hands-on Onshape
+comparison remain unverified. Tangent-chain fillet propagation, curved-path
+U-bolts, guided lofts, and the fused-loft through-bore case remain unsupported.

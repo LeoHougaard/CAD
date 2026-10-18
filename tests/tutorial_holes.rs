@@ -316,6 +316,7 @@ fn jourden_holes_and_whole_circle_reorder() {
             .is_none()
     );
     let bottom = &filled.scene.sketches["f11"].plane;
+    // The connected coplanar bottom patches are now one refined support.
     assert_eq!(
         side.geometry
             .face_keys(side.geometry.parts[0].solid)
@@ -323,7 +324,7 @@ fn jourden_holes_and_whole_circle_reorder() {
             .iter()
             .filter(|(_, key)| key == "f2:side:1:0")
             .count(),
-        2
+        1
     );
     assert_eq!(bottom.origin, [0., 0., 0.]);
     assert_eq!(bottom.u, [1., 0., 0.]);

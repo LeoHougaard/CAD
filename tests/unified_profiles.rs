@@ -273,7 +273,7 @@ fn adopting_old_profile_input_preserves_downstream_attached_sketch_references() 
     let before = valid(&d);
     let references = ProfileReference::from_params(&d.features[1].params).unwrap();
     d.features[1].params["profiles"] = json!(references);
-    r.plugins["extrude"].adopt_profile_input(&mut d.features[1]);
+    r.plugins["extrude"].adopt_inputs(&mut d.features[1]);
     assert_eq!(d.features[1].plugin_version, "1.3.0");
     let after = valid(&d);
     close(total(&before), total(&after));
@@ -420,7 +420,7 @@ fn changing_adopted_legacy_boundary_set_fails_closed_instead_of_reusing_part_ord
     );
     valid(&d);
     d.features[1].params["profiles"] = json!([{"kind":"sketch","sketch":sk}]);
-    r.plugins["extrude"].adopt_profile_input(&mut d.features[1]);
+    r.plugins["extrude"].adopt_inputs(&mut d.features[1]);
     valid(&d);
     d.features[1].params["profiles"] = json!([right]);
     let after = eval(&d);

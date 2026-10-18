@@ -189,8 +189,7 @@ dependencies = [
 [[package]]
 name = "brepkit-algo"
 version = "4.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "45f5c8cf4cbbb3c0529f0f7289d57eb9f52067e26776c7e045aa7c40e4adaefa"
+source = "git+https://github.com/LeoHougaard/brepkit?rev=08219b32f6ddf79608567419092f68f57ed9f908#08219b32f6ddf79608567419092f68f57ed9f908"
 dependencies = [
  "brepkit-math",
  "brepkit-topology",
@@ -201,8 +200,7 @@ dependencies = [
 [[package]]
 name = "brepkit-blend"
 version = "4.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a2233109ccc2ced6c23c12a27b3e64e0127f9b6b48cdcfa03fcb057b17af1a2c"
+source = "git+https://github.com/LeoHougaard/brepkit?rev=08219b32f6ddf79608567419092f68f57ed9f908#08219b32f6ddf79608567419092f68f57ed9f908"
 dependencies = [
  "brepkit-math",
  "brepkit-topology",
@@ -213,8 +211,7 @@ dependencies = [
 [[package]]
 name = "brepkit-check"
 version = "4.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7fe9fa10a9ac4fe377f1261e46c4701f5ee6e42530236439acf6daec15af37e9"
+source = "git+https://github.com/LeoHougaard/brepkit?rev=08219b32f6ddf79608567419092f68f57ed9f908#08219b32f6ddf79608567419092f68f57ed9f908"
 dependencies = [
  "brepkit-geometry",
  "brepkit-math",
@@ -226,8 +223,7 @@ dependencies = [
 [[package]]
 name = "brepkit-geometry"
 version = "4.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "44e7e1400ee396b34cb519ad82a5be10db67d18bc8211ecdb72d63e8d227e261"
+source = "git+https://github.com/LeoHougaard/brepkit?rev=08219b32f6ddf79608567419092f68f57ed9f908#08219b32f6ddf79608567419092f68f57ed9f908"
 dependencies = [
  "brepkit-math",
  "thiserror 2.0.21",
@@ -236,8 +232,7 @@ dependencies = [
 [[package]]
 name = "brepkit-heal"
 version = "4.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8f78f35904ca6d01be4932dd6d44ea94c4ed9baa8c7004bebb82f1adb328668"
+source = "git+https://github.com/LeoHougaard/brepkit?rev=08219b32f6ddf79608567419092f68f57ed9f908#08219b32f6ddf79608567419092f68f57ed9f908"
 dependencies = [
  "bitflags 2.13.2",
  "brepkit-geometry",
@@ -250,8 +245,7 @@ dependencies = [
 [[package]]
 name = "brepkit-io"
 version = "4.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dbb8baf75853173b58efd5a589b482023b544ce59f84faaf609571702336377e"
+source = "git+https://github.com/LeoHougaard/brepkit?rev=08219b32f6ddf79608567419092f68f57ed9f908#08219b32f6ddf79608567419092f68f57ed9f908"
 dependencies = [
  "brepkit-math",
  "brepkit-operations",
@@ -267,8 +261,7 @@ dependencies = [
 [[package]]
 name = "brepkit-math"
 version = "4.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2072d50deceac9091574042d75d113a273c6d567eeea7ef9a59466bd3f32de43"
+source = "git+https://github.com/LeoHougaard/brepkit?rev=08219b32f6ddf79608567419092f68f57ed9f908#08219b32f6ddf79608567419092f68f57ed9f908"
 dependencies = [
  "log",
  "robust",
@@ -279,8 +272,7 @@ dependencies = [
 [[package]]
 name = "brepkit-offset"
 version = "4.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f6701b959f869f4869be7daf9df8d68c836fc1a371d04625348fe195cc365fd"
+source = "git+https://github.com/LeoHougaard/brepkit?rev=08219b32f6ddf79608567419092f68f57ed9f908#08219b32f6ddf79608567419092f68f57ed9f908"
 dependencies = [
  "brepkit-geometry",
  "brepkit-math",
@@ -292,8 +284,7 @@ dependencies = [
 [[package]]
 name = "brepkit-operations"
 version = "4.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e974e01f2aaa1d98d185e76b185aeced3fda1a7e3a17c6dbaac11fcae373cac8"
+source = "git+https://github.com/LeoHougaard/brepkit?rev=08219b32f6ddf79608567419092f68f57ed9f908#08219b32f6ddf79608567419092f68f57ed9f908"
 dependencies = [
  "brepkit-algo",
  "brepkit-blend",
@@ -312,8 +303,7 @@ dependencies = [
 [[package]]
 name = "brepkit-sketch"
 version = "4.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "42d6cebfb941285dd3722865c3c75fb2ae9db69e9dc9f8610d12c32c7a76aa41"
+source = "git+https://github.com/LeoHougaard/brepkit?rev=08219b32f6ddf79608567419092f68f57ed9f908#08219b32f6ddf79608567419092f68f57ed9f908"
 dependencies = [
  "thiserror 2.0.21",
 ]
@@ -321,8 +311,7 @@ dependencies = [
 [[package]]
 name = "brepkit-topology"
 version = "4.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ffd4e8b1218e75896610bb52df4eed7a9de9f63bc39e6175fde138c7fed45db"
+source = "git+https://github.com/LeoHougaard/brepkit?rev=08219b32f6ddf79608567419092f68f57ed9f908#08219b32f6ddf79608567419092f68f57ed9f908"
 dependencies = [
  "brepkit-math",
  "smallvec",

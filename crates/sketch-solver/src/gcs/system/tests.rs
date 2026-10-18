@@ -3,6 +3,87 @@ use super::*;
 const TOL: f64 = 1e-10;
 
 #[test]
+fn midpoint_preserves_unrelated_geometry_and_minimum_motion() {
+    let mut sys = GcsSystem::new();
+    let start = sys.add_point(PointData {
+        x: 0.,
+        y: 0.,
+        fixed: false,
+    });
+    let end = sys.add_point(PointData {
+        x: 10.,
+        y: 0.,
+        fixed: false,
+    });
+    let midpoint = sys.add_point(PointData {
+        x: 7.,
+        y: 3.,
+        fixed: false,
+    });
+    let unrelated = sys.add_point(PointData {
+        x: 123.,
+        y: -45.,
+        fixed: false,
+    });
+    sys.add_constraint(Constraint::Midpoint(midpoint, start, end))
+        .unwrap();
+    assert!(sys.solve(100, TOL).unwrap().converged);
+    // Orthogonal least motion distributes the correction in the ratio 1:-1/2:-1/2.
+    for (id, x, y) in [
+        (start, 2. / 3., 1.),
+        (end, 10. + 2. / 3., 1.),
+        (midpoint, 5. + 2. / 3., 1.),
+        (unrelated, 123., -45.),
+    ] {
+        let p = sys.point(id).unwrap();
+        assert!((p.x - x).abs() < 1e-7 && (p.y - y).abs() < 1e-7, "{p:?}");
+    }
+    assert!(sys.remove_point(midpoint).is_err());
+}
+
+#[test]
+fn arc_midpoint_uses_directed_minor_major_and_semicircle_spans() {
+    for (end, clockwise, expected) in [
+        ([0., 5.], false, [5. / 2f64.sqrt(), 5. / 2f64.sqrt()]),
+        ([0., 5.], true, [-5. / 2f64.sqrt(), -5. / 2f64.sqrt()]),
+        ([-5., 0.], false, [0., 5.]),
+        ([-5., 0.], true, [0., -5.]),
+    ] {
+        let mut sys = GcsSystem::new();
+        let center = sys.add_point(PointData {
+            x: 0.,
+            y: 0.,
+            fixed: true,
+        });
+        let start = sys.add_point(PointData {
+            x: 5.,
+            y: 0.,
+            fixed: true,
+        });
+        let end = sys.add_point(PointData {
+            x: end[0],
+            y: end[1],
+            fixed: true,
+        });
+        let midpoint = sys.add_point(PointData {
+            x: 20.,
+            y: 13.,
+            fixed: false,
+        });
+        let arc = sys.add_arc(center, start, end).unwrap();
+        sys.add_constraint(Constraint::ArcMidpoint(midpoint, arc, clockwise))
+            .unwrap();
+        assert!(sys.solve(100, TOL).unwrap().converged);
+        let p = sys.point(midpoint).unwrap();
+        assert!(
+            (p.x - expected[0]).abs() < 1e-7 && (p.y - expected[1]).abs() < 1e-7,
+            "{p:?}"
+        );
+        assert!(sys.remove_arc(arc).is_err());
+    }
+}
+
+#[test]
 fn fix_xy_converges() {
     let mut sys = GcsSystem::new();
     let p = sys.add_point(PointData {

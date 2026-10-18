@@ -1,17 +1,18 @@
 //! Origin and feature planes share one drawing, picking and attachment path.
 use super::*;
 
-pub(super) fn attach(params: &mut Value, id: &str) {
-    if let Some(object) = params.as_object_mut() {
-        object.remove("context_plane");
-        object.remove("context_ref");
-    }
-    if matches!(id, "Top" | "Front" | "Right") {
-        params["plane"] = json!(id);
-        params["support"] = json!("");
-    } else {
-        params["support"] = json!(id);
-    }
+pub(super) fn attach(params: &mut Value, id: &str) -> crate::model::Result<()> {
+    let key = if matches!(id, "Top" | "Front" | "Right") { "plane" } else { "support" };
+    crate::model::set_sketch_support(params, key, json!(id))
+        .map(|_| ())
+}
+
+pub(super) fn attach_face(params: &mut Value, part: &str, face: &str) -> crate::model::Result<()> {
+    let reference = crate::model::PlaneReference::Face {
+        part: part.into(), face: face.into(),
+    };
+    crate::model::set_sketch_support(params, "support_ref", json!(reference))
+        .map(|_| ())
 }
 
 pub(super) fn detach(params: &mut Value, evaluated: &Plane) {
@@ -20,6 +21,7 @@ pub(super) fn detach(params: &mut Value, evaluated: &Plane) {
     params["support"] = json!("");
     if let Some(object) = params.as_object_mut() {
         object.remove("context_ref");
+        object.remove("support_ref");
     }
 }
 
@@ -71,7 +73,6 @@ impl CadApp {
                 Target::Face { .. } => Some(target.clone()),
                 _ => None,
             })
-            .or_else(|| self.selected_plane_id().map(Target::Plane))
     }
     pub(super) fn selected_support_plane(&self) -> Option<Plane> {
         match self.selected_sketch_support()? {
@@ -261,7 +262,10 @@ impl CadApp {
             && edit.sketch.is_some()
         {
             let before = edit.feature.params.clone();
-            attach(&mut edit.feature.params, id);
+            if let Err(error) = attach(&mut edit.feature.params, id) {
+                self.last_error = Some(error);
+                return;
+            }
             if before != edit.feature.params {
                 edit.undo.push(before);
                 edit.redo.clear();
@@ -279,17 +283,27 @@ mod tests {
     use super::*;
     #[test]
     fn datum_attachment_is_explicit_and_detach_preserves_evaluated_frame() {
-        let mut params = json!({"plane":"Top","offset":"3","support":"","context_ref":{}});
-        attach(&mut params, "f8");
+        let mut params = json!({"plane":"Top","offset":"3","support":"","context_ref":{},"support_ref":{"kind":"face","part":"f2:0","face":"f2:end"}});
+        attach(&mut params, "f8").unwrap();
         assert_eq!(params["support"], "f8");
         assert!(params.get("context_ref").is_none());
+        assert!(params.get("support_ref").is_none());
+        attach_face(&mut params, "f2:0", "f2:end:patch:0123456789abcdef").unwrap();
+        assert_eq!(params["support_ref"], json!({"kind":"face","part":"f2:0","face":"f2:end:patch:0123456789abcdef"}));
+        assert!(params.get("context_plane").is_none());
         let frame = Plane::named("Right", 27.);
         detach(&mut params, &frame);
         assert_eq!(params["context_plane"], json!(frame));
         assert_eq!(params["offset"], "0");
+        assert!(params.get("support_ref").is_none());
         assert_eq!(params["support"], "");
-        attach(&mut params, "Front");
+        attach_face(&mut params, "f2:0", "f2:end").unwrap();
+        attach(&mut params, "Front").unwrap();
         assert_eq!(params["plane"], "Front");
+        assert!(params.get("support_ref").is_none());
         assert!(params.get("context_plane").is_none());
+        let before = params.clone();
+        assert!(attach_face(&mut params, "f2:0", "untracked:face").is_err());
+        assert_eq!(params, before);
     }
 }

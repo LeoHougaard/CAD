@@ -1,7 +1,7 @@
 {
   "id": "sketch",
   "name": "Sketch",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "category": "feature",
   "editor": "sketch",
   "script": "sketch.rhai",
@@ -28,6 +28,13 @@
       "label": "Attached face",
       "kind": "support",
       "default": ""
+    },
+    {
+      "key": "support_ref",
+      "label": "Attached plane reference",
+      "kind": "plane_ref",
+      "default": null,
+      "hidden": true
     }
   ],
   "description": "Draw a dimensioned profile on a plane or supported planar face."

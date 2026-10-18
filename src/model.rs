@@ -37,6 +37,47 @@ impl PlaneReference {
     }
 }
 
+/// Replace a sketch binding without retaining an overriding context or support.
+/// Other parameters, including offset, do not change the binding.
+pub fn set_sketch_support(params: &mut Value, key: &str, value: Value) -> Result<bool> {
+    let reference = match key {
+        "plane" => Some(PlaneReference::Origin {
+            plane: value.as_str().ok_or("Sketch plane must be a name")?.into(),
+        }),
+        "support" => {
+            value.as_str().ok_or("Sketch support must be a reference")?;
+            None
+        }
+        "support_ref" if value.is_null() => None,
+        "support_ref" => Some(serde_json::from_value::<PlaneReference>(value.clone())
+            .map_err(|e| format!("Invalid sketch support reference: {e}"))?),
+        _ => return Ok(false),
+    };
+    if let Some(reference) = &reference { reference.validate()?; }
+    let object = params.as_object_mut().ok_or("Sketch parameters must be an object")?;
+    object.remove("context_plane");
+    object.remove("context_ref");
+    object.remove("support_ref");
+    object.insert(key.into(), value);
+    match reference {
+        Some(PlaneReference::Origin { plane }) => {
+            object.insert("plane".into(), json!(plane));
+            object.insert("support".into(), json!(""));
+        }
+        Some(PlaneReference::Datum { feature }) => {
+            object.insert("support".into(), json!(feature));
+        }
+        Some(PlaneReference::Face { face, .. }) => {
+            object.insert("support".into(), json!(face));
+        }
+        None if key == "support_ref" => {
+            object.insert("support".into(), json!(""));
+        }
+        None => {}
+    }
+    Ok(true)
+}
+
 pub fn atomic_write(
     path: &std::path::Path,
     write: impl FnOnce(&mut std::fs::File) -> Result<()>,
@@ -189,6 +230,16 @@ impl Sketch {
         self.next_id += 1;
         self.next_id
     }
+    pub fn add_point(&mut self, point: [f64; 2]) {
+        let id = self.allocate_id();
+        self.entities.push(Entity {
+            id,
+            kind: "point".into(),
+            curve_identity: None,
+            values: point.into_iter().map(fmt).collect(),
+            construction: false,
+        });
+    }
     pub fn add_rect(&mut self, a: [f64; 2], b: [f64; 2]) {
         let id = self.allocate_id();
         self.entities.push(Entity {
@@ -288,12 +339,15 @@ pub fn curve_key(kind: &str, id: u64, edge: usize) -> String {
         "rectangle" => format!("r{id}.{edge}"),
         "circle" => format!("c{id}"),
         "arc" => format!("a{id}"),
+        "point" => format!("p{id}"),
         _ => format!("l{id}"),
     }
 }
 impl Entity {
     pub fn curve_key(&self, edge: usize) -> String {
-        self.curve_identity.clone().unwrap_or_else(|| curve_key(&self.kind, self.id, edge))
+        self.curve_identity
+            .clone()
+            .unwrap_or_else(|| curve_key(&self.kind, self.id, edge))
     }
 }
 impl Sketch {
@@ -301,27 +355,62 @@ impl Sketch {
         let mut seen = std::collections::BTreeSet::new();
         for entity in &self.entities {
             if let Some(key) = &entity.curve_identity {
-                if key.len() > 32 || key.len() < 2 { return Err("Invalid sketch curve identity".into()); }
+                if key.len() > 32 || key.len() < 2 {
+                    return Err("Invalid sketch curve identity".into());
+                }
                 let (kind, id, edge) = match key.as_bytes()[0] {
                     b'r' if entity.kind == "line" => {
-                        let (id, edge) = key[1..].split_once('.').ok_or("Invalid rectangle curve identity")?;
-                        ("rectangle", id.parse::<u64>().map_err(|_| "Invalid curve identity")?, edge.parse::<usize>().map_err(|_| "Invalid curve identity")?)
+                        let (id, edge) = key[1..]
+                            .split_once('.')
+                            .ok_or("Invalid rectangle curve identity")?;
+                        (
+                            "rectangle",
+                            id.parse::<u64>().map_err(|_| "Invalid curve identity")?,
+                            edge.parse::<usize>()
+                                .map_err(|_| "Invalid curve identity")?,
+                        )
                     }
-                    b'l' if entity.kind == "line" => ("line",key[1..].parse::<u64>().map_err(|_| "Invalid curve identity")?,0),
-                    b'c' if entity.kind == "circle" => ("circle",key[1..].parse::<u64>().map_err(|_| "Invalid curve identity")?,0),
-                    b'a' if entity.kind == "arc" => ("arc",key[1..].parse::<u64>().map_err(|_| "Invalid curve identity")?,0),
+                    b'l' if entity.kind == "line" => (
+                        "line",
+                        key[1..]
+                            .parse::<u64>()
+                            .map_err(|_| "Invalid curve identity")?,
+                        0,
+                    ),
+                    b'c' if entity.kind == "circle" => (
+                        "circle",
+                        key[1..]
+                            .parse::<u64>()
+                            .map_err(|_| "Invalid curve identity")?,
+                        0,
+                    ),
+                    b'a' if entity.kind == "arc" => (
+                        "arc",
+                        key[1..]
+                            .parse::<u64>()
+                            .map_err(|_| "Invalid curve identity")?,
+                        0,
+                    ),
                     _ => return Err("Curve identity does not match its geometry".into()),
                 };
-                if id == 0 || id > self.next_id || edge > 3 || curve_key(kind,id,edge) != *key {
+                if id == 0 || id > self.next_id || edge > 3 || curve_key(kind, id, edge) != *key {
                     return Err("Invalid or noncanonical sketch curve identity".into());
                 }
             }
-            for edge in 0..if entity.kind == "rectangle" {4} else {1} {
-                if !seen.insert(entity.curve_key(edge)) { return Err("Duplicate sketch curve identity".into()); }
+            for edge in 0..if entity.kind == "rectangle" { 4 } else { 1 } {
+                if !seen.insert(entity.curve_key(edge)) {
+                    return Err("Duplicate sketch curve identity".into());
+                }
             }
         }
         Ok(())
     }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SketchPointReference {
+    pub entity: u64,
+    pub point: usize,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -334,6 +423,9 @@ pub struct SketchConstraint {
     pub value: String,
     #[serde(default)]
     pub points: [usize; 2],
+    /// Third, midpoint point when constraining three ordered point selections.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub midpoint: Option<SketchPointReference>,
     #[serde(default)]
     pub position: Option<[f64; 2]>,
     #[serde(default)]

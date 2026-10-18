@@ -24,6 +24,12 @@ Plane references store identities rather than evaluated coordinates:
 {"kind":"face","part":"f2:0","face":"f2:end"}
 ```
 
-The bundled `plane` plugin is version 1.0.0. Existing plugin packages, including Sketch, retain their bytes and pins. The public agent protocol accepts `plane_ref` fields and returns evaluated datums as `model.planes: [{id, plane}]`. A sketch with `support: "f3"` uses that datum. Missing, suppressed, later, curved, ambiguous, or unsupported references fail explicitly. Failed features preserve earlier datums and solids; rollback excludes later planes.
+The bundled `plane` plugin is version 1.0.0. Existing documents retain their pins until explicitly adopting a newer input. The public agent protocol accepts `plane_ref` fields and returns evaluated datums as `model.planes: [{id, plane}]`. A sketch with `support: "f3"` uses that datum. Missing, suppressed, later, curved, ambiguous, or unsupported references fail explicitly. Failed features preserve earlier datums and solids; rollback excludes later planes.
+
+New face-attached sketches store `support_ref` as the typed face reference shown
+above, retaining the owning part as well as the face identity. Their local frame
+uses the face's outward material normal. The legacy `support` string remains
+readable, but cannot choose between different placed occurrences. Selecting an
+origin or datum clears an earlier face reference.
 
 `tests/construction_planes.rs` exercises chained offsets, opposing face normals, both angular bisectors, exact-axis rotation, upstream edits, reopening, failure preservation, timeline changes, cache reuse, and agent edits with atomic rejection. Geometry checks include closed B-reps, analytic volumes, bounds, and orthonormal frames. The runtime rejects native mesh fallbacks for these workflows as for other modeling operations.

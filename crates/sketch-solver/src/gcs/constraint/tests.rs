@@ -62,10 +62,44 @@ fn cad_dimension_jacobians_match_finite_differences() {
         Constraint::EqualLength(first, second),
         Constraint::DistanceX(a, c, 7.),
         Constraint::DistanceY(a, c, 7.),
+        Constraint::Midpoint(c, a, b),
         Constraint::TangentLineCircle(first, one, 1.),
         Constraint::TangentLineCircle(first, one, -1.),
     ] {
         check_jacobian_fd(&constraint, &snapshot, &params);
+    }
+}
+
+#[test]
+fn directed_arc_midpoint_jacobians_match_finite_differences() {
+    use super::super::entity::{ArcData, GenArena};
+    let mut points = GenArena::new();
+    let ids: Vec<_> = [(3., -2.), (8., 1.), (0., 3.), (7., 7.)]
+        .into_iter()
+        .map(|(x, y)| points.insert(PointData { x, y, fixed: false }))
+        .collect();
+    let mut arcs = GenArena::new();
+    let arc = arcs.insert(ArcData {
+        center: ids[0],
+        start: ids[1],
+        end: ids[2],
+    });
+    let snap = EntitySnapshot {
+        points: points.iter().map(|(id, p)| (id, (p.x, p.y))).collect(),
+        lines: HashMap::new(),
+        circles: HashMap::new(),
+        arcs: [(arc, (ids[0], ids[1], ids[2]))].into_iter().collect(),
+    };
+    let params: Vec<_> = ids
+        .iter()
+        .flat_map(|&id| [ParamRef::PointX(id), ParamRef::PointY(id)])
+        .collect();
+    for clockwise in [false, true] {
+        check_jacobian_fd(
+            &Constraint::ArcMidpoint(ids[3], arc, clockwise),
+            &snap,
+            &params,
+        );
     }
 }
 

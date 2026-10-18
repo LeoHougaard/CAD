@@ -4,6 +4,7 @@ The defaults follow [Onshape's keyboard map](https://cad.onshape.com/help/Conten
 
 | In a sketch | Key |
 | --- | --- |
+| Point | Shift+S |
 | Line | L |
 | Corner rectangle | G |
 | Center rectangle | R |
@@ -17,6 +18,7 @@ The defaults follow [Onshape's keyboard map](https://cad.onshape.com/help/Conten
 | Parallel / perpendicular | B / Shift+L |
 | Equal | E |
 | Concentric | Shift+O |
+| Midpoint | Shift+M |
 | Tangent | T |
 | Fix | Shift+J |
 | Construction | Q |

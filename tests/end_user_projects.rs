@@ -338,20 +338,20 @@ fn instrument_enclosure() -> Project {
     let mut s = Sketch::default();
     for x in ["-width/2+8", "width/2-8"] {
         for y in ["-depth/2+8", "depth/2-8"] {
-            circle(&mut s, &d, x, y, "2");
-        }
-    }
-    let sk = sketch(&mut d, "Mounting screw bores", "Top", "0", "", s);
-    extrude(&mut d, "Drill floor", &sk, "wall", "Remove", false);
-    let mut s = Sketch::default();
-    for x in ["-width/2+8", "width/2-8"] {
-        for y in ["-depth/2+8", "depth/2-8"] {
             circle(&mut s, &d, x, y, "4");
             circle(&mut s, &d, x, y, "2");
         }
     }
     let sk = sketch(&mut d, "Mounting boss rings", "Top", "wall", "", s);
     extrude(&mut d, "Four bosses", &sk, "boss_height-wall", "Add", false);
+    let mut s = Sketch::default();
+    for x in ["-width/2+8", "width/2-8"] {
+        for y in ["-depth/2+8", "depth/2-8"] {
+            circle(&mut s, &d, x, y, "2");
+        }
+    }
+    let sk = sketch(&mut d, "Mounting screw bores", "Top", "0", "", s);
+    extrude(&mut d, "Drill floor", &sk, "wall", "Remove", false);
     let sk = rectangular_sketch(
         &mut d,
         "Connector aperture",

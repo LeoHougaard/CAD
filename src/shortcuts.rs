@@ -10,6 +10,7 @@ pub enum Context {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SketchTool {
+    Point,
     Line,
     CornerRectangle,
     CenterRectangle,
@@ -174,6 +175,7 @@ pub fn command_for(key: Key, modifiers: Modifiers, context: Context) -> Option<C
             Key::E => Some(Extrude),
             Key::W => Some(Revolve),
             Key::S if context == Context::PartStudio => Some(NewSketch),
+            Key::S if context == Context::Sketch => Some(SketchTool(self::SketchTool::Point)),
             Key::F if context == Context::PartStudio => Some(Fillet),
             Key::H => Some(ToggleSketches),
             Key::Y => Some(ShowHidden),
@@ -187,6 +189,7 @@ pub fn command_for(key: Key, modifiers: Modifiers, context: Context) -> Option<C
             Key::Num7 => Some(View(self::View::Isometric)),
             Key::Z => Some(ZoomIn),
             Key::A if context == Context::Sketch => Some(ToggleTangentArc),
+            Key::M if context == Context::Sketch => Some(Relationship("Midpoint")),
             Key::L if context == Context::Sketch => Some(Relationship("Perpendicular")),
             Key::O if context == Context::Sketch => Some(Relationship("Concentric")),
             Key::J if context == Context::Sketch => Some(Relationship("Fix")),
@@ -355,8 +358,16 @@ mod tests {
             command_for(Key::L, Modifiers::SHIFT, Context::Sketch),
             Some(Command::Relationship("Perpendicular"))
         );
-        assert_eq!(command_for(Key::S, Modifiers::SHIFT, Context::Sketch), None);
+        assert_eq!(
+            command_for(Key::S, Modifiers::SHIFT, Context::Sketch),
+            Some(Command::SketchTool(SketchTool::Point))
+        );
         assert_eq!(command_for(Key::F, Modifiers::SHIFT, Context::Sketch), None);
+        assert_eq!(
+            command_for(Key::M, Modifiers::SHIFT, Context::Sketch),
+            Some(Command::Relationship("Midpoint"))
+        );
+        assert_eq!(command_for(Key::M, Modifiers::SHIFT, Context::PartStudio), None);
         assert_eq!(
             command_for(Key::S, Modifiers::SHIFT, Context::PartStudio),
             Some(Command::NewSketch)

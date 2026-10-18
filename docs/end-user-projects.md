@@ -34,7 +34,8 @@ parts. They test mirrored and patterned manufacturing sets in a Part Studio.
 
 Rounded slots use a rectangular cut followed by circular endpoint cuts. This
 creates the same capsule boundary while using the available sketch tools. A
-native Slot tool and general tangent line/circle sketch arrangement are missing.
+native Slot tool is still missing; tangent line/circle arrangements and tangent
+arcs are available in sketches.
 
 The handle uses a rectangular section and exact planar mitres. Onshape's
 [U-bolt tutorial](https://www.onshape.com/en/resource-center/tech-tips/tech-tip-lets-make-a-u-bolt)
@@ -42,21 +43,26 @@ uses a circular section along a line/arc path. That U-bolt workflow remains
 unsupported here; this example is a different complete handle design. Threads,
 helical sweeps, and guided/spline lofts remain outside these project scopes.
 
+Automatic same-domain refinement currently joins coplanar faces with linear
+boundaries. Curved-boundary planar domains retain their exact source faces
+until curve-aware loop classification is available.
+
 Three first attempts exposed kernel failures. Their unsuppressed documents are
 preserved in [tests/fixtures/project-rejections](../tests/fixtures/project-rejections).
 The shared chamfer fix now passes the original cable-comb ordering, including an
-upstream width edit, closed topology and analytical volume. The other two remain
-explicit rejections that retain the previous precise solid.
+upstream width edit, closed topology and analytical volume. Same-domain Boolean refinement now also passes the enclosure’s original
+order: add the annular bosses, then drill their centers. The fused-loft reducer
+remains an explicit rejection that retains the previous precise solid.
 
 | Rejected workflow | Observed result | Completed project workflow |
 | --- | --- | --- |
-| Drill enclosure boss centers after fusing annular bosses into the shell floor | Boolean requires a mesh approximation, so the operation is rejected | Drill the floor first, then add annular bosses above it; final geometry is unchanged |
+| Drill enclosure boss centers after fusing annular bosses into the shell floor | Fixed by joining connected same-domain faces before the next operation | Original and alternative orders pass; the example now uses the original order |
 | Bore through a fused circular loft and flange | Boolean requires a mesh approximation, so the operation is rejected | Revolve the complete hollow radial section, then drill flange bolts; the two conical sections and axial passage are explicit in the section |
 | Chamfer the comb's long back edge after making the channel and mounting cutouts | Fixed by preserving inner wires in the shared exact setback operation | Both original and alternative orders pass |
 
 The successful alternatives are saved as the examples. Failed features are not
-suppressed in those projects. The two Boolean failures remain material limits for designs
-that require the original feature ordering.
+suppressed in those projects. The fused-loft Boolean failure remains a material limit for designs
+that require that original feature ordering.
 
 ## Reproduce verification
 
@@ -84,19 +90,20 @@ AMD Ryzen 7 5700G with Radeon Graphics, Windows 11 Pro x86-64,
 twenty samples per operation, release optimization with LTO
 disabled and sixteen code generation units. These timings include display mesh
 construction. They are local engine measurements, not application frame times.
+The October 18, 2026 run used source fingerprint `18f32bddacc3762f007bbac17e83c962c2a6d4858121a450c552a700c41cf4d6`.
 
 | Project | Full p50 ms | Full p95 ms | Last feature p50 ms | Last feature p95 ms |
 | --- | ---: | ---: | ---: | ---: |
-| Adjustment bracket | 27.75 | 28.92 | 12.12 | 12.55 |
-| Bearing block | 21.28 | 22.32 | 11.03 | 11.90 |
-| Cable comb | 21.12 | 22.09 | 8.58 | 9.15 |
-| Circular reducer | 17.87 | 18.88 | 18.17 | 19.06 |
-| Clevis pair | 14.10 | 15.09 | 7.28 | 7.59 |
-| Grooved pulley | 22.24 | 23.26 | 22.07 | 23.42 |
-| Instrument enclosure | 39.08 | 40.26 | 18.10 | 18.86 |
-| Rectangular duct | 17.50 | 18.44 | 14.86 | 15.36 |
-| Standoff set | 29.83 | 30.89 | 26.15 | 28.17 |
-| Swept handle | 18.34 | 19.13 | 15.91 | 16.34 |
+| Adjustment bracket | 25.82 | 26.58 | 12.17 | 13.33 |
+| Bearing block | 22.15 | 22.84 | 11.25 | 11.86 |
+| Cable comb | 21.86 | 22.81 | 8.90 | 9.86 |
+| Circular reducer | 18.68 | 19.54 | 19.16 | 21.45 |
+| Clevis pair | 14.29 | 15.45 | 7.52 | 7.95 |
+| Grooved pulley | 24.64 | 27.20 | 23.62 | 26.04 |
+| Instrument enclosure | 49.01 | 50.25 | 18.78 | 20.83 |
+| Rectangular duct | 18.78 | 22.53 | 17.15 | 18.98 |
+| Standoff set | 29.71 | 31.77 | 26.65 | 28.77 |
+| Swept handle | 18.87 | 19.70 | 16.00 | 16.32 |
 
 All ten baseline and ten upstream-edited STEP files passed independent
 Open CASCADE checks for solid count, analytic volume and exact bounding boxes.

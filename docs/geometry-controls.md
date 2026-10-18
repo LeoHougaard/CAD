@@ -32,6 +32,15 @@ the local profile resolver and operation scopes:
   Sketch lines supply their direction; circles and arcs supply their center and
   plane normal. Straight and circular edges supply their exact axes. The axis
   must lie in every selected profile plane. The older `sketch_line` spelling still works.
+  A rectangle side also stores its zero-based `edge` index, so its four sides
+  remain distinct axis choices.
+
+New commands begin with empty reference inputs. Deliberately selected geometry
+can seed the relevant input; an active sketch can hand its profiles to Extrude
+or Revolve. This does not supply an implicit revolve axis or merge scope.
+Click an input to activate it, or use Tab and Shift+Tab to cycle the visible
+inputs. Clear removes only that input. Apply remains disabled until all required
+references are present. These UI rules do not change legacy document semantics.
 
 Each connected Revolve region must stay on one side of the axis; touching it at
 the boundary is allowed. This is checked using exact straight-edge endpoints and
@@ -49,6 +58,13 @@ patterns and mirrors inherit the source contributors. Unrelated later geometry
 cannot supply matching plane or curve names to an earlier part. Arc profiles also
 retain the planar closing-edge provenance, and old explicit source-edge aliases
 still resolve uniquely within the same contributor scope.
+
+Disconnected coplanar patches have separate identities derived from neighboring
+source faces and exact source edges. Coordinates and topology allocation order
+are excluded. If that lineage remains ambiguous, reselecting is required.
+Attached sketches store a typed `support_ref` with both the part and face owner;
+their frame uses the surviving face's outward material normal. A bare legacy
+support can resolve only when the active owners agree on one frame.
 
 Old pinned Extrude 1.0/1.1/1.2 and Revolve 1.0/1.1 documents retain their original whole
 sketch and single-target behavior when the new inputs are absent. Compatibility

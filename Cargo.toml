@@ -52,3 +52,17 @@ lto = "thin"
 codegen-units = 1
 strip = "debuginfo"
 
+# Keep all kernel types on one reviewed source revision.
+[patch.crates-io]
+brepkit-algo = { git = "https://github.com/LeoHougaard/brepkit", rev = "08219b32f6ddf79608567419092f68f57ed9f908" }
+brepkit-blend = { git = "https://github.com/LeoHougaard/brepkit", rev = "08219b32f6ddf79608567419092f68f57ed9f908" }
+brepkit-check = { git = "https://github.com/LeoHougaard/brepkit", rev = "08219b32f6ddf79608567419092f68f57ed9f908" }
+brepkit-geometry = { git = "https://github.com/LeoHougaard/brepkit", rev = "08219b32f6ddf79608567419092f68f57ed9f908" }
+brepkit-heal = { git = "https://github.com/LeoHougaard/brepkit", rev = "08219b32f6ddf79608567419092f68f57ed9f908" }
+brepkit-io = { git = "https://github.com/LeoHougaard/brepkit", rev = "08219b32f6ddf79608567419092f68f57ed9f908" }
+brepkit-math = { git = "https://github.com/LeoHougaard/brepkit", rev = "08219b32f6ddf79608567419092f68f57ed9f908" }
+brepkit-offset = { git = "https://github.com/LeoHougaard/brepkit", rev = "08219b32f6ddf79608567419092f68f57ed9f908" }
+brepkit-operations = { git = "https://github.com/LeoHougaard/brepkit", rev = "08219b32f6ddf79608567419092f68f57ed9f908" }
+brepkit-sketch = { git = "https://github.com/LeoHougaard/brepkit", rev = "08219b32f6ddf79608567419092f68f57ed9f908" }
+brepkit-topology = { git = "https://github.com/LeoHougaard/brepkit", rev = "08219b32f6ddf79608567419092f68f57ed9f908" }
+

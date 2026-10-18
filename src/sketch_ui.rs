@@ -19,10 +19,23 @@ const HOVER: Color32 = Color32::from_rgb(170, 145, 196);
 const ORANGE: Color32 = HOVER;
 const RED: Color32 = Color32::from_rgb(247, 119, 132);
 const MUTED: Color32 = Color32::from_rgb(144, 159, 180);
+pub const RELATIONSHIPS: &[&str] = &[
+    "Coincident",
+    "Horizontal",
+    "Vertical",
+    "Parallel",
+    "Perpendicular",
+    "Equal",
+    "Concentric",
+    "Tangent",
+    "Midpoint",
+    "Fix",
+];
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Tool {
     #[default]
     Select,
+    Point,
     Line,
     Rectangle,
     CenterRectangle,
@@ -38,6 +51,7 @@ impl Tool {
     pub fn name(self) -> &'static str {
         match self {
             Self::Select => "Select",
+            Self::Point => "Point (Shift+S)",
             Self::Line => "Line (L)",
             Self::Rectangle => "Rectangle (G)",
             Self::CenterRectangle => "Center rectangle (R)",
@@ -55,6 +69,7 @@ impl Tool {
 struct Snap {
     p: [f64; 2],
     target: Option<Selection>,
+    midpoint: Option<Selection>,
     x_axis: bool,
     y_axis: bool,
 }
@@ -174,6 +189,8 @@ impl SketchUi {
             }
             self.picks = self.selected.clone();
             self.selected = self.picks.clone();
+        } else if let Tool::Relationship(name) = tool {
+            self.pending_relationship = (!self.selected.is_empty()).then_some(name);
         } else if !matches!(tool, Tool::Select | Tool::Relationship(_)) {
             self.selected.clear();
         }
@@ -193,6 +210,7 @@ impl SketchUi {
     pub fn toolbar(&mut self, ui: &mut egui::Ui) {
         for tool in [
             Tool::Select,
+            Tool::Point,
             Tool::Line,
             Tool::Rectangle,
             Tool::CenterRectangle,
@@ -252,6 +270,7 @@ impl SketchUi {
                 }
                 Command::ClearSelection => self.clear_selection(),
                 Command::SketchTool(tool) => self.toggle_tool(match tool {
+                    SketchTool::Point => Tool::Point,
                     SketchTool::Line => Tool::Line,
                     SketchTool::CornerRectangle => Tool::Rectangle,
                     SketchTool::CenterRectangle => Tool::CenterRectangle,
@@ -265,7 +284,6 @@ impl SketchUi {
                         self.cancel_gesture();
                     } else {
                         self.set_tool(Tool::Relationship(name));
-                        self.pending_relationship = (!self.selected.is_empty()).then_some(name);
                     }
                 }
                 Command::ToggleTangentArc => match self.tool {
@@ -331,7 +349,9 @@ impl SketchUi {
                 .find(|e| e.id == s.entity)
                 .is_some_and(|e| match s.sub {
                     Sub::Point(index) => index < e.control_points().len(),
-                    Sub::Edge(index) => index < if e.kind == "rectangle" { 4 } else { 1 },
+                    Sub::Edge(index) => {
+                        e.kind != "point" && index < if e.kind == "rectangle" { 4 } else { 1 }
+                    }
                 })
         };
         self.selected.retain(valid);
@@ -363,34 +383,16 @@ impl SketchUi {
         }
         ui.add_space(8.);
         ui.horizontal_wrapped(|ui| {
-            for name in [
-                "Coincident",
-                "Horizontal",
-                "Vertical",
-                "Parallel",
-                "Perpendicular",
-                "Equal",
-                "Concentric",
-                "Tangent",
-                "Fix",
-            ] {
+            for &name in RELATIONSHIPS {
                 if ui
-                    .add_enabled(!self.selected.is_empty(), egui::Button::new(name).small())
+                    .add(
+                        egui::Button::new(name)
+                            .small()
+                            .selected(self.tool == Tool::Relationship(name)),
+                    )
                     .clicked()
                 {
-                    match self.relationships(name, sketch) {
-                        Ok(constraints) => {
-                            self.hint.clear();
-                            seed_from_resolved(sketch, self.last_good.as_ref());
-                            for c in constraints {
-                                if !sketch.constraints.iter().any(|x| x == &c) {
-                                    sketch.constraints.push(c);
-                                    changed = true;
-                                }
-                            }
-                        }
-                        Err(e) => self.hint = e,
-                    }
+                    self.toggle_tool(Tool::Relationship(name));
                 }
             }
         });
@@ -410,10 +412,11 @@ impl SketchUi {
         let mut edit = None;
         for (index, c) in sketch.constraints.iter_mut().enumerate() {
             let related = self.selected.is_empty()
-                || self
-                    .selected
-                    .iter()
-                    .any(|s| s.entity == c.a || s.entity == c.b);
+                || self.selected.iter().any(|s| {
+                    s.entity == c.a
+                        || s.entity == c.b
+                        || c.midpoint.is_some_and(|p| p.entity == s.entity)
+                });
             if !related {
                 continue;
             }
@@ -428,7 +431,11 @@ impl SketchUi {
                             if c.reference { " (ref)" } else { "" }
                         )
                     } else {
-                        c.kind.clone()
+                        if c.kind == "FixPoint" {
+                            "Fix".into()
+                        } else {
+                            c.kind.clone()
+                        }
                     };
                     let r = ui.selectable_label(self.selected_dimension == Some(index), text);
                     if r.clicked() {
@@ -458,16 +465,22 @@ impl SketchUi {
         changed
     }
     fn relationships(&self, name: &str, sketch: &Sketch) -> Result<Vec<SketchConstraint>, String> {
-        if self.selected.len() > 2
-            && matches!(name, "Horizontal" | "Vertical")
+        if matches!(name, "Horizontal" | "Vertical")
             && self.selected.iter().any(|s| matches!(s.sub, Sub::Point(_)))
+            && self.selected.iter().any(|s| matches!(s.sub, Sub::Edge(_)))
         {
-            return Err("Select two points, or select lines".into());
+            return Err("Select points or lines for this relationship".into());
         }
         if self.selected.len() > 2
             && !matches!(
                 name,
-                "Fix" | "Horizontal" | "Vertical" | "Equal" | "Parallel" | "Concentric"
+                "Fix"
+                    | "Horizontal"
+                    | "Vertical"
+                    | "Equal"
+                    | "Parallel"
+                    | "Concentric"
+                    | "Midpoint"
             )
         {
             return Err("Select exactly two suitable entities".into());
@@ -478,7 +491,11 @@ impl SketchUi {
                 && self.selected.iter().all(|s| matches!(s.sub, Sub::Edge(_)))
         {
             groups.extend(self.selected.iter().map(|s| vec![*s]));
-        } else if matches!(name, "Equal" | "Parallel" | "Concentric") && self.selected.len() > 2 {
+        } else if matches!(
+            name,
+            "Equal" | "Parallel" | "Concentric" | "Horizontal" | "Vertical"
+        ) && self.selected.len() > 2
+        {
             groups.extend(
                 self.selected[1..]
                     .iter()
@@ -508,9 +525,49 @@ impl SketchUi {
             ..Default::default()
         };
         match name {
+            "Midpoint" => {
+                if selected.len() == 3 && selected.iter().all(|s| matches!(s.sub, Sub::Point(_))) {
+                    let midpoint = selected[2];
+                    c.midpoint = Some(crate::model::SketchPointReference {
+                        entity: midpoint.entity,
+                        point: midpoint.index(),
+                    });
+                } else {
+                    let b = b.ok_or("Select a line or arc and a point, or three points")?;
+                    if selected.len() != 2 {
+                        return Err("Select a line or arc and a point, or three points".into());
+                    }
+                    let (point, curve) = match (a.sub, b.sub) {
+                        (Sub::Point(_), Sub::Edge(_)) => (a, b),
+                        (Sub::Edge(_), Sub::Point(_)) => (b, a),
+                        _ => return Err("Select a line or arc and a point, or three points".into()),
+                    };
+                    let entity = sketch
+                        .entities
+                        .iter()
+                        .find(|e| e.id == curve.entity)
+                        .ok_or("Select a sketch line or arc")?;
+                    if !matches!(entity.kind.as_str(), "line" | "rectangle" | "arc") {
+                        return Err("Midpoint needs a line or arc, not a circle".into());
+                    }
+                    c.a = point.entity;
+                    c.b = curve.entity;
+                    c.points = [point.index(), curve.index()];
+                }
+            }
             "Fix" => {
                 if a.entity == 0 {
                     return Err("The origin is already fixed".into());
+                }
+                if matches!(a.sub, Sub::Point(_)) {
+                    let resolved = self
+                        .last_good
+                        .as_ref()
+                        .ok_or("Wait for the sketch to solve")?;
+                    c.kind = "FixPoint".into();
+                    c.position = Some(dimensions::point(resolved, a.entity, a.index())?);
+                } else {
+                    c.points = [0, 0];
                 }
             }
             "Horizontal" | "Vertical" => {
@@ -526,13 +583,29 @@ impl SketchUi {
             }
             "Concentric" => {
                 let b = b.ok_or("Select two circles")?;
-                if ![a.entity, b.entity].into_iter().all(|id| {
+                let circular = |id| {
                     sketch
                         .entities
                         .iter()
                         .any(|e| e.id == id && matches!(e.kind.as_str(), "circle" | "arc"))
-                }) {
-                    return Err("Concentric requires two circles".into());
+                };
+                match (a.sub, b.sub) {
+                    (Sub::Point(_), Sub::Edge(_)) if circular(b.entity) => {
+                        c.points[1] = 0;
+                    }
+                    (Sub::Edge(_), Sub::Point(_)) if circular(a.entity) => {
+                        c.a = b.entity;
+                        c.b = a.entity;
+                        c.points = [b.index(), 0];
+                    }
+                    (Sub::Edge(_), Sub::Edge(_)) if circular(a.entity) && circular(b.entity) => (),
+                    (Sub::Point(0), Sub::Point(0)) if circular(a.entity) && circular(b.entity) => {
+                    }
+                    _ => {
+                        return Err(
+                            "Select two circles or arcs, or a point and a circle or arc".into()
+                        );
+                    }
                 }
             }
             "Equal" | "Parallel" | "Perpendicular" => {
@@ -728,7 +801,8 @@ impl SketchUi {
             self.last_good = Some(solved.clone());
             sk = solved;
         }
-        let plane = &sk.plane;
+        let sketch_plane = sk.plane.clone();
+        let plane = &sketch_plane;
         let projector = camera.projector(rect);
         let pointer = response.hover_pos();
         let raw = pointer.and_then(|p| camera.plane_point(p, rect, plane));
@@ -785,6 +859,7 @@ impl SketchUi {
             && !ui.input(|i| i.modifiers.shift)
             && let (Some(first), Some(end)) = (&self.first, &mut snap)
             && end.target.is_none()
+            && end.midpoint.is_none()
             && let Ok(start) = tangent_start(&sk, first, first.target)
             && sk
                 .entities
@@ -833,20 +908,53 @@ impl SketchUi {
         }
         let mut edit = Edit::default();
         if let Some(name) = self.pending_relationship.take() {
-            match self.relationships(name, sketch) {
-                Ok(constraints) => {
-                    seed_from_resolved(sketch, Some(&sk));
-                    let before = sketch.constraints.len();
-                    for c in constraints {
-                        add_relation(sketch, c);
-                    }
-                    if sketch.constraints.len() != before {
-                        edit.change(true);
-                    }
-                    self.hint.clear();
-                    self.clear_selection();
+            let complete = match name {
+                "Fix" => !self.selected.is_empty(),
+                "Horizontal" | "Vertical" => {
+                    self.selected.iter().any(|s| matches!(s.sub, Sub::Edge(_)))
+                        || self.selected.len() >= 2
                 }
-                Err(error) => self.hint = error,
+                "Midpoint" => {
+                    self.selected.len() >= 3
+                        || self.selected.len() == 2
+                            && self.selected.iter().any(|s| matches!(s.sub, Sub::Edge(_)))
+                }
+                _ => self.selected.len() >= 2,
+            };
+            if !complete {
+                self.hint = if name == "Midpoint" && self.selected.len() == 2 {
+                    "Select the midpoint"
+                } else {
+                    "Select geometry"
+                }
+                .into();
+            } else {
+                let result = self.relationships(name, sketch).and_then(|constraints| {
+                    let mut candidate = sketch.clone();
+                    seed_from_resolved(&mut candidate, Some(&sk));
+                    let before = candidate.constraints.len();
+                    for c in constraints {
+                        add_relation(&mut candidate, c);
+                    }
+                    let solved = Numbers::for_format(vars, format).and_then(|numbers| {
+                        crate::sketch::resolve(&candidate, plane.clone(), &numbers)
+                    })?;
+                    seed_from_resolved(&mut candidate, Some(&solved));
+                    Ok((candidate, solved, before))
+                });
+                match result {
+                    Ok((candidate, solved, before)) => {
+                        if candidate.constraints.len() != before {
+                            *sketch = candidate;
+                            self.last_good = Some(solved.clone());
+                            sk = solved;
+                            edit.change(true);
+                        }
+                        self.hint.clear();
+                        self.clear_selection();
+                    }
+                    Err(error) => self.hint = error,
+                }
             }
         }
         if std::mem::take(&mut self.pending_construction)
@@ -964,9 +1072,24 @@ impl SketchUi {
                 ui.painter().circle_stroke(
                     p,
                     4.,
-                    Stroke::new(1.0f32, if snap.target.is_some() { ORANGE } else { BLUE }),
+                    Stroke::new(
+                        1.0f32,
+                        if snap.target.is_some() || snap.midpoint.is_some() {
+                            ORANGE
+                        } else {
+                            BLUE
+                        },
+                    ),
                 );
-                if snap.target.is_some() {}
+                if snap.midpoint.is_some() {
+                    ui.painter().text(
+                        p + Vec2::new(10., -10.),
+                        egui::Align2::LEFT_BOTTOM,
+                        "Midpoint",
+                        egui::FontId::proportional(11.),
+                        ORANGE,
+                    );
+                }
             }
         }
         if response.double_clicked()
@@ -1057,6 +1180,14 @@ impl SketchUi {
                     self.pending_relationship = Some(name);
                 } else {
                     self.clear_selection();
+                }
+            } else if self.tool == Tool::Point {
+                if let Some(point) = &snap {
+                    seed_from_resolved(sketch, Some(&sk));
+                    sketch.add_point(point.p);
+                    let id = sketch.next_id;
+                    link(sketch, id, 0, point);
+                    edit.change(true);
                 }
             } else if self.tool == Tool::TangentArc {
                 if let Some(end) = snap.clone() {
@@ -1450,9 +1581,11 @@ impl SketchUi {
                     .collect();
                 if !ids.is_empty() {
                     sketch.entities.retain(|e| !ids.contains(&e.id));
-                    sketch
-                        .constraints
-                        .retain(|c| !ids.contains(&c.a) && !ids.contains(&c.b));
+                    sketch.constraints.retain(|c| {
+                        !ids.contains(&c.a)
+                            && !ids.contains(&c.b)
+                            && c.midpoint.is_none_or(|p| !ids.contains(&p.entity))
+                    });
                     self.selected.clear();
                     edit.change(true);
                 }
@@ -1470,6 +1603,7 @@ impl SketchUi {
         } else {
             match self.tool {
                 Tool::Select => "",
+                Tool::Point => "Place point",
                 Tool::Trim => "Choose a segment to trim",
                 Tool::Relationship(name) => name,
                 Tool::Dimension => {
@@ -1693,11 +1827,13 @@ impl SketchUi {
 }
 
 fn add_relation(sk: &mut Sketch, c: SketchConstraint) {
-    if !sk
-        .constraints
-        .iter()
-        .any(|x| x.kind == c.kind && x.a == c.a && x.b == c.b && x.points == c.points)
-    {
+    if !sk.constraints.iter().any(|x| {
+        x.kind == c.kind
+            && x.a == c.a
+            && x.b == c.b
+            && x.points == c.points
+            && x.midpoint == c.midpoint
+    }) {
         sk.constraints.push(c);
     }
 }
@@ -1767,7 +1903,11 @@ fn box_hits(
     let mut result = Vec::new();
     for entity in &sk.entities {
         let points = entity.points();
-        if entity.kind == "rectangle" {
+        if entity.kind == "point" {
+            if bounds.contains(projector.project(sk.plane.at(points[0]), viewport)) {
+                result.push(Selection::point(entity.id, 0));
+            }
+        } else if entity.kind == "rectangle" {
             for (index, pair) in points.windows(2).enumerate() {
                 let a = projector.project(sk.plane.at(pair[0]), viewport);
                 let b = projector.project(sk.plane.at(pair[1]), viewport);
@@ -1831,6 +1971,17 @@ fn link(sk: &mut Sketch, id: u64, index: usize, snap: &Snap) {
                 a: id,
                 b: target.entity,
                 points: [index, target.index()],
+                ..Default::default()
+            },
+        );
+    } else if let Some(curve) = snap.midpoint {
+        add_relation(
+            sk,
+            SketchConstraint {
+                kind: "Midpoint".into(),
+                a: id,
+                b: curve.entity,
+                points: [index, curve.index()],
                 ..Default::default()
             },
         );
@@ -2212,6 +2363,33 @@ fn snap(
         }
     }
     if snap.target.is_none() {
+        for entity in &sk.entities {
+            let midpoints = if let Some(arc) = entity.arc() {
+                let angle = arc.start + arc.sweep * 0.5;
+                vec![[
+                    arc.center[0] + arc.radius * angle.cos(),
+                    arc.center[1] + arc.radius * angle.sin(),
+                ]]
+            } else if entity.kind == "circle" {
+                Vec::new()
+            } else {
+                entity
+                    .points()
+                    .windows(2)
+                    .map(|p| [(p[0][0] + p[1][0]) * 0.5, (p[0][1] + p[1][1]) * 0.5])
+                    .collect()
+            };
+            for (edge, point) in midpoints.into_iter().enumerate() {
+                let distance = projector.project(sk.plane.at(point), rect).distance(cursor);
+                if distance < closest {
+                    closest = distance;
+                    snap.p = point;
+                    snap.midpoint = Some(Selection::edge(entity.id, edge));
+                }
+            }
+        }
+    }
+    if snap.target.is_none() && snap.midpoint.is_none() {
         let x = projector
             .project(sk.plane.at([0., p[1]]), rect)
             .distance(cursor);
@@ -2247,6 +2425,14 @@ fn snap(
 }
 pub fn paint_readonly(ui: &egui::Ui, sk: &ResolvedSketch, projector: &Projector, rect: Rect) {
     paint_curves(ui, sk, projector, rect, &[], None, false);
+    for entity in sk.entities.iter().filter(|e| e.kind == "point") {
+        let point = projector.project(sk.plane.at(entity.control_points()[0]), rect);
+        ui.painter().with_clip_rect(rect).circle_filled(
+            point,
+            2.2,
+            if entity.fixed { WHITE } else { BLUE },
+        );
+    }
 }
 fn paint_curves(
     ui: &egui::Ui,
@@ -2420,7 +2606,10 @@ fn paint_constraint(
     projector: &Projector,
     rect: Rect,
 ) {
-    let p = dimensions::point(sk, c.a, c.points[0].min(1)).unwrap_or([0., 0.]);
+    let (entity, point) = c
+        .midpoint
+        .map_or((c.a, c.points[0]), |p| (p.entity, p.point));
+    let p = dimensions::point(sk, entity, point).unwrap_or([0., 0.]);
     let pos = projector.project(sk.plane.at(p), rect);
     let (symbol, offset) = match c.kind.as_str() {
         "Horizontal" | "HorizontalPoints" => ("H", Vec2::new(12., 16.)),
@@ -2430,8 +2619,9 @@ fn paint_constraint(
         "Parallel" => ("//", Vec2::new(25., -15.)),
         "Perpendicular" => ("⊥", Vec2::new(25., -15.)),
         "Tangent" => ("T", Vec2::new(12., -15.)),
+        "Midpoint" => ("M", Vec2::new(12., -15.)),
         "Concentric" => ("◎", Vec2::new(10., -15.)),
-        "Fix" => ("F", Vec2::new(12., -15.)),
+        "Fix" | "FixPoint" => ("F", Vec2::new(12., -15.)),
         _ => return,
     };
     ui.painter().with_clip_rect(rect).text(
@@ -2602,7 +2792,12 @@ pub fn paint_dimension(
     let bounds = Rect::from_center_size(label, galley.size() + Vec2::new(10., 6.));
     painter.rect_filled(bounds, 3., Color32::from_rgb(12, 12, 15));
     if selected {
-        painter.rect_stroke(bounds, 3., Stroke::new(1.2_f32, color), egui::StrokeKind::Outside);
+        painter.rect_stroke(
+            bounds,
+            3.,
+            Stroke::new(1.2_f32, color),
+            egui::StrokeKind::Outside,
+        );
     }
     painter.galley(bounds.center() - galley.size() / 2., galley, color);
     Some(bounds)
@@ -2611,6 +2806,340 @@ pub fn paint_dimension(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn midpoint_accepts_either_pick_order_and_repeats_with_the_tool_active() {
+        let mut h = Harness::new();
+        h.sketch.add_line([-20., 10.], [20., 10.]);
+        h.sketch.add_circle([0., 10.], 2.);
+        h.sketch.add_circle([0., 10.], 3.);
+        h.frame(vec![]);
+        for picks in [
+            [Selection::edge(1, 0), Selection::point(2, 0)],
+            [Selection::point(3, 0), Selection::edge(1, 0)],
+        ] {
+            h.editor.selected = picks.to_vec();
+            if h.editor.tool != Tool::Relationship("Midpoint") {
+                h.key_with_modifiers(egui::Key::M, egui::Modifiers::SHIFT);
+            } else {
+                h.editor.pending_relationship = Some("Midpoint");
+            }
+            h.frame(vec![]);
+            assert!(h.editor.selected.is_empty(), "{}", h.editor.hint);
+            assert_eq!(h.editor.tool, Tool::Relationship("Midpoint"));
+        }
+        assert_eq!(
+            h.sketch
+                .constraints
+                .iter()
+                .filter(|c| c.kind == "Midpoint")
+                .count(),
+            2
+        );
+        assert_eq!(h.checkpoints, 2);
+        h.key_with_modifiers(egui::Key::M, egui::Modifiers::SHIFT);
+        assert_eq!(h.editor.tool, Tool::Select);
+    }
+
+    #[test]
+    fn midpoint_tool_waits_for_third_point_and_deletion_cleans_up_that_reference() {
+        let mut h = Harness::new();
+        h.sketch.add_line([-20., 10.], [20., 10.]);
+        h.sketch.add_circle([0., 10.], 2.);
+        h.frame(vec![]);
+        h.key_with_modifiers(egui::Key::M, egui::Modifiers::SHIFT);
+        for p in [[-20., 10.], [20., 10.], [0., 10.]] {
+            let pos = h.screen(p);
+            h.click(pos.x, pos.y);
+            h.frame(vec![]);
+        }
+        let c = h
+            .sketch
+            .constraints
+            .iter()
+            .find(|c| c.kind == "Midpoint")
+            .unwrap();
+        assert_eq!((c.a, c.b, c.points), (1, 1, [0, 1]));
+        assert_eq!(
+            c.midpoint,
+            Some(crate::model::SketchPointReference {
+                entity: 2,
+                point: 0
+            })
+        );
+        assert!(h.editor.hint.is_empty());
+        h.sketch.add_point([0., 10.]);
+        h.frame(vec![]);
+        h.editor.selected = vec![
+            Selection::point(1, 0),
+            Selection::point(1, 1),
+            Selection::point(3, 0),
+        ];
+        h.editor.set_tool(Tool::Relationship("Midpoint"));
+        h.frame(vec![]);
+        assert_eq!(
+            h.sketch
+                .constraints
+                .iter()
+                .filter(|c| c.kind == "Midpoint")
+                .count(),
+            2
+        );
+        h.key(egui::Key::Escape);
+        h.editor.selected = vec![Selection::edge(2, 0)];
+        h.key(egui::Key::Delete);
+        assert_eq!(
+            h.sketch
+                .constraints
+                .iter()
+                .filter(|c| c.kind == "Midpoint")
+                .count(),
+            1
+        );
+        assert!(
+            h.sketch
+                .constraints
+                .iter()
+                .find(|c| c.kind == "Midpoint")
+                .unwrap()
+                .midpoint
+                .is_some_and(|p| p.entity == 3)
+        );
+    }
+
+    #[test]
+    fn drawing_on_line_and_directed_arc_midpoints_creates_persistent_constraints() {
+        for arc in [false, true] {
+            let mut h = Harness::new();
+            let midpoint = if arc {
+                h.sketch.add_arc([0., 0.], [20., 0.], [0., 20.], true);
+                [-20. / 2f64.sqrt(), -20. / 2f64.sqrt()]
+            } else {
+                h.sketch.add_line([-20., 10.], [20., 10.]);
+                [0., 10.]
+            };
+            h.frame(vec![]);
+            h.key(egui::Key::L);
+            for p in [midpoint, [30., 35.]] {
+                let pos = h.screen(p);
+                h.click(pos.x, pos.y);
+            }
+            assert!(
+                h.sketch
+                    .constraints
+                    .iter()
+                    .any(|c| c.kind == "Midpoint" && c.a == 2 && c.b == 1),
+                "{}",
+                h.editor.hint
+            );
+            let solved = crate::sketch::resolve(
+                &h.sketch,
+                Plane::named("Top", 0.),
+                &Numbers::for_format(&BTreeMap::new(), 2).unwrap(),
+            )
+            .unwrap();
+            let start = solved.entities[1].control_points()[0];
+            assert!((start[0] - midpoint[0]).hypot(start[1] - midpoint[1]) < 1e-6);
+        }
+    }
+
+    #[test]
+    fn dragging_midpoint_keeps_the_persisted_relation_without_moving_other_geometry() {
+        let mut h = Harness::new();
+        h.sketch.add_line([-20., 10.], [20., 10.]);
+        h.sketch.add_point([0., 10.]);
+        h.sketch.add_circle([70., 50.], 3.);
+        h.sketch.constraints.push(SketchConstraint {
+            kind: "Midpoint".into(),
+            a: 2,
+            b: 1,
+            ..Default::default()
+        });
+        h.frame(vec![]);
+        h.drag_box(
+            h.screen([0., 10.]),
+            h.screen([10., 20.]),
+            egui::Modifiers::NONE,
+        );
+        let solved = crate::sketch::resolve(
+            &h.sketch,
+            Plane::named("Top", 0.),
+            &Numbers::for_format(&BTreeMap::new(), 2).unwrap(),
+        )
+        .unwrap();
+        let line = &solved.entities[0].values;
+        let center = solved.entities[1].control_points()[0];
+        assert!((center[0] - 10.).hypot(center[1] - 20.) < 1e-5);
+        assert!(
+            (center[0] - (line[0] + line[2]) * 0.5).abs() < 1e-6
+                && (center[1] - (line[1] + line[3]) * 0.5).abs() < 1e-6
+        );
+        assert_eq!(solved.entities[2].values, vec![70., 50., 3.]);
+        assert_eq!(h.sketch.constraints.len(), 1);
+    }
+
+    #[test]
+    fn relationship_activation_is_shared_by_selection_toolbar_search_and_repeated_picks() {
+        let mut h = Harness::new();
+        h.sketch.add_line([-20., 10.], [20., 10.]);
+        h.sketch.add_line([-20., 30.], [20., 30.]);
+        h.frame(vec![]);
+        h.editor.selected = vec![Selection::edge(1, 0)];
+        h.editor.set_tool(Tool::Relationship("Horizontal"));
+        h.frame(vec![]);
+        assert!(h.editor.selected.is_empty());
+        assert!(
+            h.sketch
+                .constraints
+                .iter()
+                .any(|c| c.kind == "Horizontal" && c.a == 1)
+        );
+        let p = h.screen([0., 30.]);
+        h.click(p.x, p.y);
+        h.frame(vec![]);
+        assert!(
+            h.sketch
+                .constraints
+                .iter()
+                .any(|c| c.kind == "Horizontal" && c.a == 2)
+        );
+        h.editor.set_tool(Tool::Relationship("Parallel"));
+        let p = h.screen([0., 10.]);
+        h.click(p.x, p.y);
+        h.frame(vec![]);
+        assert_eq!(h.editor.selected, vec![Selection::edge(1, 0)]);
+        assert!(!h.editor.hint.contains("two"));
+        let p = h.screen([0., 30.]);
+        h.click(p.x, p.y);
+        h.frame(vec![]);
+        assert!(h.sketch.constraints.iter().any(|c| c.kind == "Parallel"));
+        assert!(h.editor.selected.is_empty());
+        h.key(egui::Key::Escape);
+        assert_eq!(h.editor.tool, Tool::Select);
+    }
+
+    #[test]
+    fn grouped_point_alignment_follows_dimension_edits_without_moving_unrelated_geometry() {
+        for (name, dimension, axis) in [("Horizontal", "Y", 1), ("Vertical", "X", 0)] {
+            let mut h = Harness::new();
+            for point in [[-20., 10.], [0., 20.], [20., 30.]] {
+                h.sketch.add_point(point);
+            }
+            h.sketch.add_circle([70., 50.], 3.);
+            h.frame(vec![]);
+            h.editor.selected = (1..=3).map(|id| Selection::point(id, 0)).collect();
+            h.editor.set_tool(Tool::Relationship(name));
+            h.frame(vec![]);
+            assert!(h.editor.selected.is_empty(), "{}", h.editor.hint);
+            h.sketch.constraints.push(SketchConstraint {
+                kind: dimension.into(),
+                a: 1,
+                value: "45".into(),
+                ..Default::default()
+            });
+            for target in [45., -15., 20.] {
+                h.sketch.constraints.last_mut().unwrap().value = target.to_string();
+                let solved = crate::sketch::resolve(
+                    &h.sketch,
+                    Plane::named("Top", 0.),
+                    &Numbers::for_format(&BTreeMap::new(), 2).unwrap(),
+                )
+                .unwrap();
+                assert!(
+                    solved.entities[..3]
+                        .iter()
+                        .all(|e| (e.values[axis] - target).abs() < 1e-6)
+                );
+                assert_eq!(solved.entities[3].values, vec![70., 50., 3.]);
+            }
+        }
+    }
+
+    #[test]
+    fn conflicting_relationship_is_rejected_without_mutating_the_sketch() {
+        let mut h = Harness::new();
+        h.sketch.add_line([-20., 10.], [20., 10.]);
+        h.sketch.constraints.push(SketchConstraint {
+            kind: "Fix".into(),
+            a: 1,
+            ..Default::default()
+        });
+        h.frame(vec![]);
+        let before = h.sketch.clone();
+        h.editor.selected = vec![Selection::edge(1, 0)];
+        h.editor.set_tool(Tool::Relationship("Vertical"));
+        h.frame(vec![]);
+        assert_eq!(h.sketch, before);
+        assert_eq!(h.checkpoints, 0);
+        assert_eq!(h.editor.selected, vec![Selection::edge(1, 0)]);
+        assert!(!h.editor.hint.is_empty());
+    }
+
+    #[test]
+    fn concentric_accepts_an_endpoint_and_circle_in_either_order() {
+        let mut h = Harness::new();
+        h.sketch.add_line([10., 10.], [30., 20.]);
+        h.sketch.add_circle([10., 10.], 5.);
+        h.frame(vec![]);
+        for selection in [
+            [Selection::point(1, 0), Selection::edge(2, 0)],
+            [Selection::edge(2, 0), Selection::point(1, 0)],
+        ] {
+            let c = h
+                .editor
+                .relationship("Concentric", &h.sketch, &selection)
+                .unwrap();
+            assert_eq!(
+                (c.kind.as_str(), c.a, c.b, c.points),
+                ("Concentric", 1, 2, [0, 0])
+            );
+        }
+        h.editor.selected = vec![Selection::point(1, 0)];
+        h.editor.set_tool(Tool::Relationship("Fix"));
+        h.frame(vec![]);
+        assert_eq!(h.sketch.constraints[0].kind, "FixPoint");
+        let solved = crate::sketch::resolve(
+            &h.sketch,
+            Plane::named("Top", 0.),
+            &Numbers::for_format(&BTreeMap::new(), 2).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(solved.dof, 5, "Only the selected endpoint is fixed");
+    }
+
+    #[test]
+    fn point_tool_repeats_uses_midpoint_snaps_dimensions_and_crossing_box_selection() {
+        let mut h = Harness::new();
+        h.sketch.add_line([-20., 10.], [20., 10.]);
+        h.frame(vec![]);
+        h.key_with_modifiers(egui::Key::S, egui::Modifiers::SHIFT);
+        assert_eq!(h.editor.tool, Tool::Point);
+        for p in [[0., 10.], [30., 35.]] {
+            let pos = h.screen(p);
+            h.click(pos.x, pos.y);
+        }
+        assert_eq!(h.sketch.entities.len(), 3);
+        assert!(h.sketch.entities[1..].iter().all(|e| e.kind == "point"));
+        assert!(
+            h.sketch
+                .constraints
+                .iter()
+                .any(|c| c.kind == "Midpoint" && c.a == 2)
+        );
+        h.key(egui::Key::Escape);
+        h.drag_box(
+            h.screen([35., 40.]),
+            h.screen([25., 30.]),
+            egui::Modifiers::NONE,
+        );
+        assert_eq!(h.editor.selected, vec![Selection::point(3, 0)]);
+        h.editor.selected = vec![Selection::point(2, 0), Selection::point(3, 0)];
+        h.key(egui::Key::D);
+        let pos = h.screen([50., 15.]);
+        h.click(pos.x, pos.y);
+        assert!(h.editor.dimension.is_some());
+    }
+
     struct Harness {
         ctx: egui::Context,
         editor: SketchUi,

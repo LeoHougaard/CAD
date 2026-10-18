@@ -9,7 +9,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct Camera {
     pub center: Vec3,
     pub pivot: Vec3,
@@ -181,7 +181,10 @@ impl Camera {
         );
     }
     pub fn fit_with_rect(&mut self, scene: &Scene, rect: egui::Rect) {
-        self.fit_scene_profile(scene, None, rect);
+        // Scene-only callers have no sketch visibility state. Explicit visible
+        // sketches use fit_visible_with_rect; otherwise solids take precedence.
+        let sketches = scene.sketches.values().filter(|_| scene.meshes.is_empty());
+        self.fit_visible_with_rect(scene, sketches, &BTreeSet::new(), rect);
     }
     pub fn fit_with_profile(
         &mut self,
@@ -189,18 +192,19 @@ impl Camera {
         sketch: &crate::sketch::ResolvedSketch,
         rect: egui::Rect,
     ) {
-        self.fit_scene_profile(scene, Some(sketch), rect);
+        self.fit_visible_with_rect(scene, [sketch], &BTreeSet::new(), rect);
     }
-    fn fit_scene_profile(
+    pub fn fit_visible_with_rect<'a>(
         &mut self,
         scene: &Scene,
-        sketch: Option<&crate::sketch::ResolvedSketch>,
+        sketches: impl IntoIterator<Item = &'a crate::sketch::ResolvedSketch>,
+        hidden: &BTreeSet<String>,
         rect: egui::Rect,
     ) {
         let mut lo = Vec3::splat(f32::INFINITY);
         let mut hi = Vec3::splat(f32::NEG_INFINITY);
         let inverse = self.rotation.conjugate();
-        for m in &scene.meshes {
+        for m in scene.meshes.iter().filter(|m| !hidden.contains(&m.part)) {
             let [min, max] = m.bounds;
             for x in [min[0], max[0]] {
                 for y in [min[1], max[1]] {
@@ -212,7 +216,7 @@ impl Camera {
                 }
             }
         }
-        if let Some(sketch) = sketch {
+        for sketch in sketches {
             for entity in &sketch.entities {
                 for p in entity.points() {
                     let world = sketch.plane.at(p);
@@ -234,7 +238,7 @@ impl Camera {
             }
         }
         if self.fit_bounds(lo, hi, rect, 1.3) {
-            self.pivot = model_center(scene, &BTreeSet::new()).unwrap_or(self.center);
+            self.pivot = model_center(scene, hidden).unwrap_or(self.center);
         }
     }
     pub fn fit_sketch(&mut self, sketch: &crate::sketch::ResolvedSketch) {
@@ -1047,6 +1051,38 @@ mod tests {
         let mut actual = Camera::default(); actual.fit(&distant);
         assert_eq!(actual.center, expected.center);
         assert_eq!(actual.span, expected.span);
+    }
+    #[test]
+    fn fit_visible_sketches_ignores_hidden_solids_and_large_datum_planes() {
+        let mut runtime = crate::engine::Runtime::new(crate::plugins::Registry::builtin().unwrap());
+        let mut scene = (*runtime.evaluate(&crate::model::demo()).unwrap().scene).clone();
+        let sketch = crate::sketch::ResolvedSketch {
+            entities: vec![crate::sketch::ResolvedEntity {
+                id: 1, kind: "rectangle".into(), curve_identity: None, values: vec![200., 300., 6., 4.], construction: false, fixed: false,
+            }],
+            plane: Plane::named("Top", 0.), dof: 0,
+        };
+        scene.planes.insert("distant".into(), Plane::named("Top", 10000.));
+        let hidden = scene.meshes.iter().map(|m| m.part.clone()).collect();
+        let mut camera = Camera::default();
+        camera.align(&sketch.plane);
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800., 1200.));
+        camera.fit_visible_with_rect(&scene, [&sketch], &hidden, rect);
+        assert!(camera.center.distance(Vec3::new(203., 302., 0.)) < 1e-4);
+        assert_eq!(camera.center, camera.pivot);
+        assert!(camera.span < 20., "Fit should frame the small sketch, not the datum planes");
+        for point in sketch.entities[0].points() {
+            assert!(rect.contains(camera.project(sketch.plane.at(point), rect)));
+        }
+        // A normal scene fit must include sketch geometry even before the first solid.
+        scene.meshes.clear();
+        scene.sketches.clear();
+        scene.sketches.insert("profile".into(), sketch);
+        let mut all = Camera::default();
+        all.align(&Plane::named("Top", 0.));
+        all.fit_with_rect(&scene, rect);
+        assert_eq!(all.center, camera.center);
+        assert_eq!(all.span, camera.span);
     }
     #[test]
     fn origin_planes_are_one_hundred_millimeters_at_every_zoom() {

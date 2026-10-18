@@ -5,7 +5,7 @@ use crate::model::{ProfileReference, reference_matches};
 pub(super) fn selectable(kind: &str) -> bool {
     matches!(
         kind,
-        "profiles" | "regions" | "profile_face" | "plane_ref" | "axis" | "edges" | "faces" | "body" | "bodies"
+        "profiles" | "regions" | "profile_face" | "plane_ref" | "axis" | "edges" | "faces" | "body" | "bodies" | "sketch" | "sketches"
     )
 }
 
@@ -39,7 +39,11 @@ fn input<'a>(edit: &Editor, registry: &'a Registry) -> Option<&'a Field> {
                 .iter()
                 .find(|f| &f.key == key && visible(f, &edit.feature))
         })
-        .or_else(|| {
+        .or_else(|| primary_input(&edit.feature, registry))
+}
+
+fn primary_input<'a>(feature: &Feature, registry: &'a Registry) -> Option<&'a Field> {
+    let fields = &registry.plugins.get(&feature.plugin)?.manifest.fields;
             [
                 "profiles",
                 "regions",
@@ -47,6 +51,8 @@ fn input<'a>(edit: &Editor, registry: &'a Registry) -> Option<&'a Field> {
                 "plane_ref",
                 "edges",
                 "faces",
+                "sketches",
+                "sketch",
                 "bodies",
                 "axis",
                 "body",
@@ -55,19 +61,59 @@ fn input<'a>(edit: &Editor, registry: &'a Registry) -> Option<&'a Field> {
             .find_map(|kind| {
                 fields
                     .iter()
-                    .find(|f| f.kind == kind && visible(f, &edit.feature))
+                    .find(|f| f.kind == kind && visible(f, feature))
             })
-        })
 }
 
 pub(super) fn active_key<'a>(edit: &Editor, registry: &'a Registry) -> Option<&'a str> {
     input(edit, registry).map(|f| f.key.as_str())
 }
 
+// UI commands start with empty references. Manifest defaults remain compatible
+// with saved documents and agent scripts that intentionally use legacy inputs.
+pub(super) fn prepare(feature: &mut Feature, registry: &Registry) {
+    let Some(plugin) = registry.plugins.get(&feature.plugin) else { return };
+    for field in plugin.manifest.fields.iter().filter(|f| !f.hidden && selectable(&f.kind)) {
+        feature.params[&field.key] = match field.kind.as_str() {
+            "profiles" | "regions" | "edges" | "faces" | "bodies" | "sketches" => json!([]),
+            "axis" => json!({}),
+            "plane_ref" | "profile_face" => Value::Null,
+            _ => json!(""),
+        };
+    }
+}
+
+pub(super) fn missing(edit: &Editor, registry: &Registry) -> Option<String> {
+    if edit.sketch.is_some() { return None; }
+    let plugin = registry.plugins.get(&edit.feature.plugin)?;
+    plugin.manifest.fields.iter().filter(|f| visible(f, &edit.feature) && selectable(&f.kind))
+        .find(|field| {
+            let value = &edit.feature.params[&field.key];
+            match field.kind.as_str() {
+                "profiles" => ProfileReference::from_params(&edit.feature.params).map_or(true, |p| p.is_empty()),
+                "regions" => value.as_array().is_some_and(Vec::is_empty),
+                "axis" => !value.is_null() && value["kind"].as_str().is_none(),
+                "edges" | "faces" | "bodies" | "sketches" => value.as_array().is_none_or(Vec::is_empty),
+                "plane_ref" | "profile_face" => value.is_null(),
+                _ => value.as_str().is_none_or(str::is_empty),
+            }
+        })
+        .map(|f| format!("Select {}", f.label.to_lowercase()))
+}
+
+pub(super) fn cycle(edit: &mut Editor, registry: &Registry, reverse: bool) {
+    let Some(plugin) = registry.plugins.get(&edit.feature.plugin) else { return };
+    let fields: Vec<_> = plugin.manifest.fields.iter().filter(|f| visible(f, &edit.feature) && selectable(&f.kind)).collect();
+    if fields.is_empty() { return; }
+    let current = active_key(edit, registry).and_then(|key| fields.iter().position(|f| f.key == key)).unwrap_or(0);
+    let next = (current + if reverse { fields.len() - 1 } else { 1 }) % fields.len();
+    edit.input_field = Some(fields[next].key.clone());
+}
+
 pub(super) fn referenced_sketches<'a>(feature: &'a Feature, registry: &Registry) -> Vec<&'a str> {
     let p = &feature.params;
     let mut ids = Vec::new();
-    if feature.sketch().is_some() {
+    if feature.params.get("geometry").is_some_and(Value::is_object) {
         ids.push(feature.id.as_str());
     }
     if let Some(plugin) = registry.plugins.get(&feature.plugin) {
@@ -97,6 +143,22 @@ pub(super) fn referenced_sketches<'a>(feature: &'a Feature, registry: &Registry)
     ids
 }
 
+// Exposure belongs to the editing session, not its mutable selected values.
+pub(super) fn exposed_sketches<'a>(edit: &'a Editor, document: &'a Document, registry: &Registry) -> Vec<&'a str> {
+    let mut ids = referenced_sketches(&edit.feature, registry);
+    if !edit.is_new && let Some(original) = document.features.get(edit.index) {
+        ids.extend(referenced_sketches(original, registry));
+    }
+    ids.extend(edit.workspace.selection.iter().filter_map(|target| match target {
+        Target::Feature(id) | Target::Region { sketch: id, .. } | Target::SketchEntity { sketch: id, .. } => Some(id.as_str()),
+        _ => None,
+    }));
+    if let Some(feature) = edit.workspace.selected_feature.and_then(|i| document.features.get(i)) {
+        ids.push(feature.id.as_str());
+    }
+    ids.sort_unstable(); ids.dedup(); ids
+}
+
 pub(super) fn input_ui(
     ui: &mut egui::Ui,
     field: &Field,
@@ -106,6 +168,35 @@ pub(super) fn input_ui(
 ) -> bool {
     let before = value.clone();
     match field.kind.as_str() {
+        "axis" => {
+            let label = match value["kind"].as_str() {
+                Some("origin") => format!("Origin {}",value["axis"].as_str().unwrap_or("?")),
+                Some("sketch_line" | "sketch_entity") => {
+                    let id = value["sketch"].as_str().unwrap_or_default();
+                    let name = document.features.iter().find(|f|f.id == id).map_or(id,|f|f.name.as_str());
+                    let entity = scene.sketches.get(id).and_then(|s|s.entities.iter().find(|e|Some(e.id) == value["entity"].as_u64()));
+                    entity.map_or_else(||"Missing axis".into(),|e| if e.kind == "rectangle" {
+                        format!("{name} / rectangle {} / Edge {}",e.id,value["edge"].as_u64().unwrap_or(0)+1)
+                    } else {format!("{name} / {} {}",e.kind,e.id)})
+                }
+                Some("edge") => scene.meshes.iter().find(|m|Some(m.part.as_str()) == value["part"].as_str())
+                    .and_then(|m|m.edges.iter().position(|e|value["edge"].as_str().is_some_and(|key|reference_matches(&e.key,key))).map(|i|format!("{} / Edge {}",m.name,i+1)))
+                    .unwrap_or_else(||"Missing axis".into()),
+                _ if value.is_null() => "Sketch axis (legacy)".into(),
+                _ => "Select a line or edge".into(),
+            };
+            ui.add(egui::Label::new(label).truncate());
+            ui.horizontal(|ui| {
+                ui.menu_button("Origin axis",|ui| {
+                    for axis in ["X","Y","Z"] {
+                        if ui.selectable_label(value["kind"] == "origin" && value["axis"] == axis,format!("Origin {axis}")).clicked() {
+                            *value = json!({"kind":"origin","axis":axis}); ui.close();
+                        }
+                    }
+                });
+                if ui.small_button("Clear").clicked() { *value = json!({}); }
+            });
+        }
         "bodies" => {
             let mut selected: Vec<String> = value
                 .as_array()
@@ -146,14 +237,10 @@ pub(super) fn input_ui(
             }
             *value = json!(selected);
         }
-        "profile_face" | "plane_ref" | "axis" => {
+        "profile_face" | "plane_ref" => {
             let mut options = vec![(
                 Value::Null,
-                if field.kind == "axis" {
-                    "Sketch axis".into()
-                } else {
-                    "None".into()
-                },
+                "Select in viewport".into(),
             )];
             if field.kind == "plane_ref" {
                 for plane in ["Top", "Front", "Right"] {
@@ -183,38 +270,6 @@ pub(super) fn input_ui(
                                 json!({"part":mesh.part,"face":face.key})
                             },
                             format!("{} / face {}", mesh.name, index + 1),
-                        ));
-                    }
-                }
-            } else {
-                for axis in ["X", "Y", "Z"] {
-                    options.push((
-                        json!({"kind":"origin","axis":axis}),
-                        format!("Origin {axis}"),
-                    ));
-                }
-                for (id, sketch) in &scene.sketches {
-                    for entity in sketch
-                        .entities
-                        .iter()
-                        .filter(|e| matches!(e.kind.as_str(), "line" | "circle" | "arc"))
-                    {
-                        options.push((
-                            json!({"kind":"sketch_entity","sketch":id,"entity":entity.id}),
-                            format!("{id} / {} {}", entity.kind, entity.id),
-                        ));
-                    }
-                }
-                for mesh in &scene.meshes {
-                    for (index, edge) in mesh
-                        .edges
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, e)| !e.seam && e.axis.is_some())
-                    {
-                        options.push((
-                            json!({"kind":"edge","part":mesh.part,"edge":edge.key}),
-                            format!("{} / edge {}", mesh.name, index + 1),
                         ));
                     }
                 }
@@ -248,7 +303,7 @@ pub(super) fn seed(feature: &mut Feature, targets: &[Target], scene: &Scene) -> 
             .iter()
             .filter_map(|t| plane_value(t, scene))
             .collect();
-        if let Some(reference) = references.last() {
+        if let [reference] = references.as_slice() {
             feature.params["reference"] = reference.clone();
         }
         return Some("reference".into());
@@ -264,9 +319,7 @@ pub(super) fn seed(feature: &mut Feature, targets: &[Target], scene: &Scene) -> 
     }
     if feature.params.get("profiles").is_some() {
         let picked = profiles_from_targets(targets, scene);
-        feature.params["profiles"] = if picked.is_empty() {
-            serde_json::to_value(ProfileReference::from_params(&feature.params).unwrap_or_default()).unwrap()
-        } else { json!(picked) };
+        feature.params["profiles"] = json!(picked);
         return Some("profiles".into());
     }
     if feature.params.get("profile_face").is_some() {
@@ -300,6 +353,29 @@ pub(super) fn seed(feature: &mut Feature, targets: &[Target], scene: &Scene) -> 
     None
 }
 
+pub(super) fn seed_inputs(feature: &mut Feature, targets: &[Target], scene: &Scene, registry: &Registry) -> Option<String> {
+    prepare(feature, registry);
+    let plugin = registry.plugins.get(&feature.plugin)?;
+    if matches!(feature.plugin.as_str(),"plane" | "boolean") || plugin.manifest.fields.iter().any(|f|f.kind == "profiles") {
+        return seed(feature, targets, scene);
+    }
+    let field = primary_input(feature, registry)?;
+    let ambiguous = if field.kind == "body" { parts(targets).len() > 1 }
+        else if field.kind == "sketch" { targets.iter().filter_map(|t|match t {
+            Target::Feature(id) | Target::Region {sketch:id,..} if scene.sketches.contains_key(id) => Some(id), _ => None
+        }).collect::<BTreeSet<_>>().len() > 1 } else { false };
+    if !ambiguous { apply_selection(&mut feature.params, field, targets, scene); }
+    if matches!(field.kind.as_str(), "edges" | "faces") {
+        let owners = parts(targets);
+        if owners.len() == 1 {
+            for body in plugin.manifest.fields.iter().filter(|f| f.kind == "body") {
+                feature.params[&body.key] = json!(owners[0]);
+            }
+        }
+    }
+    Some(field.key.clone())
+}
+
 pub(super) fn filter(edit: &Editor, registry: &Registry) -> Filter {
     match input(edit, registry).map(|f| f.kind.as_str()) {
         Some("regions") => Filter::Regions,
@@ -307,6 +383,16 @@ pub(super) fn filter(edit: &Editor, registry: &Registry) -> Filter {
         Some("axis" | "edges") => Filter::Edges,
         Some("body" | "bodies") => Filter::Parts,
         _ => Filter::All,
+    }
+}
+pub(super) fn filters(edit: &Editor, registry: &Registry) -> &'static [Filter] {
+    match input(edit,registry).map(|f|f.kind.as_str()) {
+        Some("profiles") => &[Filter::All,Filter::Faces,Filter::Regions],
+        Some("axis" | "edges") => &[Filter::Edges],
+        Some("faces" | "profile_face") => &[Filter::Faces],
+        Some("body" | "bodies") => &[Filter::Parts],
+        Some("regions") => &[Filter::Regions],
+        _ => &[Filter::All],
     }
 }
 
@@ -344,14 +430,87 @@ fn plane_value(target: &Target, scene: &Scene) -> Option<Value> {
 pub(super) fn profile_input(edit: &Editor, registry: &Registry) -> bool {
     input(edit, registry).is_some_and(|f| f.kind == "profiles")
 }
+pub(super) fn axis_input(edit: &Editor, registry: &Registry) -> bool {
+    input(edit, registry).is_some_and(|f| f.kind == "axis")
+}
+pub(super) fn sketch_input(edit: &Editor, registry: &Registry) -> bool {
+    input(edit, registry).is_some_and(|f| matches!(f.kind.as_str(), "sketch" | "sketches"))
+}
+pub(super) fn axis_candidates(
+    scene: &Scene, camera: &Camera, pos: egui::Pos2, rect: Rect,
+    hidden: &BTreeSet<String>, sketches: &[(&str, &crate::sketch::ResolvedSketch)], through: bool,
+) -> Vec<Target> {
+    let front = render::pick(scene, camera, pos, rect, hidden).map(|hit| hit.distance);
+    let projector = camera.projector(rect);
+    let (origin, ray) = camera.ray(pos, rect);
+    let visible = |depth: f32| depth >= 0. && (through || front.is_none_or(|d| depth <= d + camera.span / rect.height() * 5.));
+    let mut candidates = vec![];
+    for &(id, sketch) in sketches {
+        for entity in sketch.entities.iter().filter(|e| matches!(e.kind.as_str(), "line" | "rectangle" | "circle" | "arc")) {
+            let points = entity.points();
+            for edge in 0..if entity.kind == "rectangle" {4} else {1} {
+            let axis_points = if entity.kind == "rectangle" {&points[edge..edge+2]} else {points.as_slice()};
+            let hit = axis_points.windows(2).filter_map(|p| {
+                let a = projector.project(sketch.plane.at(p[0]), rect);
+                let b = projector.project(sketch.plane.at(p[1]), rect);
+                let pixels = render::point_segment_distance(pos, a, b);
+                let delta = b - a;
+                let t = ((pos - a).dot(delta) / delta.length_sq().max(1e-8)).clamp(0.,1.);
+                let a = glam::Vec3::from_array(sketch.plane.at(p[0]).map(|v|v as f32));
+                let b = glam::Vec3::from_array(sketch.plane.at(p[1]).map(|v|v as f32));
+                let depth = (a.lerp(b,t) - origin).dot(ray);
+                // Source sketches are painted over the solid while choosing an
+                // axis, so their visible lines must remain selectable there.
+                (pixels <= 7. && depth >= 0.).then_some((pixels,depth))
+            }).min_by(|a,b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+            if let Some((pixels,depth)) = hit { candidates.push((pixels,depth,Target::SketchEntity {sketch:id.into(),entity:entity.id,edge})); }
+            }
+        }
+    }
+    for edge in render::pick_edges(scene,camera,pos,rect,hidden) {
+        if visible(edge.distance) && scene.meshes.iter().any(|m|m.part == edge.part && m.edges.iter().any(|e| reference_matches(&e.key,&edge.key) && e.axis.is_some())) {
+            candidates.push((edge.pixels,edge.distance,Target::Edge {part:edge.part,key:edge.key}));
+        }
+    }
+    candidates.sort_by(|a,b|a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    candidates.into_iter().map(|(_,_,target)|target).collect()
+}
+pub(super) fn sketch_candidate(
+    scene: &Scene, camera: &Camera, pos: egui::Pos2, rect: Rect,
+    hidden: &BTreeSet<String>, sketches: &[(&str, &crate::sketch::ResolvedSketch)], overlay: bool,
+) -> Option<String> {
+    let projector = camera.projector(rect);
+    let (origin, ray) = camera.ray(pos, rect);
+    let front = if overlay { None } else { render::pick(scene, camera, pos, rect, hidden).map(|h| h.distance) };
+    let mut closest = 7.0f32;
+    let mut result = None;
+    for &(id, sketch) in sketches {
+        for entity in &sketch.entities {
+            for points in entity.points().windows(2) {
+                let a = sketch.plane.at(points[0]); let b = sketch.plane.at(points[1]);
+                let sa = projector.project(a, rect); let sb = projector.project(b, rect);
+                let distance = render::point_segment_distance(pos, sa, sb);
+                if distance >= closest { continue; }
+                let delta = sb - sa;
+                let t = ((pos - sa).dot(delta) / delta.length_sq().max(1e-8)).clamp(0., 1.);
+                let point = glam::Vec3::from_array(a.map(|v| v as f32))
+                    .lerp(glam::Vec3::from_array(b.map(|v| v as f32)), t);
+                let depth = (point - origin).dot(ray);
+                if depth >= 0. && front.is_none_or(|d| depth <= d + camera.span / rect.height() * 2.) {
+                    closest = distance; result = Some(id.to_owned());
+                }
+            }
+        }
+    }
+    result
+}
+
 pub(super) fn profile_candidates(
     scene: &Scene, camera: &Camera, pointer: (egui::Pos2, Rect, Filter, bool),
     hidden: &BTreeSet<String>, sketches: &[(&str, &crate::sketch::ResolvedSketch)],
-    referenced: &[&str],
 ) -> Vec<Target> {
     let (pos, rect, filter, through) = pointer;
     let faces = render::picks(scene, camera, pos, rect, hidden);
-    let depth = faces.first().map(|f| f.distance);
     let mut result = vec![];
     if matches!(filter, Filter::All | Filter::Regions) {
         let (origin, direction) = camera.ray(pos, rect);
@@ -360,8 +519,9 @@ pub(super) fn profile_candidates(
             let Some(point) = camera.plane_point(pos, rect, &sketch.plane) else { continue; };
             let world = glam::Vec3::from_array(sketch.plane.at(point).map(|v| v as f32));
             let distance = (world - origin).dot(direction);
-            if distance < 0. || (!through && !referenced.contains(&id)
-                && depth.is_some_and(|d| distance > d + camera.span / rect.height() * 2.)) { continue; }
+            // These sketches are painted over solids. Region picking follows
+            // that same visible set, independent of selected profile values.
+            if distance < 0. { continue; }
             for region in scene.regions.get(id).into_iter().flatten().filter(|r| r.contains(point)) {
                 regions.push((distance, Target::Region { sketch: id.into(), key: region.key.clone() }));
             }
@@ -468,6 +628,9 @@ fn apply_selection(params: &mut Value, field: &Field, targets: &[Target], scene:
             | ("faces", Target::Face { .. })
             | ("edges", Target::Edge { .. }) => true,
             ("profiles", _) => !profiles_from_targets(std::slice::from_ref(t), scene).is_empty(),
+            ("sketch" | "sketches", Target::Feature(id)) => scene.sketches.contains_key(id),
+            ("sketch" | "sketches", Target::Region { sketch: id, .. }) => scene.sketches.contains_key(id),
+            ("axis", Target::SketchEntity { sketch, entity, .. }) => scene.sketches.get(sketch).is_some_and(|s| s.entities.iter().any(|e| e.id == *entity && matches!(e.kind.as_str(), "line" | "rectangle" | "circle" | "arc"))),
             ("plane_ref", t) => plane_value(t, scene).is_some(),
             ("profile_face", Target::Face { part, key }) => scene.meshes.iter().any(|m| {
                 &m.part == part && m.faces.iter().any(|f| reference_matches(&f.key, key) && f.plane.is_some())
@@ -482,6 +645,14 @@ fn apply_selection(params: &mut Value, field: &Field, targets: &[Target], scene:
     }
     params[&field.key] = match field.kind.as_str() {
         "profiles" => json!(profiles_from_targets(targets, scene)),
+        "sketch" | "sketches" => {
+            let mut selected = vec![];
+            for target in targets {
+                let id = match target { Target::Feature(id) | Target::Region { sketch: id, .. } => id, _ => continue };
+                if scene.sketches.contains_key(id) && !selected.contains(id) { selected.push(id.clone()); }
+            }
+            if field.kind == "sketch" { json!(selected.last().cloned().unwrap_or_default()) } else { json!(selected) }
+        }
         "bodies" => json!(parts(targets)),
         "body" => json!(parts(targets).last().cloned().unwrap_or_default()),
         "edges" => json!(
@@ -535,9 +706,10 @@ fn apply_selection(params: &mut Value, field: &Field, targets: &[Target], scene:
                 {
                     Some(json!({"kind":"edge","part":part,"edge":key}))
                 }
+                Target::SketchEntity { sketch, entity, edge } if scene.sketches.get(sketch).is_some_and(|s| s.entities.iter().any(|e| e.id == *entity)) => Some(json!({"kind":"sketch_entity","sketch":sketch,"entity":entity,"edge":edge})),
                 _ => None,
             })
-            .unwrap_or(Value::Null),
+            .unwrap_or_else(|| json!({})),
         "regions" => {
             if let Some(sketch) = targets.iter().rev().find_map(|t| {
                 if let Target::Region { sketch, .. } = t {
@@ -595,17 +767,18 @@ impl CadApp {
                         .find(|e| Some(e.id) == reference["entity"].as_u64())
                         .map(|e| (sk, e))
                 })
-                .map(|(sk, e)| {
-                    if e.kind == "line" {
+                .and_then(|(sk, e)| {
+                    if matches!(e.kind.as_str(), "line" | "rectangle") {
                         let points = e.points();
-                        (sk.plane.at(points[0]), sk.plane.at(points[1]))
+                        let edge = if e.kind == "rectangle" {reference["edge"].as_u64().unwrap_or(0) as usize} else {0};
+                        points.get(edge..edge+2).map(|p|(sk.plane.at(p[0]),sk.plane.at(p[1])))
                     } else {
                         let center = e
                             .arc()
                             .map(|a| a.center)
                             .unwrap_or([e.values[0], e.values[1]]);
                         let a = sk.plane.at(center);
-                        (a, std::array::from_fn(|n| a[n] + sk.plane.normal[n]))
+                        Some((a, std::array::from_fn(|n| a[n] + sk.plane.normal[n])))
                     }
                 }),
             Some("edge") => scene
@@ -621,7 +794,7 @@ impl CadApp {
                     e.axis
                         .map(|(a, d)| (a, std::array::from_fn(|n| a[n] + d[n])))
                 }),
-            _ => ProfileReference::from_params(p).ok().and_then(|profiles| profiles.first().and_then(|profile| match profile {
+            _ if reference.is_null() => ProfileReference::from_params(p).ok().and_then(|profiles| profiles.first().and_then(|profile| match profile {
                 ProfileReference::Region { sketch, .. } | ProfileReference::Sketch { sketch } => scene.sketches.get(sketch).map(|s| s.plane.clone()),
                 ProfileReference::Face { part, face } => scene.meshes.iter().find(|m| &m.part == part).and_then(|m| m.faces.iter().find(|f| reference_matches(&f.key, face))).and_then(|f| f.plane.clone()),
             })).map(|plane| {
@@ -634,6 +807,7 @@ impl CadApp {
                         (plane.at([offset, 0.]), plane.at([offset, 1.]))
                     }
                 }),
+            _ => None,
         };
         let Some((a, b)) = frame else { return };
         let a = glam::Vec3::from_array(a.map(|v| v as f32));
@@ -647,7 +821,7 @@ impl CadApp {
                 self.camera.project((a - d).to_array().map(f64::from), rect),
                 self.camera.project((a + d).to_array().map(f64::from), rect),
             ],
-            Stroke::new(2_f32, rgb(self.settings.appearance.purple)),
+            Stroke::new(2_f32, rgb(if axis_input(edit,&self.registry) {self.settings.appearance.turquoise} else {self.settings.appearance.purple})),
         );
     }
     pub(super) fn route_feature_selection(&mut self, ctx: &egui::Context) {
@@ -679,9 +853,9 @@ impl CadApp {
             edit.undo.push(before);
             edit.redo.clear();
             edit.changed = true;
-            if field.kind == "profiles" { self.restore_feature_selection(); }
             self.schedule(ctx);
         }
+        self.restore_feature_selection();
     }
 
     pub(super) fn restore_feature_selection(&mut self) {
@@ -759,8 +933,13 @@ impl CadApp {
                         part: part.into(),
                         key: key.into(),
                     });
+                } else if matches!(value["kind"].as_str(), Some("sketch_line" | "sketch_entity"))
+                    && let (Some(sketch),Some(entity)) = (value["sketch"].as_str(),value["entity"].as_u64()) {
+                    self.selection.add(Target::SketchEntity {sketch:sketch.into(),entity,edge:value["edge"].as_u64().unwrap_or(0) as usize});
                 }
             }
+            "sketch" => { if let Some(id) = value.as_str().filter(|id|!id.is_empty()) { self.selection.add(Target::Feature(id.into())); } }
+            "sketches" => { for id in strings() { self.selection.add(Target::Feature(id.into())); } }
             "regions" => {
                 let sketch = edit.feature.params["sketch"].as_str().unwrap_or_default();
                 if let Some(regions) = scene.regions.get(sketch) {
@@ -797,71 +976,7 @@ impl CadApp {
         }
     }
 
-    pub(super) fn pick_sketch_axis(
-        &mut self,
-        pos: egui::Pos2,
-        rect: Rect,
-        ctx: &egui::Context,
-    ) -> bool {
-        let Some(edit) = &self.editor else {
-            return false;
-        };
-        if input(edit, &self.registry).is_none_or(|f| f.kind != "axis") {
-            return false;
-        }
-        let scene = self.source_scene.as_ref().unwrap_or(&self.scene);
-        let line = self
-            .region_sketches(scene)
-            .into_iter()
-            .flat_map(|(sketch, s)| {
-                s.entities
-                    .iter()
-                    .filter(|e| matches!(e.kind.as_str(), "line" | "circle" | "arc"))
-                    .map(move |e| (sketch, s, e))
-            })
-            .filter_map(|(sketch, s, e)| {
-                let distance = e
-                    .points()
-                    .windows(2)
-                    .map(|points| {
-                        let a = self.camera.project(s.plane.at(points[0]), rect);
-                        let b = self.camera.project(s.plane.at(points[1]), rect);
-                        render::point_segment_distance(pos, a, b)
-                    })
-                    .fold(f32::INFINITY, f32::min);
-                (distance <= 7.).then_some((distance, sketch.to_owned(), e.id))
-            })
-            .min_by(|a, b| a.0.total_cmp(&b.0));
-        let Some((distance, sketch, entity)) = line else {
-            return false;
-        };
-        if render::pick_edges(scene, &self.camera, pos, rect, &self.hidden)
-            .iter()
-            .any(|edge| {
-                edge.pixels <= distance + 0.1
-                    && scene.meshes.iter().any(|m| {
-                        m.part == edge.part
-                            && m.edges
-                                .iter()
-                                .any(|e| reference_matches(&e.key, &edge.key) && e.axis.is_some())
-                    })
-            })
-        {
-            return false;
-        }
-        let edit = self.editor.as_mut().unwrap();
-        let key = input(edit, &self.registry).unwrap().key.clone();
-        let before = edit.feature.params.clone();
-        edit.feature.params[&key] = json!({"kind":"sketch_entity","sketch":sketch,"entity":entity});
-        if before != edit.feature.params {
-            edit.undo.push(before);
-            edit.redo.clear();
-            edit.changed = true;
-            self.selection.clear();
-            self.schedule(ctx);
-        }
-        true
-    }
+
 }
 
 #[cfg(test)]
@@ -870,7 +985,7 @@ mod tests {
     fn profile_editor(feature: Feature) -> Editor {
         Editor {
             workspace: EditWorkspace {
-                camera: Camera::default(), scene: Arc::new(Scene::default()), hidden: BTreeSet::new(),
+                camera: Camera::default(), automatic_camera: None, scene: Arc::new(Scene::default()), hidden: BTreeSet::new(),
                 hidden_sketches: BTreeSet::new(), selected_plane: None, selected_feature: None,
                 selection: vec![], selection_filter: Filter::All, show_planes: true, show_sketches: false,
             },
@@ -881,6 +996,7 @@ mod tests {
     fn profile_scene() -> (Document, Scene, Feature, Registry) {
         let registry = Registry::builtin().unwrap(); let mut doc = Document::default();
         let mut sketch = Sketch::default(); sketch.add_rect([0.,0.],[6.,4.]); sketch.add_rect([10.,0.],[14.,4.]);
+        sketch.add_line([30.,-5.],[30.,10.]); sketch.entities.last_mut().unwrap().construction = true;
         let mut feature = registry.create("sketch", &mut doc).unwrap(); feature.set_sketch(&sketch); doc.features.push(feature);
         let mut feature = registry.create("extrude", &mut doc).unwrap(); feature.params["sketch"] = json!("f1"); feature.params["depth"] = json!("2"); doc.features.push(feature);
         let mut sketch = Sketch::default(); sketch.add_circle([24.,2.],2.);
@@ -905,13 +1021,71 @@ mod tests {
         let rect = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.,700.));
         let point = camera.project([3.,2.,0.], rect);
         let sketches: Vec<_> = scene.sketches.iter().map(|(id,s)| (id.as_str(),s)).collect();
-        let picked = profile_candidates(&scene, &camera, (point,rect,Filter::All,false), &BTreeSet::new(), &sketches, &["f1"]);
+        let picked = profile_candidates(&scene, &camera, (point,rect,Filter::All,false), &BTreeSet::new(), &sketches);
         assert!(matches!(picked.first(), Some(Target::Region { sketch, .. }) if sketch == "f1"), "{picked:?}");
         apply_selection(&mut edit.feature.params, &field("profiles", "profiles"), &picked[..1], &scene);
         assert_eq!(edit.feature.params["profiles"][0]["kind"], "region");
         assert_eq!(active_key(&edit, &registry), Some("profiles"));
         assert!(profile_input(&edit, &registry));
     }
+    #[test]
+    fn clear_and_toggle_preserve_visible_source_regions_behind_a_body() {
+        let (doc, scene, _, registry) = profile_scene();
+        let mut edit = profile_editor(doc.features[1].clone());
+        edit.index = 1;
+        edit.workspace.hidden_sketches.insert("f1".into());
+        let mut camera = Camera::default(); camera.align(&Plane::named("Top", 0.));
+        let rect = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000., 700.));
+        let pos = camera.project([3., 2., 0.], rect);
+        apply_selection(&mut edit.feature.params, &field("profiles", "profiles"), &[], &scene);
+        assert!(referenced_sketches(&edit.feature, &registry).is_empty());
+        let mut selection = Selection::default();
+        for count in [1, 0, 1] {
+            let exposure = exposed_sketches(&edit, &doc, &registry);
+            assert_eq!(exposure, vec!["f1"], "Clear preserves the original source, without exposing unrelated f3");
+            let visible: Vec<_> = scene.sketches.iter().filter(|(id, _)| exposure.contains(&id.as_str()))
+                .map(|(id, sketch)| (id.as_str(), sketch)).collect();
+            let picks = profile_candidates(&scene, &camera, (pos, rect, Filter::Regions, false), &BTreeSet::new(), &visible);
+            let target = picks.first().expect("The painted sketch remains pickable through the source body");
+            assert!(matches!(target, Target::Region {sketch, ..} if sketch == "f1"));
+            selection.toggle(target.clone());
+            apply_selection(&mut edit.feature.params, &field("profiles", "profiles"), selection.items(), &scene);
+            assert_eq!(edit.feature.params["profiles"].as_array().unwrap().len(), count);
+        }
+        let faces = |through| profile_candidates(&scene, &camera, (pos, rect, Filter::Faces, through), &BTreeSet::new(), &[]);
+        assert_eq!(faces(false).len(), 1, "Solid faces still obey ordinary depth selection");
+        assert!(faces(true).len() > 1, "Select other still exposes occluded solid faces");
+    }
+    #[test]
+    fn open_sketch_paths_follow_the_overlay_policy_only_while_choosing_sketches() {
+        let (mut doc, _, _, registry) = profile_scene();
+        let mut path = Sketch::default(); path.add_line([1., 1.], [5., 3.]);
+        let mut feature = registry.create("sketch", &mut doc).unwrap();
+        feature.set_sketch(&path); let id = feature.id.clone(); doc.features.push(feature);
+        let result = Runtime::new(registry).evaluate(&doc).unwrap();
+        assert!(result.scene.error.is_none());
+        assert!(result.scene.regions.get(&id).is_none_or(Vec::is_empty), "An open sweep path has no region-picking fallback");
+        let mut camera = Camera::default(); camera.align(&Plane::named("Top", 0.));
+        let rect = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000., 700.));
+        let point = camera.project([3., 2., 0.], rect);
+        let visible = [(id.as_str(), &result.scene.sketches[&id])];
+        assert_eq!(sketch_candidate(&result.scene, &camera, point, rect, &BTreeSet::new(), &visible, false), None);
+        assert_eq!(sketch_candidate(&result.scene, &camera, point, rect, &BTreeSet::new(), &visible, true), Some(id));
+        assert_eq!(sketch_candidate(&result.scene, &camera, point, rect, &BTreeSet::new(), &[], true), None);
+    }
+
+    #[test]
+    fn new_feature_exposure_uses_entry_selection_not_the_insertion_slots_old_feature() {
+        let (doc, _, feature, registry) = profile_scene();
+        let mut edit = profile_editor(feature); edit.is_new = true; edit.index = 1;
+        edit.workspace.selection = vec![Target::Region { sketch: "f3".into(), key: "region".into() }];
+        assert_eq!(exposed_sketches(&edit, &doc, &registry), vec!["f3"]);
+        edit.workspace.selected_feature = Some(0);
+        assert_eq!(exposed_sketches(&edit, &doc, &registry), vec!["f1", "f3"]);
+        edit.workspace.selection.clear();
+        assert_eq!(exposed_sketches(&edit, &doc, &registry), vec!["f1"]);
+    }
+
     #[test]
     fn mixed_profile_picks_preserve_other_sketches_and_face_entries_until_removed() {
         let (_, scene, mut feature, _) = profile_scene();
@@ -929,6 +1103,120 @@ mod tests {
         apply_selection(&mut feature.params, &field("profiles", "profiles"), selected.items(), &scene);
         assert_eq!(feature.params["profiles"].as_array().unwrap().len(), 2);
         assert!(feature.params["profiles"].as_array().unwrap().iter().all(|p|p["kind"] == "region"));
+    }
+    #[test]
+    fn commands_do_not_guess_references_from_existing_geometry() {
+        let (mut doc,scene,_,registry) = profile_scene();
+        for id in ["extrude","revolve","fillet","chamfer","shell","sweep","loft","transform","pattern","mirror","plane","boolean"] {
+            let mut feature = registry.create(id,&mut doc).unwrap();
+            seed_inputs(&mut feature,&[],&scene,&registry);
+            let mut edit = profile_editor(feature);
+            edit.is_new = true;
+            assert!(missing(&edit,&registry).is_some(),"{id} must request its input instead of using a recent sketch/part");
+            for field in registry.plugins[id].manifest.fields.iter().filter(|f|selectable(&f.kind) && !f.hidden) {
+                let value = &edit.feature.params[&field.key];
+                assert!(value.is_null() || value == &json!({}) || value == &json!([]) || value == "", "{id}/{} = {value}",field.key);
+            }
+        }
+    }
+    #[test]
+    fn deliberate_sketch_handoff_and_face_preselection_are_the_only_profile_seeds() {
+        let (_,scene,mut feature,registry) = profile_scene();
+        seed_inputs(&mut feature,&[Target::Feature("f3".into())],&scene,&registry);
+        assert_eq!(feature.params["profiles"],json!([{"kind":"region","sketch":"f3","region":scene.regions["f3"][0].key}]));
+        assert_eq!(feature.params["sketch"],"");
+        let target = Target::Face {part:"f2:0".into(),key:"f2:end".into()};
+        seed_inputs(&mut feature,&[target],&scene,&registry);
+        assert_eq!(feature.params["profiles"],json!([{"kind":"face","part":"f2:0","face":"f2:end"}]));
+    }
+    #[test]
+    fn sweep_roles_and_ordered_loft_profiles_use_their_declared_kinds() {
+        let (mut doc,scene,_,registry) = profile_scene();
+        let picked = [Target::Feature("f3".into()),Target::Feature("f1".into())];
+        let mut loft = registry.create("loft",&mut doc).unwrap();
+        assert_eq!(seed_inputs(&mut loft,&picked,&scene,&registry),Some("profiles".into()));
+        assert_eq!(loft.params["profiles"],json!(["f3","f1"]));
+        let mut sweep = registry.create("sweep",&mut doc).unwrap();
+        seed_inputs(&mut sweep,&picked[1..],&scene,&registry);
+        assert_eq!(sweep.params["profile"],"f1");
+        assert_eq!(sweep.params["path"],"");
+        apply_selection(&mut sweep.params,&field("path","sketch"),&picked[..1],&scene);
+        assert_eq!(sweep.params["profile"],"f1");
+        assert_eq!(sweep.params["path"],"f3");
+        apply_selection(&mut sweep.params,&field("path","sketch"),&[],&scene);
+        assert_eq!(sweep.params["path"],"");
+        assert_eq!(sweep.params["profile"],"f1");
+        seed_inputs(&mut sweep,&picked,&scene,&registry);
+        assert_eq!(sweep.params["profile"],"","Two compatible preselected sketches do not imply which is profile vs path");
+        let mut transform = registry.create("transform",&mut doc).unwrap();
+        seed_inputs(&mut transform,&[Target::Part("f2:0".into()),Target::Part("f2:1".into())],&scene,&registry);
+        assert_eq!(transform.params["target"],"","A single-part feature cannot quietly keep only the last preselected part");
+    }
+    #[test]
+    fn revolve_profile_and_axis_are_independent_and_clear_never_uses_a_default_axis() {
+        let (mut doc,scene,_,registry) = profile_scene();
+        let mut feature = registry.create("revolve",&mut doc).unwrap();
+        seed_inputs(&mut feature,&[Target::Feature("f3".into())],&scene,&registry);
+        let profiles = feature.params["profiles"].clone();
+        let mut edit = profile_editor(feature);
+        edit.input_field = Some("profiles".into());
+        assert_eq!(missing(&edit,&registry).as_deref(),Some("Select revolve axis"));
+        cycle(&mut edit,&registry,false);
+        assert_eq!(active_key(&edit,&registry),Some("axis_ref"));
+        let axis = Target::SketchEntity {sketch:"f1".into(),entity:scene.sketches["f1"].entities[0].id,edge:0};
+        apply_selection(&mut edit.feature.params,&field("axis_ref","axis"),&[axis],&scene);
+        assert_eq!(edit.feature.params["profiles"],profiles);
+        assert_eq!(missing(&edit,&registry),None);
+        apply_selection(&mut edit.feature.params,&field("axis_ref","axis"),&[],&scene);
+        assert_eq!(edit.feature.params["axis_ref"],json!({}));
+        assert_eq!(edit.feature.params["profiles"],profiles);
+        assert_eq!(missing(&edit,&registry).as_deref(),Some("Select revolve axis"));
+        cycle(&mut edit,&registry,true);
+        assert_eq!(active_key(&edit,&registry),Some("profiles"));
+    }
+    #[test]
+    fn axis_hover_and_selection_use_the_exact_visible_sketch_entity() {
+        let (_,scene,_,_) = profile_scene();
+        let mut camera = Camera::default(); camera.align(&Plane::named("Top",0.));
+        let rect = Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(1000.,700.));
+        let pos = camera.project([3.,0.,0.],rect);
+        let sketches = vec![("f1",&scene.sketches["f1"])];
+        let picks = axis_candidates(&scene,&camera,pos,rect,&BTreeSet::new(),&sketches,false);
+        let expected = scene.sketches["f1"].entities[0].id;
+        assert!(picks.contains(&Target::SketchEntity {sketch:"f1".into(),entity:expected,edge:0}),"{picks:?}");
+        let pos = camera.project([30.,2.,0.],rect);
+        let picks = axis_candidates(&scene,&camera,pos,rect,&BTreeSet::new(),&sketches,false);
+        let expected = scene.sketches["f1"].entities.iter().find(|e|e.construction).unwrap().id;
+        assert_eq!(picks.first(),Some(&Target::SketchEntity {sketch:"f1".into(),entity:expected,edge:0}));
+    }
+    #[test]
+    fn selected_rectangle_side_axis_survives_roundtrip_and_revolves_that_side() {
+        let (mut doc,scene,_,registry) = profile_scene();
+        let region = scene.regions["f1"].iter().find(|r|r.contains([3.,2.])).unwrap();
+        let mut feature = registry.create("revolve",&mut doc).unwrap();
+        seed_inputs(&mut feature,&[Target::Region {sketch:"f1".into(),key:region.key.clone()}],&scene,&registry);
+        let axis = Target::SketchEntity {sketch:"f1".into(),entity:scene.sketches["f1"].entities[0].id,edge:0};
+        apply_selection(&mut feature.params,&field("axis_ref","axis"),&[axis],&scene);
+        assert_eq!(feature.params["axis_ref"]["edge"],0);
+        doc.features.push(feature);
+        let doc: Document = serde_json::from_slice(&serde_json::to_vec(&doc).unwrap()).unwrap();
+        let result = Runtime::new(registry).evaluate(&doc).unwrap();
+        assert!(result.scene.error.is_none(),"{:?}",result.scene.error);
+        assert!((result.scene.meshes.last().unwrap().volume - 96.*std::f64::consts::PI).abs() < 1e-6);
+    }
+    #[test]
+    fn merge_scope_is_required_only_for_operations_that_use_it() {
+        let (_,_,mut feature,registry) = profile_scene();
+        feature.params["profiles"] = json!([{"kind":"sketch","sketch":"f1"}]);
+        let mut edit = profile_editor(feature);
+        assert_eq!(missing(&edit,&registry),None);
+        for mode in ["Add","Remove","Intersect"] {
+            edit.feature.params["mode"] = json!(mode);
+            assert_eq!(missing(&edit,&registry).as_deref(),Some("Select merge scope"));
+            edit.feature.params["targets"] = json!(["f2:0"]);
+            assert_eq!(missing(&edit,&registry),None);
+            edit.feature.params["targets"] = json!([]);
+        }
     }
     fn field(key: &str, kind: &str) -> Field {
         Field {

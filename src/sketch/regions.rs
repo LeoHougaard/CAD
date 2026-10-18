@@ -34,6 +34,53 @@ impl ResolvedRegion {
     pub fn contains(&self, point: [f64; 2]) -> bool {
         self.boundary.contains(point) && !self.inner.iter().any(|b| b.contains(point))
     }
+    fn interior_point(&self) -> Option<[f64;2]> {
+        for edge in &self.boundary.segments {
+            let t=(edge.start+edge.end)*0.5;
+            let p=edge.curve.at(t);
+            let tangent=edge.curve.tangent(t);
+            let length=dot(tangent,tangent).sqrt();
+            let sign=(edge.end-edge.start).signum();
+            let mut step=length*(edge.end-edge.start).abs()*0.01;
+            for _ in 0..32 {
+                let point=[p[0]-sign*tangent[1]/length*step,p[1]+sign*tangent[0]/length*step];
+                if self.contains(point) {return Some(point);}
+                step*=0.5;
+            }
+        }
+        None
+    }
+}
+
+/// Exact planar set operations share the same arrangement as selectable cells.
+pub(crate) fn boolean_faces(topo:&mut Topology,a:&ResolvedSketch,b:&ResolvedSketch,op:brepkit_operations::boolean::BooleanOp)->Result<Vec<FaceId>> {
+    let inside_a:Vec<_>=regions(a)?.into_iter().filter(|r|r.legacy_selected).collect();
+    let inside_b:Vec<_>=regions(b)?.into_iter().filter(|r|r.legacy_selected).collect();
+    let mut combined=a.clone();
+    combined.entities.extend(b.entities.iter().cloned());
+    for (i,entity) in combined.entities.iter_mut().enumerate() {entity.id=i as u64+1;entity.curve_identity=None;}
+    let mut keys=vec![];
+    for cell in regions(&combined)? {
+        let p=cell.interior_point().ok_or("Could not classify a planar Boolean cell")?;
+        let in_a=inside_a.iter().any(|r|r.contains(p));
+        let in_b=inside_b.iter().any(|r|r.contains(p));
+        let selected=match op {
+            brepkit_operations::boolean::BooleanOp::Fuse=>in_a||in_b,
+            brepkit_operations::boolean::BooleanOp::Cut=>in_a&&!in_b,
+            brepkit_operations::boolean::BooleanOp::Intersect=>in_a&&in_b,
+        };
+        if selected {keys.push(cell.key);}
+    }
+    if keys.is_empty() {return Err("Boolean result contains no material".into());}
+    let n=v3(combined.plane.normal);
+    let d=n.dot(p3(combined.plane.origin)-p3([0.;3]));
+    selected_boundaries(&combined,&keys)?.into_iter().map(|(mut outer,mut holes)| {
+        outer.simplify();
+        for hole in &mut holes {hole.simplify();}
+        let outer=outer.wire(topo,&combined.plane)?;
+        let inner=holes.iter().map(|h|h.wire(topo,&combined.plane)).collect::<Result<Vec<_>>>()?;
+        Ok(topo.add_face(Face::new(outer,inner,FaceSurface::Plane {normal:n,d})))
+    }).collect()
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -142,6 +189,34 @@ struct Boundary {
     segments: Vec<Segment>,
 }
 impl Boundary {
+    fn simplify(&mut self) {
+        loop {
+            let mut merged=false;
+            for i in 0..self.segments.len() {
+                let j=(i+1)%self.segments.len();
+                if i==j {break;}
+                let a=&self.segments[i]; let b=&self.segments[j];
+                let curve=match (a.curve,b.curve) {
+                    (Curve::Line {..},Curve::Line {..})=>{
+                        let start=a.curve.at(a.start);let join=a.curve.at(a.end);let end=b.curve.at(b.end);
+                        let u=sub(join,start);let v=sub(end,join);
+                        if cross(u,v).abs()>1e-9*dot(u,u).sqrt()*dot(v,v).sqrt() || dot(u,v)<=0. {continue;}
+                        (Curve::Line {a:start,b:end},0.,1.)
+                    }
+                    (Curve::Circle {center,radius},Curve::Circle {center:c,radius:r})=>{
+                        if distance(center,c)>EPS || (radius-r).abs()>EPS || (a.end-a.start)*(b.end-b.start)<=0. {continue;}
+                        (a.curve,a.start,a.end+b.end-b.start)
+                    }
+                    _=>continue,
+                };
+                let edge=Segment {curve:curve.0,start:curve.1,end:curve.2,key:a.key.clone(),start_key:a.start_key.clone(),end_key:b.end_key.clone()};
+                self.segments[i]=edge;
+                self.segments.remove(j);
+                merged=true;break;
+            }
+            if !merged {break;}
+        }
+    }
     fn area(&self) -> f64 {
         self.segments.iter().map(Segment::area).sum()
     }

@@ -50,6 +50,13 @@ Supported edits are:
 
 Parameters use their plugin's declared types. Numeric values can be numbers or expression strings. Dimensions, variables, and sketch entity values use expression strings. `set_param` cannot replace sketch geometry or feature metadata. Add a sketch through `add_feature` with a complete serialized `Sketch` in `params.geometry`. It contains `entities`, `constraints`, and `next_id`. Entity and constraint structures match `result.document` from inspect. `add_feature` also accepts its normal plane, offset, and support parameters.
 
+Sketch 1.1 declares the optional `support_ref` plane reference. For a face, use
+`{"kind":"face","part":"f2:0","face":"f2:end"}` so the part owner is retained.
+Null uses the legacy `support` and origin-plane inputs. The exact bundled Sketch
+1.0 package remains readable; explicitly setting a typed support adopts the new
+package identity. Rectangle-axis references also include a zero-based `edge`
+index from 0 to 3.
+
 Sketch entities may contain optional `curve_identity` metadata. Preserve it when editing existing entities: it keeps references to the same logical curve stable when a rectangle is decomposed into connected lines for per-edge construction. New entities normally omit it; arbitrary or duplicate aliases are rejected. It does not identify a replacement curve after an actual trim or split.
 
 New Part Studio documents use `format: 2` for the shared [numeric expression language](numeric-expressions.md). Older format 1 documents retain their original radians semantics. Use the document's format when interpreting expressions. Construction-plane `plane_ref` fields use typed origin, datum or face references; see [construction planes](construction-planes.md).
@@ -104,6 +111,17 @@ Agents can work on separate output files or the same design. For shared edits, e
 If the revision changed, an edit can rebase when its current target still equals `before` or already equals the proposed value. Disjoint edits merge. An already-applied edit is idempotent. A changed target returns `edit_conflict` with target, current, expected, and proposed values. A missing `before` on a stale request also conflicts. A stale `add_feature` needs `before` equal to the inspected number of features. Concurrent appends conflict rather than guessing order.
 
 Always inspect the returned document and model after a rebase. If two edits touch different fields but produce incompatible geometry, regeneration fails and the file stays unchanged. Locks coordinate this app and CLI. Other software that ignores them can still race a write; the CLI also checks the source bytes immediately before saving.
+
+A sketch's `plane`, `support`, and `support_ref` form one binding. Changing any
+of them requires a current document revision. Stale support edits are rejected
+even if that individual field still matches `before`, because changing it can
+replace another support field. Inspect again before retrying. Numeric parameter
+and dimension edits retain their existing rebase rules.
+
+Setting `support_ref` to `null` clears the attachment and its mirrored legacy
+support, returning to the named origin plane and current offset. The editor's
+Detach action instead preserves the evaluated custom frame. When adding a feature,
+a null optional `support_ref` does not override an explicit `support` or `plane`.
 
 Native Pixel Linux verification covered two CLI processes editing one document from the same starting revision. Their disjoint sketch/depth edits merged into a fully constrained 40 x 40 x 5mm part, with one request rebased. The GUI reloaded that result, rejected a stale save after an agent changed the file, and retained the unsaved human edit when "Keep editing" was chosen. Native Save as preserved the human's 6mm-depth fork while the shared file retained the agent's 7mm depth. See the [verification report](../output/collaboration-pixel-verification.json), [stale-save screenshot](../output/pixel-stale-save-detail.png), and [reload guard](../output/pixel-reload-guard-detail.png). This verifies the recorded workflow; the GUI rejects stale saves rather than merging unsaved edits automatically.
 

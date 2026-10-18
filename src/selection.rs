@@ -7,6 +7,7 @@ pub enum Target {
     Face { part: String, key: String },
     Edge { part: String, key: String },
     Region { sketch: String, key: String },
+    SketchEntity { sketch: String, entity: u64, edge: usize },
 }
 
 impl Target {

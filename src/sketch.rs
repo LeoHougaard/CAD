@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod regions;
 mod trim;
+pub(crate) use regions::boolean_faces;
 pub(crate) use regions::{RegionEdge, profile_for_regions, region_edges, region_profile_keys};
 pub use regions::{ResolvedRegion, TrimPiece, faces_for_regions, regions, trim_entity};
 pub use trim::{TrimEdit, apply_trim, set_construction};
@@ -63,13 +64,15 @@ pub fn arc_geometry(values: &[f64]) -> Result<ArcGeometry> {
 }
 impl ResolvedEntity {
     pub fn curve_key(&self, edge: usize) -> String {
-        self.curve_identity.clone().unwrap_or_else(|| crate::model::curve_key(&self.kind, self.id, edge))
+        self.curve_identity
+            .clone()
+            .unwrap_or_else(|| crate::model::curve_key(&self.kind, self.id, edge))
     }
 
     pub fn control_points(&self) -> Vec<[f64; 2]> {
         match self.kind.as_str() {
             "rectangle" => self.points().into_iter().take(4).collect(),
-            "circle" => vec![[self.values[0], self.values[1]]],
+            "circle" | "point" => vec![[self.values[0], self.values[1]]],
             "arc" => vec![
                 [self.values[0], self.values[1]],
                 [self.values[2], self.values[3]],
@@ -89,6 +92,7 @@ impl ResolvedEntity {
     pub fn points(&self) -> Vec<[f64; 2]> {
         let p = &self.values;
         match self.kind.as_str() {
+            "point" => vec![[p[0], p[1]]],
             "rectangle" => vec![
                 [p[0], p[1]],
                 [p[0] + p[2], p[1]],
@@ -149,6 +153,7 @@ fn constraints_with_expressions(sketch: &Sketch) -> Vec<crate::model::SketchCons
         let labels = match entity.kind.as_str() {
             "rectangle" => vec!["X", "Y", "Width", "Height"],
             "circle" => vec!["X", "Y", "Radius"],
+            "point" => vec!["X", "Y"],
             "arc" => vec!["X", "Y", "StartX", "StartY", "EndX", "EndY"],
             _ => vec!["X", "Y", "EndX", "EndY"],
         };
@@ -197,6 +202,7 @@ pub fn resolve_with_targets(
             .map(|s| numbers.eval(s))
             .collect::<Result<_>>()?;
         let needed = match entity.kind.as_str() {
+            "point" => 2,
             "circle" => 3,
             "arc" => 7,
             _ => 4,
@@ -213,7 +219,7 @@ pub fn resolve_with_targets(
         if entity.kind == "arc" {
             arc_geometry(&values)?;
         }
-        if !["rectangle", "circle", "line", "arc"].contains(&entity.kind.as_str()) {
+        if !["rectangle", "circle", "line", "arc", "point"].contains(&entity.kind.as_str()) {
             return Err(format!("Unsupported sketch entity '{}'", entity.kind));
         }
         entities.push(ResolvedEntity {
@@ -249,7 +255,7 @@ pub fn resolve_with_targets(
                 [v[0] + v[2], v[1] + v[3]],
                 [v[0], v[1] + v[3]],
             ],
-            "circle" => vec![[v[0], v[1]]],
+            "circle" | "point" => vec![[v[0], v[1]]],
             "arc" => vec![[v[0], v[1]], [v[2], v[3]], [v[4], v[5]]],
             _ => vec![[v[0], v[1]], [v[2], v[3]]],
         };
@@ -274,7 +280,7 @@ pub fn resolve_with_targets(
             if fixed {
                 constrain(&mut sys, Constraint::Radius(c, v[2]))?;
             }
-        } else {
+        } else if entity.kind != "point" {
             let count = if entity.kind == "rectangle" { 4 } else { 1 };
             let mut ls = vec![];
             for n in 0..count {
@@ -360,6 +366,14 @@ pub fn resolve_with_targets(
                 }
                 continue;
             }
+            "FixPoint" => {
+                let p = c.position.ok_or("A fixed point needs its position")?;
+                if p.iter().any(|v| !v.is_finite()) {
+                    return Err("A fixed point needs finite coordinates".into());
+                }
+                constrain(&mut sys, Constraint::FixX(pa()?, p[0]))?;
+                Constraint::FixY(pa()?, p[1])
+            }
             "Coincident" => {
                 let (a, b) = if let Some((a, b)) = c.value.split_once(':') {
                     (
@@ -428,7 +442,18 @@ pub fn resolve_with_targets(
                     Constraint::EqualLength(la()?, lb()?)
                 }
             }
-            "Concentric" => Constraint::Coincident(point(c.a, 0)?, point(c.b, 0)?),
+            "Concentric" => Constraint::Coincident(pa()?, pb()?),
+            "Midpoint" => {
+                if let Some(midpoint) = c.midpoint {
+                    Constraint::Midpoint(point(midpoint.entity, midpoint.point)?, pa()?, pb()?)
+                } else if let Some(&arc) = arcs.get(&c.b) {
+                    let clockwise = entities.iter().find(|e| e.id == c.b).unwrap().values[6] < 0.;
+                    Constraint::ArcMidpoint(pa()?, arc, clockwise)
+                } else {
+                    let line = sys.line(lb()?).unwrap();
+                    Constraint::Midpoint(pa()?, line.p1, line.p2)
+                }
+            }
             "PointOnLine" => Constraint::PointLineDistance(pa()?, lb()?, 0.),
             "PointOnCircle" => {
                 if let Some(&arc) = arcs.get(&c.b) {
@@ -575,6 +600,7 @@ pub fn resolve_with_targets(
         let ps = &points[&e.id];
         let a = sys.point(ps[0]).unwrap();
         e.values = match e.kind.as_str() {
+            "point" => vec![a.x, a.y],
             "circle" => vec![a.x, a.y, sys.circle(circles[&e.id]).unwrap().radius],
             "arc" => {
                 let start = sys.point(ps[1]).unwrap();

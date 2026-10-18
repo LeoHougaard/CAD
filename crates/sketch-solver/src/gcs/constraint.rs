@@ -36,6 +36,12 @@ pub enum Constraint {
     /// Two points must coincide. Produces 2 residuals: `[p1.x - p2.x, p1.y - p2.y]`.
     Coincident(PointId, PointId),
 
+    /// A point at the arithmetic midpoint of two endpoints. Produces 2 residuals.
+    Midpoint(PointId, PointId, PointId),
+
+    /// A point halfway along an arc's directed sweep. Produces 2 residuals.
+    ArcMidpoint(PointId, ArcId, bool),
+
     /// Distance between two points must equal `d`. Produces 1 residual
     /// using the squared form: `dx² + dy² - d²`, normalized by `max(1, 2d)`.
     Distance(PointId, PointId, f64),
@@ -187,6 +193,8 @@ pub const fn residual_count(c: &Constraint) -> usize {
         | Constraint::DistanceY(..)
         | Constraint::TangentLineCircle(..) => 1,
         Constraint::Coincident(_, _)
+        | Constraint::Midpoint(..)
+        | Constraint::ArcMidpoint(..)
         | Constraint::ConcentricArcArc(_, _)
         | Constraint::ConcentricArcCircle(_, _) => 2,
         Constraint::Distance(_, _, _)
@@ -211,6 +219,17 @@ pub const fn residual_count(c: &Constraint) -> usize {
 /// Compute residuals for a constraint, appending to `out`.
 pub fn eval_residuals(c: &Constraint, snap: &EntitySnapshot, out: &mut Vec<f64>) {
     match c {
+        Constraint::Midpoint(point, start, end) => {
+            let (px, py) = snap.point(*point);
+            let (sx, sy) = snap.point(*start);
+            let (ex, ey) = snap.point(*end);
+            out.extend([px - (sx + ex) * 0.5, py - (sy + ey) * 0.5]);
+        }
+        Constraint::ArcMidpoint(point, arc, clockwise) => {
+            let (px, py) = snap.point(*point);
+            let (midpoint, _, _) = arc_midpoint(snap, *arc, *clockwise);
+            out.extend([px - midpoint[0], py - midpoint[1]]);
+        }
         Constraint::Radius(circle, target) => out.push(snap.circle(*circle).1 - target),
         Constraint::EqualRadius(a, b) => out.push(snap.circle(*a).1 - snap.circle(*b).1),
         Constraint::EqualLength(a, b) => {
@@ -418,6 +437,42 @@ pub fn eval_residuals(c: &Constraint, snap: &EntitySnapshot, out: &mut Vec<f64>)
     }
 }
 
+/// Directed arc midpoint and its derivatives with respect to its endpoints.
+/// The center derivative is I - ds - de, by translation invariance.
+fn arc_midpoint(
+    snap: &EntitySnapshot,
+    arc: ArcId,
+    clockwise: bool,
+) -> ([f64; 2], [[f64; 2]; 2], [[f64; 2]; 2]) {
+    let (center, start, end) = snap.arc(arc);
+    let (cx, cy) = snap.point(center);
+    let (sx, sy) = snap.point(start);
+    let (ex, ey) = snap.point(end);
+    let s = [sx - cx, sy - cy];
+    let e = [ex - cx, ey - cy];
+    let radius = s[0].hypot(s[1]).max(1e-12);
+    let end_radius_squared = (e[0] * e[0] + e[1] * e[1]).max(1e-24);
+    let start_angle = s[1].atan2(s[0]);
+    let end_angle = e[1].atan2(e[0]);
+    let sweep = if clockwise {
+        -(start_angle - end_angle).rem_euclid(std::f64::consts::TAU)
+    } else {
+        (end_angle - start_angle).rem_euclid(std::f64::consts::TAU)
+    };
+    let angle = start_angle + sweep * 0.5;
+    let u = [angle.cos(), angle.sin()];
+    let v = [-u[1], u[0]];
+    let mut ds = [[0.; 2]; 2];
+    let mut de = [[0.; 2]; 2];
+    for row in 0..2 {
+        for col in 0..2 {
+            ds[row][col] = u[row] * s[col] / radius + v[row] * [-s[1], s[0]][col] / (2. * radius);
+            de[row][col] = radius * v[row] * [-e[1], e[0]][col] / (2. * end_radius_squared);
+        }
+    }
+    ([cx + radius * u[0], cy + radius * u[1]], ds, de)
+}
+
 /// Writer that places Jacobian entries into a row-major dense matrix.
 pub struct JacobianWriter<'a> {
     /// Row-major Jacobian, m rows × n cols.
@@ -455,6 +510,36 @@ pub fn eval_jacobian(
     row_offset: usize,
 ) {
     match c {
+        Constraint::Midpoint(point, start, end) => {
+            for (id, weight) in [(*point, 1.), (*start, -0.5), (*end, -0.5)] {
+                jw.add(row_offset, ParamRef::PointX(id), weight);
+                jw.add(row_offset + 1, ParamRef::PointY(id), weight);
+            }
+        }
+        Constraint::ArcMidpoint(point, arc, clockwise) => {
+            let (center, start, end) = snap.arc(*arc);
+            let (_, ds, de) = arc_midpoint(snap, *arc, *clockwise);
+            jw.add(row_offset, ParamRef::PointX(*point), 1.);
+            jw.add(row_offset + 1, ParamRef::PointY(*point), 1.);
+            for row in 0..2 {
+                for col in 0..2 {
+                    let parameter = |id| {
+                        if col == 0 {
+                            ParamRef::PointX(id)
+                        } else {
+                            ParamRef::PointY(id)
+                        }
+                    };
+                    jw.add(row_offset + row, parameter(start), -ds[row][col]);
+                    jw.add(row_offset + row, parameter(end), -de[row][col]);
+                    jw.add(
+                        row_offset + row,
+                        parameter(center),
+                        ds[row][col] + de[row][col] - f64::from(row == col),
+                    );
+                }
+            }
+        }
         Constraint::Radius(circle, _) => jw.set(row_offset, ParamRef::CircleRadius(*circle), 1.),
         Constraint::EqualRadius(a, b) => {
             jw.add(row_offset, ParamRef::CircleRadius(*a), 1.);

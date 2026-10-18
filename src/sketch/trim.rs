@@ -125,7 +125,7 @@ fn replace_entity(
         if constraint_index >= original.constraints.len() && c.a != entity {
             continue;
         }
-        if c.a != entity && c.b != entity {
+        if c.a != entity && c.b != entity && c.midpoint.is_none_or(|p| p.entity != entity) {
             retained.push(c);
             continue;
         }
@@ -145,6 +145,35 @@ fn replace_entity(
             }
         };
         match c.kind.as_str() {
+            "Midpoint" => {
+                point_ref(&mut c.a, &mut c.points[0]);
+                if let Some(midpoint) = &mut c.midpoint {
+                    point_ref(&mut c.b, &mut c.points[1]);
+                    point_ref(&mut midpoint.entity, &mut midpoint.point);
+                } else if c.b == entity {
+                    // A trim changes the midpoint. Keep it only when the
+                    // referenced bounded curve survived unchanged.
+                    let replacement = children.iter().find(|(source, child)| {
+                        *source == c.points[1]
+                            && if old.kind == "arc" {
+                                child.kind == "arc"
+                                    && child
+                                        .values
+                                        .iter()
+                                        .zip(&old.values)
+                                        .all(|(a, b)| (a - b).abs() < 1e-9)
+                            } else {
+                                whole_curve(c.points[1]) == Some(child.id)
+                            }
+                    });
+                    if let Some((_, child)) = replacement {
+                        c.b = child.id;
+                        c.points[1] = 0;
+                    } else {
+                        keep = false;
+                    }
+                }
+            }
             "Fix" => {
                 retained.extend(children.iter().map(|(_, e)| SketchConstraint {
                     a: e.id,
@@ -152,7 +181,7 @@ fn replace_entity(
                 }));
                 continue;
             }
-            "Origin" | "X" | "Y" => point_ref(&mut c.a, &mut c.points[0]),
+            "Origin" | "X" | "Y" | "FixPoint" => point_ref(&mut c.a, &mut c.points[0]),
             "StartX" | "StartY" | "EndX" | "EndY" => {
                 c.points[0] = if c.kind.starts_with("End") && old.kind == "arc" {
                     2
@@ -163,7 +192,7 @@ fn replace_entity(
                 c.kind = if c.kind.ends_with('X') { "X" } else { "Y" }.into();
             }
             "Coincident" | "Distance" | "DistanceX" | "DistanceY" | "HorizontalPoints"
-            | "VerticalPoints" => {
+            | "VerticalPoints" | "Concentric" => {
                 if c.kind == "Coincident"
                     && let Some((a, b)) = c.value.split_once(':')
                 {
@@ -176,7 +205,7 @@ fn replace_entity(
                 point_ref(&mut c.a, &mut c.points[0]);
                 point_ref(&mut c.b, &mut c.points[1]);
             }
-            "Radius" | "Diameter" | "Concentric" => {
+            "Radius" | "Diameter" => {
                 if children[0].1.arc().is_none() && children[0].1.kind != "circle" {
                     keep = false;
                 }

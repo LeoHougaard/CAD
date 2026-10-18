@@ -2,7 +2,43 @@
 use super::*;
 use crate::model::PlaneReference;
 
+pub(super) fn source_face_key(key: &str) -> &str {
+    key.rsplit_once(":patch:").filter(|(_, hash)|
+        hash.len() == 16 && hash.bytes().all(|c| c.is_ascii_hexdigit()))
+        .map_or(key, |(source, _)| source)
+}
+
 impl Geometry {
+    pub(super) fn face_plane_frame(&self, owner: &str, id: FaceId, key: &str) -> Result<Plane> {
+        let sources = &self.parts[self.target(owner)?].reference_sources;
+        let face = self.topo.face(id).map_err(err)?;
+        let FaceSurface::Plane { normal, d } = face.surface() else {
+            return Err("Choose a planar face".into());
+        };
+        let sign = if face.is_reversed() { -1. } else { 1. };
+        let n = [normal.x() * sign, normal.y() * sign, normal.z() * sign];
+        // The caller already resolved this owned face. Its deterministic patch
+        // suffix distinguishes boundaries, while the source retains sketch axes.
+        let source = source_face_key(key);
+        let mut plane = self.anchors.iter().find_map(|(k, p, scope)| {
+            (sources.contains(scope) && reference_matches(k, source)
+                && plane_matches(p, *normal, *d)).then(|| p.clone())
+        }).unwrap_or_else(|| {
+            let seed = if n[0].abs() < 0.8 { [1., 0., 0.] } else { [0., 1., 0.] };
+            let projected = sub(seed, n.map(|x| x * dot(seed, n)));
+            let u = projected.map(|x| x / dot(projected, projected).sqrt());
+            Plane { origin: n.map(|x| x * d * sign), u, v: cross(n, u), normal: n }
+        });
+        // Cuts reverse tool faces. Preserve the source U axis and origin while
+        // orienting both sketch and direct-face operations out of the material.
+        if dot(plane.normal, n) < 0. {
+            plane.normal = plane.normal.map(|x| -x);
+            plane.v = plane.v.map(|x| -x);
+        }
+        plane.validate()?;
+        Ok(plane)
+    }
+
     pub fn resolve_plane_reference(&self, reference: &PlaneReference) -> Result<Plane> {
         reference.validate()?;
         match reference {
@@ -13,50 +49,8 @@ impl Geometry {
                 })
             }
             PlaneReference::Face { part, face: key } => {
-                let i = self.target(part)?;
-                let faces = self.face_keys_scoped(self.parts[i].solid, Some(&self.parts[i].key))?;
-                let mut resolved: Option<Plane> = None;
-                for (id, _) in faces.iter().filter(|(_, k)| reference_matches(k, key)) {
-                    let face = self.topo.face(*id).map_err(err)?;
-                    let FaceSurface::Plane { normal, d } = face.surface() else {
-                        return Err("Choose a planar face for the construction plane".into());
-                    };
-                    let sign = if face.is_reversed() { -1. } else { 1. };
-                    let n = [normal.x() * sign, normal.y() * sign, normal.z() * sign];
-                    if let Some(p) = &resolved {
-                        if dot(p.normal, n) < 1. - 1e-7 || !plane_matches(p, *normal, *d) {
-                            return Err("Plane face reference is ambiguous; reselect it".into());
-                        }
-                        continue;
-                    }
-                    let plane = self
-                        .anchors
-                        .iter()
-                        .find_map(|(k, p, _)| {
-                            (reference_matches(k, key)
-                                && dot(p.normal, n) > 1. - 1e-7
-                                && plane_matches(p, *normal, *d))
-                            .then(|| p.clone())
-                        })
-                        .unwrap_or_else(|| {
-                            let seed = if n[0].abs() < 0.8 {
-                                [1., 0., 0.]
-                            } else {
-                                [0., 1., 0.]
-                            };
-                            let projected = sub(seed, n.map(|x| x * dot(seed, n)));
-                            let u = projected.map(|x| x / dot(projected, projected).sqrt());
-                            Plane {
-                                origin: n.map(|x| x * d * sign),
-                                u,
-                                v: cross(n, u),
-                                normal: n,
-                            }
-                        });
-                    plane.validate()?;
-                    resolved = Some(plane);
-                }
-                resolved.ok_or_else(|| "Plane face is missing or ambiguous; reselect it".into())
+                let (id, key) = self.owned_face_reference(part, key)?;
+                self.face_plane_frame(part, id, &key)
             }
         }
     }

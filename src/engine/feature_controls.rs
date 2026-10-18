@@ -116,51 +116,17 @@ impl Geometry {
             return Err("Choose the part containing the profile face".into());
         }
         let i = self.target(text(reference, "part", ""))?;
-        let matches: Vec<_> = self
-            .face_keys(self.parts[i].solid)?
-            .into_iter()
-            .filter(|(_, k)| reference_matches(k, key))
-            .collect();
-        if matches.len() != 1 {
-            return Err("Profile face is missing or ambiguous; reselect it".into());
-        }
-        let face = self.topo.face(matches[0].0).map_err(err)?;
-        let FaceSurface::Plane { normal, d } = face.surface() else {
-            return Err("The profile must be a planar face".into());
-        };
-        let normal = *normal;
-        let d = *d;
-        let plane = if let Some((_, plane, _)) = self
-            .anchors
-            .iter()
-            .find(|(k, plane, _)| reference_matches(k, key) && plane_matches(plane, normal, d))
-        {
-            plane.clone()
-        } else {
-            let n = [normal.x(), normal.y(), normal.z()];
-            let seed = if n[0].abs() < 0.8 {
-                [1., 0., 0.]
-            } else {
-                [0., 1., 0.]
-            };
-            let mut u = sub(seed, n.map(|x| x * dot(seed, n)));
-            let length = dot(u, u).sqrt();
-            u = u.map(|x| x / length);
-            Plane {
-                origin: n.map(|x| x * d),
-                u,
-                v: cross(n, u),
-                normal: n,
-            }
-        };
+        let (id, resolved_key) = self.owned_face_reference(&self.parts[i].key, key)?;
+        let plane = self.face_plane_frame(&self.parts[i].key, id, &resolved_key)?;
         // A copy isolates any future kernel mutations from the selected source.
         let copy = ops::copy::copy_solid(&mut self.topo, self.parts[i].solid).map_err(err)?;
         let faces: Vec<_> = self
             .face_keys_scoped(copy, Some(&self.parts[i].key))?
             .into_iter()
-            .filter(|(_, k)| reference_matches(k, key))
+            .filter(|(_, k)| reference_matches(k, &resolved_key))
             .map(|(id, _)| id)
             .collect();
+        if faces.len() != 1 { return Err("Copied profile face lost its exact reference".into()); }
         let edge_keys = self.edge_keys_scoped(copy, Some(&self.parts[i].key))?;
         let mut vertices: BTreeMap<usize, Vec<String>> = BTreeMap::new();
         let boundary = face_edges(&self.topo, faces[0]).map_err(err)?;
@@ -280,8 +246,15 @@ impl Geometry {
                                 let b = p3(sk.plane.at([entity.values[2], entity.values[3]]));
                                 (a, b - a)
                             }
+                            "rectangle" => {
+                                let edge=reference.get("edge").and_then(Value::as_u64).filter(|&edge|edge<4).ok_or("Choose a rectangle side for the axis")? as usize;
+                                let points=entity.points();
+                                let a=p3(sk.plane.at(points[edge]));
+                                let b=p3(sk.plane.at(points[edge+1]));
+                                (a,b-a)
+                            }
                             "circle" | "arc" => (a, v3(sk.plane.normal)),
-                            _ => return Err("Choose a line, circle or arc for the axis".into()),
+                            _ => return Err("Choose a line, rectangle side, circle or arc for the axis".into()),
                         }
                     }
                     "edge" => {
@@ -670,8 +643,7 @@ impl Geometry {
                 let mut result =
                     ops::copy::copy_solid(&mut self.topo, self.parts[index].solid).map_err(err)?;
                 for tool in solids {
-                    result = ops::boolean::boolean(
-                        &mut self.topo,
+                    result = self.boolean_solid(
                         ops::boolean::BooleanOp::Fuse,
                         result,
                         tool,
@@ -682,8 +654,7 @@ impl Geometry {
                     let i = self.target(target)?;
                     let base =
                         ops::copy::copy_solid(&mut self.topo, self.parts[i].solid).map_err(err)?;
-                    result = ops::boolean::boolean(
-                        &mut self.topo,
+                    result = self.boolean_solid(
                         ops::boolean::BooleanOp::Fuse,
                         result,
                         base,
@@ -707,8 +678,7 @@ impl Geometry {
                 let mut tools = solids.into_iter();
                 let mut tool = tools.next().ok_or("Choose at least one closed profile")?;
                 for other in tools {
-                    tool = ops::boolean::boolean(
-                        &mut self.topo,
+                    tool = self.boolean_solid(
                         ops::boolean::BooleanOp::Fuse,
                         tool,
                         other,
@@ -781,8 +751,7 @@ impl Geometry {
                 for &tool in &tools {
                     let tool = ops::copy::copy_solid(&mut self.topo, self.parts[tool].solid)
                         .map_err(err)?;
-                    solid = ops::boolean::boolean(
-                        &mut self.topo,
+                    solid = self.boolean_solid(
                         ops::boolean::BooleanOp::Cut,
                         solid,
                         tool,
@@ -822,10 +791,12 @@ impl Geometry {
             for &tool in &tools[1..] {
                 let tool =
                     ops::copy::copy_solid(&mut self.topo, self.parts[tool].solid).map_err(err)?;
-                solid = ops::boolean::boolean(&mut self.topo, op, solid, tool).map_err(err)?;
+                solid = self.boolean_solid(op, solid, tool)?;
             }
             let key = if keep {
                 let key = format!("{}:0", f.id);
+                let reference_sources = self.place_references(&reference_sources,
+                    &Mat4::identity(), &format!("{}:instance:0", f.id), true)?;
                 self.parts.push(Part {
                     key: key.clone(),
                     name: f.name.clone(),

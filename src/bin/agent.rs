@@ -219,8 +219,9 @@ fn field_value(field: &Field, value: &Value) -> cad::model::Result<()> {
                         && reference_text(o.get("face"), 8192)
                 })
         }
-        "plane_ref" => serde_json::from_value::<PlaneReference>(value.clone())
-            .is_ok_and(|reference| reference.validate().is_ok()),
+        "plane_ref" => (value.is_null() && field.default.is_null())
+            || serde_json::from_value::<PlaneReference>(value.clone())
+                .is_ok_and(|reference| reference.validate().is_ok()),
         "profiles" => value.is_null() || (value.is_array()
             && ProfileReference::from_params(&json!({"profiles":value})).is_ok()),
         "axis" => {
@@ -235,7 +236,8 @@ fn field_value(field: &Field, value: &Value) -> cad::model::Result<()> {
                                     .is_some_and(|s| ["X", "Y", "Z"].contains(&s))
                         }
                         Some("sketch_entity" | "sketch_line") => {
-                            o.len() == 3
+                            (o.len() == 3 || (o.len() == 4 && o.get("edge")
+                                .and_then(Value::as_u64).is_some_and(|edge| edge < 4)))
                                 && reference_text(o.get("sketch"), 128)
                                 && o.get("entity")
                                     .and_then(Value::as_u64)
@@ -416,6 +418,14 @@ fn apply(
             ));
         }
         let (target, current, proposed, before) = edit_state(document, &edit)?;
+        if stale && let Edit::SetParam { feature, key, .. } = &edit
+            && matches!(key.as_str(), "plane" | "support" | "support_ref")
+            && document.features.iter().find(|f| &f.id == feature)
+                .and_then(|f| registry.plugins.get(&f.plugin))
+                .is_some_and(|p| p.manifest.editor == "sketch") {
+            conflicts.push(json!({"target":target,"current":current,"reason":"Sketch support edits require a fresh revision because plane and support fields share one binding.","proposed":proposed}));
+            continue;
+        }
         let identity_matches = match &edit {
             Edit::SetDimension {
                 feature,
@@ -505,8 +515,11 @@ fn apply(
                         ))
                     })?;
                 field_value(field, &value).map_err(input)?;
-                f.params[&key] = value;
-                if key == "profiles" { plugin.adopt_profile_input(f); }
+                if plugin.manifest.editor != "sketch"
+                    || !cad::model::set_sketch_support(&mut f.params, &key, value.clone()).map_err(input)? {
+                    f.params[&key] = value;
+                }
+                plugin.adopt_inputs(f);
             }
             Edit::SetDimension {
                 feature,
@@ -586,6 +599,16 @@ fn apply(
                         })?;
                         field_value(field, value).map_err(input)?;
                         feature.params[key] = value.clone();
+                    }
+                }
+                if registry.plugins[&plugin].manifest.editor == "sketch" {
+                    // Match geometry resolution precedence, independent of JSON key order.
+                    for key in ["support_ref", "support", "plane"] {
+                        if let Some(value) = params.get(key).filter(|value| key != "support_ref" || !value.is_null()) {
+                            cad::model::set_sketch_support(&mut feature.params, key, value.clone())
+                                .map_err(input)?;
+                            break;
+                        }
                     }
                 }
                 document.features.push(feature);
@@ -671,12 +694,12 @@ fn validate(document: &Document, registry: &Registry) -> cad::model::Result<()> 
                         && f.sketch().is_some_and(|s| {
                             s.entities.iter().any(|e| {
                                 e.id == entity
-                                    && matches!(e.kind.as_str(), "line" | "circle" | "arc")
+                                    && matches!(e.kind.as_str(), "line" | "rectangle" | "circle" | "arc")
                             })
                         })
                 }) {
                     return Err(
-                        "Revolve axis needs an earlier, unsuppressed sketch line, circle or arc"
+                        "Axis needs an earlier, unsuppressed sketch line, rectangle side, circle or arc"
                             .into(),
                     );
                 }
@@ -761,7 +784,7 @@ fn run(request: Request) -> Result<Value> {
     if let Action::Create { mut document } = request.action {
         for feature in &mut document.features {
             if let Some(plugin) = runtime.registry.plugins.get(&feature.plugin)
-                && feature.plugin_version != plugin.manifest.version { plugin.adopt_profile_input(feature); }
+                && feature.plugin_version != plugin.manifest.version { plugin.adopt_inputs(feature); }
         }
         let path = output_path(&request.path)?;
         let _lock = lock(&path)?;

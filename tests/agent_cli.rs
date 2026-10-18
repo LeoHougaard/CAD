@@ -1,6 +1,6 @@
 use cad::{
     file_lock::FileLock,
-    model::{Document, Sketch, SketchConstraint},
+    model::{Document, Plane, Sketch, SketchConstraint},
     plugins::Registry,
 };
 use serde_json::{Value, json};
@@ -112,6 +112,94 @@ fn agent_accepts_face_profiles_axis_references_and_explicit_body_scopes() {
         fresh.inspect()["model"]["parts"].as_array().unwrap().len(),
         2
     );
+}
+
+#[test]
+fn agent_uses_the_same_owned_sketch_support_and_rectangle_axes_as_the_gui() {
+    let fixture = Fixture::new();
+    let mut geometry = Sketch::default();
+    geometry.add_rect([2., 2.], [4., 4.]);
+    let first = fixture.inspect();
+    let (ok, response) = call(apply(&fixture.path, &first["revision"], json!([
+        {"op":"add_feature","plugin":"sketch","params":{
+            "geometry":geometry,"support_ref":{"kind":"face","part":"f2:0","face":"f2:end"}}},
+        {"op":"add_feature","plugin":"extrude","params":{"sketch":"f3","depth":"2"}}
+    ])));
+    assert!(ok, "{response}");
+    let mut document = Document::load(&fixture.path).unwrap();
+    assert_eq!(document.features[2].plugin_version, "1.1.0");
+    // A legacy support remains readable until explicitly adopting owner identity.
+    document.features[2].plugin_version = "1.0.0".into();
+    document.features[2].plugin_hash = "1ab529f725215646".into();
+    document.features[2].params["support"] = json!("f2:end");
+    document.features[2].params.as_object_mut().unwrap().remove("support_ref");
+    document.features[2].params["context_plane"] = json!(Plane::named("Right", 30.));
+    document.features[2].params["context_ref"] = json!({"context":"previous-context"});
+    document.save(&fixture.path).unwrap();
+    let legacy = fixture.inspect();
+    let (ok, response) = call(apply(&fixture.path, &legacy["revision"], json!([
+        {"op":"set_param","feature":"f3","key":"support_ref","value":{"kind":"face","part":"f2:0","face":"f2:end"}},
+        {"op":"set_variable","name":"depth","value":"15"}
+    ])));
+    assert!(ok, "{response}");
+    let moved = fixture.inspect();
+    assert_eq!(moved["document"]["features"][2]["plugin_version"], "1.1.0");
+    let rebound = &moved["document"]["features"][2]["params"];
+    assert!(rebound.get("context_plane").is_none());
+    assert!(rebound.get("context_ref").is_none());
+    assert_eq!(rebound["support"], "f2:end");
+    assert_eq!(moved["model"]["sketches"][1]["plane"]["origin"][2], 15.);
+    assert!((moved["model"]["parts"][1]["volume_mm3"].as_f64().unwrap() - 8.).abs() < 1e-7);
+    let preserved = std::fs::read(&fixture.path).unwrap();
+    let (ok, response) = call(apply(&fixture.path, &legacy["revision"], json!([
+        {"op":"set_param","feature":"f3","key":"plane","value":"Front","before":"Top"}
+    ])));
+    assert!(!ok && response["error"]["code"] == "edit_conflict", "{response}");
+    assert_eq!(std::fs::read(&fixture.path).unwrap(), preserved);
+    let (ok, response) = call(apply(&fixture.path, &moved["revision"], json!([
+        {"op":"set_param","feature":"f3","key":"support_ref","value":null}
+    ])));
+    assert!(ok, "{response}");
+    let cleared = fixture.inspect();
+    assert_eq!(cleared["document"]["features"][2]["params"]["support"], "");
+    assert!(cleared["document"]["features"][2]["params"]["support_ref"].is_null());
+    assert_eq!(cleared["model"]["sketches"][1]["plane"], json!(Plane::named("Top", 0.)));
+    let (ok, response) = call(apply(&fixture.path, &cleared["revision"], json!([
+        {"op":"set_param","feature":"f3","key":"plane","value":"Front","before":"Top"}
+    ])));
+    assert!(ok, "{response}");
+    let origin = fixture.inspect();
+    assert_eq!(origin["document"]["features"][2]["params"]["support"], "");
+    assert!(origin["document"]["features"][2]["params"].get("support_ref").is_none());
+    assert_eq!(origin["model"]["sketches"][1]["plane"], json!(Plane::named("Front", 0.)));
+
+    // An optional default in a new feature must not mask its explicit legacy support.
+    let (ok, response) = call(apply(&fixture.path, &origin["revision"], json!([
+        {"op":"add_feature","plugin":"sketch","params":{
+            "support_ref":null,"support":"f2:end"}}
+    ])));
+    assert!(ok, "{response}");
+    assert_eq!(fixture.inspect()["model"]["sketches"][2]["plane"]["origin"][2], 15.);
+
+    let fresh = Fixture::new();
+    let first = fresh.inspect();
+    let bytes = std::fs::read(&fresh.path).unwrap();
+    for edge in [json!(4), json!(-1), json!(0.5)] {
+        let (ok, response) = call(apply(&fresh.path, &first["revision"], json!([
+            {"op":"add_feature","plugin":"revolve","params":{"sketch":"f1",
+                "axis_ref":{"kind":"sketch_entity","sketch":"f1","entity":1,"edge":edge}}}
+        ])));
+        assert!(!ok, "{response}");
+        assert_eq!(std::fs::read(&fresh.path).unwrap(), bytes);
+    }
+    let (ok, response) = call(apply(&fresh.path, &first["revision"], json!([
+        {"op":"add_feature","plugin":"revolve","params":{"sketch":"f1",
+            "axis_ref":{"kind":"sketch_entity","sketch":"f1","entity":1,"edge":3}}}
+    ])));
+    assert!(ok, "{response}");
+    let revolved = fresh.inspect();
+    let volume = revolved["model"]["parts"][1]["volume_mm3"].as_f64().unwrap();
+    assert!((volume - 4000. * std::f64::consts::PI).abs() < 1e-6);
 }
 #[test]
 fn malformed_new_feature_inputs_fail_without_writing() {

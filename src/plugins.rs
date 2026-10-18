@@ -37,12 +37,15 @@ pub struct Plugin {
     ast: AST,
 }
 impl Plugin {
-    pub fn adopt_profile_input(&self, feature: &mut Feature) {
-        if self.manifest.fields.iter().any(|field| field.kind == "profiles"
-            && feature.params.get(&field.key).is_some_and(Value::is_array))
+    pub fn adopt_inputs(&self, feature: &mut Feature) {
+        let profiles = self.manifest.fields.iter().any(|field| field.kind == "profiles"
+            && feature.params.get(&field.key).is_some_and(Value::is_array));
+        let support = self.manifest.editor == "sketch"
+            && feature.params.get("support_ref").is_some_and(|v| !v.is_null());
+        if (profiles || support)
             && self.matches(feature)
         {
-            if feature.plugin_hash != self.hash
+            if profiles && feature.plugin_hash != self.hash
                 && feature.params.get("legacy_profile_source").and_then(Value::as_str).unwrap_or("").is_empty() {
                 let mut legacy = feature.params.clone();
                 legacy["profiles"] = Value::Null;
@@ -55,10 +58,19 @@ impl Plugin {
             feature.plugin_hash = self.hash.clone();
         }
     }
-    /// Additive builtin inputs preserve old region, profile and scope semantics.
+    /// Additive builtin inputs preserve old region, profile, scope and support semantics.
     /// Compatibility applies only to these exact bundled package identities.
     pub fn matches(&self, feature: &Feature) -> bool {
         (self.hash == feature.plugin_hash && self.manifest.version == feature.plugin_version)
+            || (feature.plugin == "sketch"
+                && feature.plugin_version == "1.0.0"
+                && feature.plugin_hash == "1ab529f725215646"
+                && self.manifest.id == "sketch"
+                && self.manifest.version == "1.1.0"
+                && self.hash == source_hash(&[
+                    include_str!("../plugins/sketch.json"),
+                    include_str!("../plugins/sketch.rhai"),
+                ].concat()))
             || (feature.plugin == "extrude"
                 && ((feature.plugin_version == "1.0.0"
                     && feature.plugin_hash == "b3447843f1693770")

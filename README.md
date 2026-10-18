@@ -48,7 +48,7 @@ The initial solid tools include extrusion, revolve, Boolean union/subtract/inter
 
 [Numeric expressions](docs/numeric-expressions.md) support variables, powers, roots, units and degree trigonometry in dimensions and feature fields. New documents use format 2; older documents retain their original math semantics.
 
-Sketches support lines, rectangles, circles, center and three-point arcs, trim, dimensions, construction geometry, coincidence, horizontal/vertical, parallel/perpendicular, equality, concentricity, endpoint tangency, and fixing geometry. Dragging uses temporary solver targets; dimension edits persist the solved geometry. See [sketch workflows](docs/sketch-workflows.md). Splines, extend, offset, cross-sketch projection, advanced constraint diagnostics, and Onshape FeatureScript are not implemented yet.
+Sketches support points, lines, rectangles, circles, center and three-point arcs, trim, dimensions, construction geometry, coincidence, midpoint, horizontal/vertical, parallel/perpendicular, equality, concentricity, endpoint tangency, and fixing geometry. Dragging uses temporary solver targets; dimension edits persist the solved geometry. See [sketch workflows](docs/sketch-workflows.md). Splines, extend, offset, cross-sketch projection, advanced constraint diagnostics, and Onshape FeatureScript are not implemented yet.
 
 Persistent references cover generated extrusion planes and supported analytical revolve caps and rims. [Geometry inputs](docs/geometry-controls.md) describes planar-face profiles, explicit operation scopes and sketch/origin/solid axes. Curved faces and new blend faces are not stable sketch supports yet. Missing or ambiguous references report an error instead of choosing an arbitrary face. Complex blends and booleans can still fail. Earlier valid parts are preserved when a feature fails; exporting a failed model is blocked in the app.
 
@@ -81,7 +81,7 @@ cargo run --release --bin cad-check -- --bench
 
 The tests cover solved sketch geometry and degrees of freedom, analytic volumes, topology validation, upstream regeneration, missing references, bounded script execution, failed-feature transactions, interrupted writes, and save/reopen/export. `tools/verify_step.py` optionally checks exported test fixtures using Gmsh/Open CASCADE as an independent verifier. That verifier is a development tool and is not used or shipped by the app.
 
-[Ten practice projects](docs/end-user-projects.md) cover dimensioned brackets, a bearing block, a pulley, an enclosure, a cable comb, mirrored clevises, patterned standoffs, a swept handle, a reducer and a hollow lofted duct. Each is checked after an upstream edit and save/reopen. All twenty baseline/edited STEP exports passed independent Open CASCADE volume and bounds checks. Three failed feature orders have saved reproductions and explicit rejection tests.
+[Ten practice projects](docs/end-user-projects.md) cover dimensioned brackets, a bearing block, a pulley, an enclosure, a cable comb, mirrored clevises, patterned standoffs, a swept handle, a reducer and a hollow lofted duct. Each is checked after an upstream edit and save/reopen. All twenty baseline/edited STEP exports passed independent Open CASCADE volume and bounds checks. Original failed feature orders have saved reproductions, with positive checks for corrected workflows and explicit rejection checks for unsupported geometry.
 
 [Earlier tutorial verification](docs/tutorial-verification.md) includes a 29-feature housing with 13 fully constrained sketches and 75 faces. It also records incomplete source workflows and their limitations.
 
@@ -89,6 +89,6 @@ The tests cover solved sketch geometry and degrees of freedom, analytic volumes,
 
 ## Implementation and license
 
-The application, geometry kernel, and constraint solver are Rust. Geometry uses [Brepkit 4.2.2](https://github.com/andymai/brepkit). The local sketch solver derives from Brepkit's GCS, retaining its original tests and adding dimension constraints and mobility analysis. The UI uses [egui/eframe](https://github.com/emilk/egui); feature definitions use [Rhai](https://rhai.rs).
+The application, geometry kernel, and constraint solver are Rust. Geometry uses [Brepkit 4.2.2](https://github.com/andymai/brepkit), pinned to our [reviewed solid-boundary corrections](https://github.com/LeoHougaard/brepkit/commit/08219b32f6ddf79608567419092f68f57ed9f908). All eleven kernel packages use that same source revision. The fork corrects blend material domains and exact analytic contacts, preserves historical operand topology, and refines supported connected same-domain boundaries. Curved-outline planar face merging remains deferred until its loop classification handles exact curves. The local sketch solver derives from Brepkit's GCS, retaining its original tests and adding dimension constraints and mobility analysis. The UI uses [egui/eframe](https://github.com/emilk/egui); feature definitions use [Rhai](https://rhai.rs).
 
 The project is AGPL-3.0-only. See `LICENSE`, `Cargo.lock`, and `crates/sketch-solver/UPSTREAM.md`. Onshape is the workflow reference; its proprietary code and assets are not included.
