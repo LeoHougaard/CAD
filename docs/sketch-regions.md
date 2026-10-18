@@ -33,3 +33,12 @@ boundary topology stays the same. Removing a boundary, adding an interior hole,
 or changing intersection topology can invalidate a selection. The feature reports
 that the selected region changed and preserves the saved selection so it can be
 repaired. It never substitutes another region by array position.
+
+Extrude also records source edge and intersection-vertex identities for its
+boundary edges. Circle walls and lens intersections have distinct references
+that survive dimension edits and the independent solid copy used by Fillet.
+Selected circular rims on ordinary cylinders and lenses are tested with Fillet.
+If another operation produces an edge or face without a persistent reference,
+it can still be selected and highlighted. Fillet, Chamfer, and Shell report an
+unsupported reference instead of using a transient kernel array index. Existing
+All edges operations retain their behavior.

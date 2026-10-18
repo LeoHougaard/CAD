@@ -78,12 +78,16 @@ struct Segment {
     start: f64,
     end: f64,
     key: String,
+    start_key: String,
+    end_key: String,
 }
 impl Segment {
     fn reversed(&self) -> Self {
         Self {
             start: self.end,
             end: self.start,
+            start_key: self.end_key.clone(),
+            end_key: self.start_key.clone(),
             ..self.clone()
         }
     }
@@ -613,6 +617,8 @@ fn graph(sketch: &ResolvedSketch) -> Result<Graph> {
                     start,
                     end,
                     key: String::new(),
+                    start_key: String::new(),
+                    end_key: String::new(),
                 },
                 a,
                 b,
@@ -646,6 +652,12 @@ fn graph(sketch: &ResolvedSketch) -> Result<Graph> {
         });
     }
     for e in &mut edges {
+        e.segment.start_key = labels[e.start]
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(",");
+        e.segment.end_key = labels[e.end].iter().cloned().collect::<Vec<_>>().join(",");
         if e.start != e.end {
             e.segment.key = format!(
                 "{}[{}>{}]",
@@ -838,12 +850,92 @@ pub fn faces_for_regions(
 pub(crate) struct RegionProfile {
     pub faces: Vec<FaceId>,
     pub sides: Vec<(String, [f64; 2], [f64; 2])>,
+    pub edges: Vec<RegionEdge>,
+}
+pub(crate) struct RegionEdge {
+    pub key: String,
+    pub start_key: String,
+    pub end_key: String,
+    pub start: [f64; 2],
+    pub end: [f64; 2],
+    pub midpoint: [f64; 2],
+    pub circle: Option<([f64; 2], f64)>,
+}
+impl From<&Segment> for RegionEdge {
+    fn from(edge: &Segment) -> Self {
+        Self {
+            key: format!(
+                "{}{}",
+                if edge.end > edge.start { "+" } else { "-" },
+                edge.key
+            ),
+            start_key: edge.start_key.clone(),
+            end_key: edge.end_key.clone(),
+            start: edge.curve.at(edge.start),
+            end: edge.curve.at(edge.end),
+            midpoint: edge.curve.at((edge.start + edge.end) / 2.),
+            circle: match edge.curve {
+                Curve::Circle { center, radius } => Some((center, radius)),
+                Curve::Line { .. } => None,
+            },
+        }
+    }
+}
+pub(crate) fn region_edges(sketch: &ResolvedSketch) -> Result<Vec<RegionEdge>> {
+    Ok(selected_boundaries(sketch, &[])?
+        .iter()
+        .flat_map(|(boundary, holes)| {
+            std::iter::once(boundary)
+                .chain(holes)
+                .flat_map(|b| b.segments.iter().map(RegionEdge::from))
+        })
+        .collect())
 }
 pub(crate) fn profile_for_regions(
     topo: &mut Topology,
     sketch: &ResolvedSketch,
     keys: &[String],
 ) -> Result<RegionProfile> {
+    let outer = selected_boundaries(sketch, keys)?;
+    let n = sketch.plane.normal;
+    let d = dot3(n, sketch.plane.origin);
+    let mut faces = vec![];
+    let mut sides = vec![];
+    let mut edges = vec![];
+    for (boundary, holes) in outer {
+        for b in std::iter::once(&boundary).chain(&holes) {
+            for edge in &b.segments {
+                let metadata = RegionEdge::from(edge);
+                if metadata.circle.is_none() {
+                    sides.push((metadata.key.clone(), metadata.start, metadata.end));
+                }
+                edges.push(metadata);
+            }
+        }
+        let outer = boundary.wire(topo, &sketch.plane)?;
+        let inner = holes
+            .iter()
+            .map(|b| b.wire(topo, &sketch.plane))
+            .collect::<Result<Vec<_>>>()?;
+        faces.push(topo.add_face(Face::new(
+            outer,
+            inner,
+            FaceSurface::Plane { normal: v3(n), d },
+        )));
+    }
+    if faces.is_empty() {
+        return Err("Choose at least one closed sketch region".into());
+    }
+    Ok(RegionProfile {
+        faces,
+        sides,
+        edges,
+    })
+}
+fn selected_boundaries(
+    sketch: &ResolvedSketch,
+    keys: &[String],
+) -> Result<Vec<(Boundary, Vec<Boundary>)>> {
     let graph = graph(sketch)?;
     let cells = cells(&graph)?;
     let available: BTreeSet<_> = cells.iter().map(|cell| cell_key(&graph, cell)).collect();
@@ -897,41 +989,7 @@ pub(crate) fn profile_for_regions(
             .ok_or("Selected sketch regions have an invalid hole boundary")?;
         outer[at].1.push(hole);
     }
-    let n = sketch.plane.normal;
-    let d = dot3(n, sketch.plane.origin);
-    let mut faces = vec![];
-    let mut sides = vec![];
-    for (boundary, holes) in outer {
-        for b in std::iter::once(&boundary).chain(&holes) {
-            for edge in &b.segments {
-                if matches!(edge.curve, Curve::Line { .. }) {
-                    sides.push((
-                        format!(
-                            "{}{}",
-                            if edge.end > edge.start { "+" } else { "-" },
-                            edge.key
-                        ),
-                        edge.curve.at(edge.start),
-                        edge.curve.at(edge.end),
-                    ));
-                }
-            }
-        }
-        let outer = boundary.wire(topo, &sketch.plane)?;
-        let inner = holes
-            .iter()
-            .map(|b| b.wire(topo, &sketch.plane))
-            .collect::<Result<Vec<_>>>()?;
-        faces.push(topo.add_face(Face::new(
-            outer,
-            inner,
-            FaceSurface::Plane { normal: v3(n), d },
-        )));
-    }
-    if faces.is_empty() {
-        return Err("Choose at least one closed sketch region".into());
-    }
-    Ok(RegionProfile { faces, sides })
+    Ok(outer)
 }
 fn dot3(a: [f64; 3], b: [f64; 3]) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]

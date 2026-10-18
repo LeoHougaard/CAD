@@ -16,7 +16,7 @@ use brepkit_topology::{
 };
 use serde_json::Value;
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     sync::{Arc, Mutex},
     time::Instant,
 };
@@ -85,6 +85,7 @@ pub struct Geometry {
     pub sketches: BTreeMap<String, ResolvedSketch>,
     pub anchors: Vec<(String, Plane)>,
     pub outputs: BTreeMap<String, Vec<String>>,
+    edge_anchors: Vec<EdgeAnchor>,
 }
 impl Default for Geometry {
     fn default() -> Self {
@@ -94,7 +95,52 @@ impl Default for Geometry {
             sketches: BTreeMap::new(),
             anchors: vec![],
             outputs: BTreeMap::new(),
+            edge_anchors: vec![],
         }
+    }
+}
+
+#[derive(Clone)]
+struct EdgeAnchor {
+    key: String,
+    /// Source profile side for curved-face naming; vertical edges have none.
+    side: Option<String>,
+    start: brepkit_math::vec::Point3,
+    end: brepkit_math::vec::Point3,
+    midpoint: brepkit_math::vec::Point3,
+    circle: Option<(brepkit_math::vec::Point3, Vec3, f64, bool)>,
+}
+impl EdgeAnchor {
+    fn matches(&self, topo: &Topology, id: EdgeId) -> bool {
+        const TOL: f64 = 1e-7;
+        let Ok(edge) = topo.edge(id) else {
+            return false;
+        };
+        let (Ok(a), Ok(b)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+            return false;
+        };
+        let (a, b) = (a.point(), b.point());
+        if !(((a - self.start).length() < TOL && (b - self.end).length() < TOL)
+            || ((b - self.start).length() < TOL && (a - self.end).length() < TOL))
+        {
+            return false;
+        }
+        match (self.circle, edge.curve()) {
+            (None, EdgeCurve::Line) => {}
+            (Some((center, normal, radius, full)), EdgeCurve::Circle(c)) => {
+                if (center - c.center()).length() > TOL
+                    || (radius - c.radius()).abs() > TOL
+                    || (normal.dot(c.normal()).abs() - 1.).abs() > 1e-8
+                    || full != ((a - b).length() < 1e-9)
+                {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+        let (lo, hi) = edge.curve().domain_with_endpoints(a, b);
+        let middle = edge.curve().evaluate_with_endpoints((lo + hi) / 2., a, b);
+        (middle - self.midpoint).length() < TOL
     }
 }
 
@@ -219,6 +265,7 @@ impl Runtime {
                 let before = ops::boolean::mesh_fallback_count();
                 let parts_before = geometry.parts.clone();
                 let anchors_before = geometry.anchors.len();
+                let edge_anchors_before = geometry.edge_anchors.len();
                 let result = (|| {
                     let plan = self.registry.evaluate(feature, &numbers)?;
                     let operations = if let Some(a) = plan.as_array() {
@@ -259,6 +306,7 @@ impl Runtime {
                 if result.is_err() {
                     geometry.parts = parts_before;
                     geometry.anchors.truncate(anchors_before);
+                    geometry.edge_anchors.truncate(edge_anchors_before);
                     geometry.sketches.remove(&feature.id);
                     geometry.outputs.remove(&feature.id);
                 }
@@ -352,6 +400,11 @@ impl Geometry {
     }
     pub fn resolve_plane(&self, p: &Value, numbers: &Numbers) -> Result<Plane> {
         let offset = numbers.value(p.get("offset").unwrap_or(&Value::from(0)))?;
+        if let Some(value) = p.get("context_plane").filter(|v| !v.is_null()) {
+            let plane: Plane = serde_json::from_value(value.clone()).map_err(|e| format!("Invalid context plane: {e}"))?;
+            plane.validate()?;
+            return Ok(plane.shifted(offset));
+        }
         let support = text(p, "support", "");
         if support.is_empty() {
             return Ok(Plane::named(text(p, "plane", "Top"), offset));
@@ -429,6 +482,53 @@ impl Geometry {
             }
         }
     }
+    fn register_profile_edges(
+        &mut self,
+        f: &Feature,
+        sk: &ResolvedSketch,
+        edges: &[sketch::RegionEdge],
+        start: f64,
+        end: f64,
+    ) {
+        let a = sk.plane.shifted(start);
+        let b = sk.plane.shifted(end);
+        let mut vertices = BTreeSet::new();
+        for edge in edges {
+            let side = format!("{}:region-side:{}", f.id, edge.key);
+            for (cap, plane) in [("start", &a), ("end", &b)] {
+                self.edge_anchors.push(EdgeAnchor {
+                    key: format!("{}:profile:{}:{cap}", f.id, edge.key),
+                    side: edge.circle.map(|_| side.clone()),
+                    start: p3(plane.at(edge.start)),
+                    end: p3(plane.at(edge.end)),
+                    midpoint: p3(plane.at(edge.midpoint)),
+                    circle: edge.circle.map(|(center, radius)| {
+                        (
+                            p3(plane.at(center)),
+                            v3(plane.normal),
+                            radius,
+                            (edge.start[0] - edge.end[0]).hypot(edge.start[1] - edge.end[1]) < 1e-9,
+                        )
+                    }),
+                });
+            }
+            for (key, point) in [(&edge.start_key, edge.start), (&edge.end_key, edge.end)] {
+                if !vertices.insert(key.clone()) {
+                    continue;
+                }
+                let pa = p3(a.at(point));
+                let pb = p3(b.at(point));
+                self.edge_anchors.push(EdgeAnchor {
+                    key: format!("{}:region-vertex:{key}", f.id),
+                    side: None,
+                    start: pa,
+                    end: pb,
+                    midpoint: pa + (pb - pa) * 0.5,
+                    circle: None,
+                });
+            }
+        }
+    }
     fn execute(&mut self, f: &Feature, ordinal: usize, p: &Value, numbers: &Numbers) -> Result<()> {
         let op = text(p, "op", "");
         match op {
@@ -447,7 +547,19 @@ impl Geometry {
                     .ok_or("Choose an earlier, unsuppressed sketch")?
                     .clone();
                 let mut profile = sk.clone();
-                let depth = num(p, "depth", 10.);
+                let mut depth = num(p, "depth", 10.);
+                if op == "extrude"
+                    && let Some(value) = f.params.get("context_up_to").filter(|v| !v.is_null()) {
+                        if flag(p, "symmetric") { return Err("Up to context face cannot use symmetric extent".into()); }
+                        let plane: Plane = serde_json::from_value(value.clone()).map_err(|e| format!("Invalid context extent plane: {e}"))?;
+                        plane.validate()?;
+                        let parallel = dot(plane.normal, sk.plane.normal);
+                        if parallel.abs() < 1.-1e-7 {
+                            return Err("Up to context face currently requires a plane parallel to the sketch".into());
+                        }
+                        let signed_depth = dot(sub(plane.origin, sk.plane.origin), sk.plane.normal);
+                        depth = signed_depth * if flag(p, "reverse") { -1. } else { 1. };
+                }
                 if depth <= 1e-7 {
                     return Err("Depth must be positive; use Reverse to change direction".into());
                 }
@@ -461,6 +573,7 @@ impl Geometry {
                     profile.plane = profile.plane.shifted(start);
                 }
                 let mut region_sides = vec![];
+                let mut region_edges = vec![];
                 let faces = if op == "extrude" {
                     let selected = match p.get("regions") {
                         None | Some(Value::Null) => None,
@@ -485,17 +598,22 @@ impl Geometry {
                         let profile =
                             sketch::profile_for_regions(&mut self.topo, &profile, &selected)?;
                         region_sides = profile.sides;
+                        region_edges = profile.edges;
                         profile.faces
                     } else {
                         // Preserve exact legacy topology, output order, and references
                         // for saved whole-sketch features. New subdivided profiles use
                         // the arrangement only when that legacy path is unavailable.
                         match sketch::faces(&mut self.topo, &profile) {
-                            Ok(faces) => faces,
+                            Ok(faces) => {
+                                region_edges = sketch::region_edges(&sk).unwrap_or_default();
+                                faces
+                            }
                             Err(_) => {
                                 let profile =
                                     sketch::profile_for_regions(&mut self.topo, &profile, &[])?;
                                 region_sides = profile.sides;
+                                region_edges = profile.edges;
                                 profile.faces
                             }
                         }
@@ -503,6 +621,15 @@ impl Geometry {
                 } else {
                     sketch::faces(&mut self.topo, &profile)?
                 };
+                if op == "extrude" {
+                    self.register_profile_edges(
+                        f,
+                        &sk,
+                        &region_edges,
+                        start,
+                        start + direction * depth,
+                    );
+                }
                 for (i, face) in faces.into_iter().enumerate() {
                     let solid = if op == "extrude" {
                         ops::extrude::extrude(
@@ -613,6 +740,9 @@ impl Geometry {
                 if keys.is_empty() {
                     return Err("Select one or more edges, or choose All edges".into());
                 }
+                if keys.iter().any(|key| key.contains("untracked:")) {
+                    return Err("Fillet or chamfer on this edge is unsupported until it has a persistent reference".into());
+                }
                 let edges = if keys == ["@all"] {
                     solid_edges(&self.topo, solid).map_err(err)?
                 } else {
@@ -674,6 +804,12 @@ impl Geometry {
                     .collect();
                 if keys.is_empty() {
                     return Err("Select the face or faces to remove for Shell".into());
+                }
+                if keys.iter().any(|key| key.contains("untracked:")) {
+                    return Err(
+                        "Shell on this face is unsupported until it has a persistent reference"
+                            .into(),
+                    );
                 }
                 let available = self.face_keys(solid)?;
                 let faces = keys
@@ -811,6 +947,23 @@ impl Geometry {
                                 d
                             )
                         }),
+                    FaceSurface::Cylinder(_) => {
+                        let mut sources = BTreeSet::new();
+                        for edge in face_edges(&self.topo, id).map_err(err)? {
+                            for anchor in &self.edge_anchors {
+                                if let Some(side) = &anchor.side
+                                    && anchor.matches(&self.topo, edge)
+                                {
+                                    sources.insert(side.clone());
+                                }
+                            }
+                        }
+                        if sources.len() == 1 {
+                            sources.into_iter().next().unwrap()
+                        } else {
+                            format!("untracked:curved:{}", id.index())
+                        }
+                    }
                     _ => format!("untracked:curved:{}", id.index()),
                 };
                 Ok((id, key))
@@ -825,7 +978,7 @@ impl Geometry {
                 adjacent.entry(edge).or_default().push(key.clone());
             }
         }
-        solid_edges(&self.topo, solid)
+        let named = solid_edges(&self.topo, solid)
             .map_err(err)?
             .into_iter()
             .map(|edge| {
@@ -834,7 +987,31 @@ impl Geometry {
                 names.dedup();
                 Ok((edge, names.join(" | ")))
             })
-            .collect()
+            .collect::<Result<Vec<_>>>()?;
+        let mut counts = BTreeMap::new();
+        for (_, key) in &named {
+            *counts.entry(key.clone()).or_insert(0usize) += 1;
+        }
+        Ok(named
+            .into_iter()
+            .map(|(edge, key)| {
+                if counts[&key] > 1 || key.contains("untracked:") {
+                    let anchors: BTreeSet<_> = self
+                        .edge_anchors
+                        .iter()
+                        .filter(|a| a.matches(&self.topo, edge))
+                        .map(|a| a.key.clone())
+                        .collect();
+                    if anchors.len() == 1 {
+                        return (edge, anchors.into_iter().next().unwrap());
+                    }
+                    if counts[&key] > 1 {
+                        return (edge, format!("untracked:ambiguous-edge:{key}"));
+                    }
+                }
+                (edge, key)
+            })
+            .collect())
     }
     pub fn scene(&self) -> Result<Scene> {
         let mut scene = Scene {

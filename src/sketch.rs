@@ -13,8 +13,8 @@ use brepkit_topology::{
 use std::collections::{BTreeMap, BTreeSet};
 
 mod regions;
+pub(crate) use regions::{RegionEdge, profile_for_regions, region_edges};
 pub use regions::{ResolvedRegion, faces_for_regions, regions};
-pub(crate) use regions::profile_for_regions;
 
 #[derive(Clone, Debug)]
 pub struct ResolvedEntity {

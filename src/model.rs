@@ -249,6 +249,20 @@ pub struct Plane {
 }
 
 impl Plane {
+    pub fn validate(&self) -> Result<()> {
+        let dot = |a: [f64; 3], b: [f64; 3]| a.into_iter().zip(b).map(|(a,b)| a*b).sum::<f64>();
+        if self.origin.iter().chain(&self.u).chain(&self.v).chain(&self.normal)
+            .any(|v| !v.is_finite() || v.abs() > 1e8) {
+            return Err("Reference plane contains invalid coordinates".into());
+        }
+        let cross = [self.u[1]*self.v[2]-self.u[2]*self.v[1],
+            self.u[2]*self.v[0]-self.u[0]*self.v[2], self.u[0]*self.v[1]-self.u[1]*self.v[0]];
+        if [self.u, self.v, self.normal].iter().any(|&v| (dot(v,v)-1.).abs()>1e-7)
+            || dot(self.u,self.v).abs()>1e-7 || dot(cross,self.normal)<1.-1e-7 {
+            return Err("Reference plane must have an orthonormal, right-handed frame".into());
+        }
+        Ok(())
+    }
     pub fn named(name: &str, offset: f64) -> Self {
         let (u, v, n) = match name {
             "Front" => ([1., 0., 0.], [0., 0., 1.], [0., -1., 0.]),
