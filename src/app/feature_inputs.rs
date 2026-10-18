@@ -364,15 +364,7 @@ pub(super) fn seed_inputs(feature: &mut Feature, targets: &[Target], scene: &Sce
         else if field.kind == "sketch" { targets.iter().filter_map(|t|match t {
             Target::Feature(id) | Target::Region {sketch:id,..} if scene.sketches.contains_key(id) => Some(id), _ => None
         }).collect::<BTreeSet<_>>().len() > 1 } else { false };
-    if !ambiguous { apply_selection(&mut feature.params, field, targets, scene); }
-    if matches!(field.kind.as_str(), "edges" | "faces") {
-        let owners = parts(targets);
-        if owners.len() == 1 {
-            for body in plugin.manifest.fields.iter().filter(|f| f.kind == "body") {
-                feature.params[&body.key] = json!(owners[0]);
-            }
-        }
-    }
+    if !ambiguous { let _ = apply_input(feature, field, targets, scene, registry); }
     Some(field.key.clone())
 }
 
@@ -620,6 +612,37 @@ pub(super) fn profiles_ui(ui: &mut egui::Ui, field: &Field, params: &mut Value, 
     before != params.get(&field.key).cloned()
 }
 
+fn body_field<'a>(feature: &Feature, registry: &'a Registry) -> Option<&'a Field> {
+    let mut fields = registry.plugins.get(&feature.plugin)?.manifest.fields.iter().filter(|f| f.kind == "body");
+    let body = fields.next()?;
+    fields.next().is_none().then_some(body)
+}
+
+pub(super) fn clear_owned_inputs(feature: &mut Feature, registry: &Registry) {
+    if body_field(feature, registry).is_none() { return; }
+    for field in &registry.plugins[&feature.plugin].manifest.fields {
+        if matches!(field.kind.as_str(), "edges" | "faces") { feature.params[&field.key] = json!([]); }
+    }
+}
+
+fn apply_input(feature: &mut Feature, field: &Field, targets: &[Target], scene: &Scene, registry: &Registry) -> crate::model::Result<()> {
+    let body = body_field(feature, registry);
+    let owners: BTreeSet<_> = targets.iter().filter_map(|target| match (field.kind.as_str(), target) {
+        ("edges", Target::Edge {part,..}) | ("faces", Target::Face {part,..}) => Some(part.as_str()),
+        _ => None,
+    }).collect();
+    if body.is_some() && owners.len() > 1 { return Err("Choose edges/faces from one part".into()); }
+    let old_owner = body.map(|f| feature.params[&f.key].clone());
+    apply_selection(&mut feature.params, field, targets, scene);
+    if let Some(body) = body {
+        if let Some(owner) = owners.first() { feature.params[&body.key] = json!(owner); }
+        if field.key == body.key && old_owner.as_ref() != feature.params.get(&body.key) {
+            clear_owned_inputs(feature, registry);
+        }
+    }
+    Ok(())
+}
+
 fn apply_selection(params: &mut Value, field: &Field, targets: &[Target], scene: &Scene) {
     if !targets.is_empty()
         && !targets.iter().any(|t| match (field.kind.as_str(), t) {
@@ -831,23 +854,10 @@ impl CadApp {
             return;
         };
         let before = edit.feature.params.clone();
-        apply_selection(
-            &mut edit.feature.params,
-            field,
-            self.selection.items(),
-            scene,
-        );
-        // A blend's edge/face input determines its single owning part. Boolean
-        // target/tool lists remain independent because only the active input runs.
-        if matches!(field.kind.as_str(), "edges" | "faces") {
-            let owners = parts(self.selection.items());
-            if owners.len() == 1
-                && let Some(plugin) = self.registry.plugins.get(&edit.feature.plugin)
-            {
-                for body in plugin.manifest.fields.iter().filter(|f| f.kind == "body") {
-                    edit.feature.params[&body.key] = json!(owners[0]);
-                }
-            }
+        if let Err(error) = apply_input(&mut edit.feature, field, self.selection.items(), scene, &self.registry) {
+            self.notice = error;
+            self.restore_feature_selection();
+            return;
         }
         if before != edit.feature.params {
             edit.undo.push(before);
@@ -960,7 +970,13 @@ impl CadApp {
                 }
             }
             "edges" | "faces" => {
-                for mesh in &scene.meshes {
+                let owner = body_field(&edit.feature, registry).map(|f| {
+                    let key = edit.feature.params[&f.key].as_str().unwrap_or_default();
+                    if !edit.is_new && matches!(key, "" | "@last") {
+                        scene.meshes.last().map_or("", |mesh| mesh.part.as_str())
+                    } else { key }
+                });
+                for mesh in scene.meshes.iter().filter(|mesh| owner.is_none_or(|owner| owner == mesh.part)) {
                     for key in strings() {
                         if field.kind == "edges" && mesh.edges.iter().any(|e| reference_matches(&e.key, key)) {
                             selection.add(Target::Edge {
@@ -1249,6 +1265,44 @@ mod tests {
             apply_selection(&mut edit.feature.params, &field(key, kind), restored.items(), &source);
             assert_eq!(edit.feature.params, saved, "Restored inputs round-trip after the prefix arrives");
         }
+    }
+    #[test]
+    fn single_part_inputs_reject_mixed_owners_and_clear_geometry_when_the_part_changes() {
+        let (mut document, scene, _, registry) = profile_scene();
+        let first = &scene.meshes[0]; let second = &scene.meshes[1];
+        for (plugin, key, kind) in [("fillet", "edges", "edges"), ("chamfer", "edges", "edges"), ("shell", "faces", "faces")] {
+            let target = |mesh: &crate::engine::MeshView| if kind == "edges" {
+                Target::Edge {part:mesh.part.clone(), key:mesh.edges[0].key.clone()}
+            } else { Target::Face {part:mesh.part.clone(), key:mesh.faces[0].key.clone()} };
+            let selected = target(first); let other = target(second);
+            let mut feature = registry.create(plugin, &mut document).unwrap();
+            apply_input(&mut feature, &field(key, kind), std::slice::from_ref(&selected), &scene, &registry).unwrap();
+            assert_eq!(feature.params["target"], first.part);
+            let saved = feature.params.clone();
+            assert!(apply_input(&mut feature, &field(key, kind), &[selected.clone(),other.clone()], &scene, &registry).is_err());
+            assert_eq!(feature.params, saved, "Mixed ownerless references cannot be stored against one part");
+            // Incompatible picks cannot redirect the owner of valid topology.
+            apply_input(&mut feature, &field(key, kind), &[selected,Target::Part(second.part.clone())], &scene, &registry).unwrap();
+            assert_eq!(feature.params, saved);
+            apply_input(&mut feature, &field("target", "body"), &[Target::Part(second.part.clone())], &scene, &registry).unwrap();
+            assert_eq!(feature.params["target"], second.part);
+            assert_eq!(feature.params[key], json!([]));
+            seed_inputs(&mut feature, &[target(first),other], &scene, &registry);
+            assert_eq!(feature.params["target"], "");
+            assert_eq!(feature.params[key], json!([]), "Ambiguous preselection cannot select an arbitrary part");
+        }
+        let shared = first.faces.iter().find(|face| second.faces.iter().any(|other| other.key == face.key)).unwrap();
+        let mut feature = registry.create("shell", &mut document).unwrap();
+        feature.params["faces"] = json!([shared.key]);
+        let mut edit = profile_editor(feature); edit.input_field = Some("faces".into());
+        for legacy in ["", "@last"] {
+            edit.feature.params["target"] = json!(legacy);
+            let selected = CadApp::selection_from_input(&edit, &registry, &scene).unwrap();
+            assert_eq!(selected.items(), &[Target::Face {part:second.part.clone(), key:shared.key.clone()}]);
+            assert_eq!(edit.feature.params["target"], legacy, "Restoring a legacy binding never rewrites it");
+        }
+        edit.is_new = true; edit.feature.params["target"] = json!("");
+        assert!(CadApp::selection_from_input(&edit, &registry, &scene).unwrap().items().is_empty());
     }
     fn field(key: &str, kind: &str) -> Field {
         Field {

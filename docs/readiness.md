@@ -181,3 +181,6 @@ the preceding workspace selection into its inputs. History routing now finishes
 before the editor opens. When the source scene arrives, selection is projected
 again from the saved input values, including edges consumed by a blend or faces
 removed by Shell. The input values remain authoritative throughout the rebuild.
+Restored edge and face inputs are scoped to the feature's part. Mixed-part picks
+leave the existing input unchanged, and changing Part clears its dependent
+edge/face input rather than reusing a matching name from another body.

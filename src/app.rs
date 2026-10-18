@@ -2293,6 +2293,9 @@ impl CadApp {
                                         self.source_scene.as_ref().unwrap_or(&self.scene),
                                     ));
                                     changed |= parameter.inner;
+                                    if field.kind == "body" && parameter.inner {
+                                        feature_inputs::clear_owned_inputs(&mut edit.feature, &self.registry);
+                                    }
                                     if field.key == "target" && m.fields.iter().any(|f| f.key == "targets")
                                         && ui.small_button("Multiple parts").clicked() {
                                         let target = edit.feature.params["target"].as_str().filter(|s| !s.is_empty())
