@@ -1319,30 +1319,7 @@ impl AssemblyUi {
                     }
                 }
                 let hit = pointer.filter(|_| canvas_hover).and_then(|pos| {
-                    let face = render::pick(&self.scene, camera, pos, rect, &self.hidden);
-                    if self.filter == Filter::Edges {
-                        render::pick_edges(&self.scene, camera, pos, rect, &self.hidden)
-                            .into_iter()
-                            .find(|e| {
-                                face.as_ref()
-                                    .is_none_or(|f| e.distance <= f.distance + camera.span * 1e-4)
-                            })
-                            .map(|e| Target::Edge {
-                                part: e.part,
-                                key: e.key,
-                            })
-                    } else {
-                        face.map(|f| {
-                            if self.filter == Filter::Parts {
-                                Target::Part(f.part)
-                            } else {
-                                Target::Face {
-                                    part: f.part,
-                                    key: f.face,
-                                }
-                            }
-                        })
-                    }
+                    pick_target(&self.scene, camera, pos, rect, self.filter, &self.hidden)
                 });
                 if response.clicked() && canvas_hover {
                     if let Some(hit) = hit.clone() {
@@ -1990,6 +1967,43 @@ impl AssemblyUi {
         self.search_open = open;
     }
 }
+fn pick_target(
+    scene: &Scene,
+    camera: &Camera,
+    pos: egui::Pos2,
+    rect: Rect,
+    filter: Filter,
+    hidden: &BTreeSet<String>,
+) -> Option<Target> {
+    let face = render::pick(scene, camera, pos, rect, hidden);
+    if matches!(filter, Filter::All | Filter::Edges) {
+        let edge = render::pick_edges(scene, camera, pos, rect, hidden)
+            .into_iter()
+            .find(|edge| {
+                face.as_ref()
+                    .is_none_or(|face| edge.distance <= face.distance + camera.span * 1e-4)
+            });
+        if let Some(edge) = edge {
+            return Some(Target::Edge {
+                part: edge.part,
+                key: edge.key,
+            });
+        }
+        if filter == Filter::Edges {
+            return None;
+        }
+    }
+    face.map(|face| {
+        if filter == Filter::Parts {
+            Target::Part(face.part)
+        } else {
+            Target::Face {
+                part: face.part,
+                key: face.face,
+            }
+        }
+    })
+}
 fn same_path(a: &Path, b: &Path) -> bool {
     a == b
         || a.canonicalize()
@@ -2093,6 +2107,37 @@ mod tests {
             doc.instances.push(i);
         }
         doc
+    }
+    #[test]
+    fn all_filter_prefers_visible_edges_but_faces_and_parts_filters_are_explicit() {
+        let registry = Arc::new(Registry::builtin().unwrap());
+        let mut runtime = AssemblyRuntime::new(registry.clone());
+        let mut doc = fixture(&registry);
+        doc.instances.truncate(1);
+        let scene = runtime.evaluate(&doc).unwrap().scene;
+        let mut camera = Camera::default();
+        camera.set_view(glam::Vec3::Z);
+        camera.span = 50.;
+        let rect = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800., 600.));
+        let hidden = BTreeSet::new();
+        let rim = camera.project([10., 0., 5.], rect);
+        assert!(matches!(
+            pick_target(&scene, &camera, rim, rect, Filter::All, &hidden),
+            Some(Target::Edge { .. })
+        ));
+        assert!(matches!(
+            pick_target(&scene, &camera, rim, rect, Filter::Faces, &hidden),
+            Some(Target::Face { .. })
+        ));
+        assert!(matches!(
+            pick_target(&scene, &camera, rim, rect, Filter::Parts, &hidden),
+            Some(Target::Part(_))
+        ));
+        let inside = camera.project([10., 5., 5.], rect);
+        assert!(matches!(
+            pick_target(&scene, &camera, inside, rect, Filter::All, &hidden),
+            Some(Target::Face { .. })
+        ));
     }
     #[test]
     fn context_reentry_preserves_frozen_external_pose_until_explicit_new_context() {
