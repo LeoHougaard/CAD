@@ -109,11 +109,14 @@ fn extrude(
     mode: &str,
     reverse: bool,
 ) -> String {
+    let targets = if mode == "New" { vec![] } else {
+        vec![evaluate(d).scene.meshes.last().unwrap().part.clone()]
+    };
     feature(
         d,
         "extrude",
         name,
-        json!({"sketch":sk,"depth":depth,"mode":mode,"reverse":reverse,"target":"@last"}),
+        json!({"sketch":sk,"depth":depth,"mode":mode,"reverse":reverse,"targets":targets}),
     )
 }
 fn rectangular_sketch(

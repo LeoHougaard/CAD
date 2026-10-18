@@ -1,0 +1,15 @@
+{
+  "id": "boolean",
+  "name": "Boolean",
+  "version": "1.0.0",
+  "category": "feature",
+  "editor": "",
+  "script": "boolean.rhai",
+  "fields": [
+    {"key":"mode","label":"Operation","kind":"choice","default":"Union","options":["Union","Subtract","Intersect"]},
+    {"key":"targets","label":"Targets","kind":"bodies","default":[]},
+    {"key":"tools","label":"Parts / tools","kind":"bodies","default":[]},
+    {"key":"keep_tools","label":"Keep tools","kind":"bool","default":false}
+  ],
+  "description": "Combine selected parts, subtract tools from targets, or retain their common volume."
+}

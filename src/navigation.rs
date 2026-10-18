@@ -88,30 +88,13 @@ fn zone_direction(f: Face, x: usize, y: usize) -> Vec3 {
 }
 
 fn face_label(ui: &egui::Ui, camera: &Camera, center: Pos2, face: Face) {
-    let galley = ui.painter().layout_no_wrap(
-        face.label.into(),
+    let mesh = crate::render::projected_text(
+        ui,
+        face.label,
         egui::FontId::proportional(11.),
         Color32::from_rgb(230, 236, 243),
+        |p| project(camera, center, face.normal + face.u * (p.x / 35.) - face.v * (p.y / 35.)),
     );
-    let atlas = ui.fonts(|f| f.font_image_size());
-    let mut mesh = egui::epaint::Mesh::default();
-    for row in &galley.rows {
-        let offset = mesh.vertices.len() as u32;
-        for vertex in &row.visuals.mesh.vertices {
-            let p = row.pos.to_vec2() + vertex.pos.to_vec2() - galley.rect.center().to_vec2();
-            mesh.vertices.push(egui::epaint::Vertex {
-                pos: project(
-                    camera,
-                    center,
-                    face.normal + face.u * (p.x / 35.) - face.v * (p.y / 35.),
-                ),
-                uv: egui::pos2(vertex.uv.x / atlas[0] as f32, vertex.uv.y / atlas[1] as f32),
-                color: vertex.color,
-            });
-        }
-        mesh.indices
-            .extend(row.visuals.mesh.indices.iter().map(|i| i + offset));
-    }
     ui.painter().add(egui::Shape::mesh(mesh));
 }
 

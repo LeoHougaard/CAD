@@ -56,8 +56,7 @@ pub enum Constraint {
     /// A line must be vertical. Produces 1 residual: `p2.x - p1.x`.
     Vertical(LineId),
 
-    /// Angle between two lines. Uses the cross-cos form to avoid atan2
-    /// discontinuities: `cross·cos(θ) - dot·sin(θ)`.
+    /// Signed angle between two directed lines, modulo one full turn.
     Angle(LineId, LineId, f64),
 
     /// Two lines must be perpendicular. Produces 1 residual: `dot(d1, d2)`.
@@ -296,9 +295,11 @@ pub fn eval_residuals(c: &Constraint, snap: &EntitySnapshot, out: &mut Vec<f64>)
             let d2y = y2b - y2a;
             let cross = d1x * d2y - d1y * d2x;
             let dot = d1x * d2x + d1y * d2y;
-            let (sin_t, cos_t) = theta.sin_cos();
-            // cross·cos(θ) - dot·sin(θ) = |d1||d2| sin(α - θ)
-            out.push(cross * cos_t - dot * sin_t);
+            let error = cross.atan2(dot) - theta;
+            out.push(
+                (error + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU)
+                    - std::f64::consts::PI,
+            );
         }
         Constraint::Perpendicular(l1, l2) => {
             let (l1p1, l1p2) = snap.line(*l1);
@@ -597,9 +598,7 @@ pub fn eval_jacobian(
             jw.set(row_offset, ParamRef::PointX(p2), 1.0);
             jw.set(row_offset, ParamRef::PointX(p1), -1.0);
         }
-        Constraint::Angle(l1, l2, theta) => {
-            // r = cross·cos(θ) - dot·sin(θ)
-            // where cross = d1x*d2y - d1y*d2x, dot = d1x*d2x + d1y*d2y
+        Constraint::Angle(l1, l2, _) => {
             let (l1p1, l1p2) = snap.line(*l1);
             let (l2p1, l2p2) = snap.line(*l2);
             let (x1a, y1a) = snap.point(l1p1);
@@ -610,18 +609,13 @@ pub fn eval_jacobian(
             let d1y = y1b - y1a;
             let d2x = x2b - x2a;
             let d2y = y2b - y2a;
-            let (sin_t, cos_t) = theta.sin_cos();
-
-            // ∂cross/∂d1x = d2y, ∂cross/∂d1y = -d2x, ∂cross/∂d2x = -d1y, ∂cross/∂d2y = d1x
-            // ∂dot/∂d1x = d2x, ∂dot/∂d1y = d2y, ∂dot/∂d2x = d1x, ∂dot/∂d2y = d1y
-            // ∂r/∂d1x = d2y*cos_t - d2x*sin_t
-            // ∂r/∂d1y = -d2x*cos_t - d2y*sin_t
-            // ∂r/∂d2x = -d1y*cos_t - d1x*sin_t
-            // ∂r/∂d2y = d1x*cos_t - d1y*sin_t
-            let dr_d1x = d2y * cos_t - d2x * sin_t;
-            let dr_d1y = -d2x * cos_t - d2y * sin_t;
-            let dr_d2x = -d1y * cos_t - d1x * sin_t;
-            let dr_d2y = d1x * cos_t - d1y * sin_t;
+            let norm1 = (d1x * d1x + d1y * d1y).max(1e-20);
+            let norm2 = (d2x * d2x + d2y * d2y).max(1e-20);
+            // d(arg(d2)-arg(d1)); wrapping changes no local derivative.
+            let dr_d1x = d1y / norm1;
+            let dr_d1y = -d1x / norm1;
+            let dr_d2x = -d2y / norm2;
+            let dr_d2y = d2x / norm2;
 
             // d1x = x1b - x1a → ∂/∂x1a = -1, ∂/∂x1b = 1
             jw.set(row_offset, ParamRef::PointX(l1p1), -dr_d1x);

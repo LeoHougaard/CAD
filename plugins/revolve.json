@@ -1,11 +1,23 @@
 {
   "id": "revolve",
   "name": "Revolve",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "category": "feature",
   "editor": "",
   "script": "revolve.rhai",
   "fields": [
+    {
+      "key": "regions",
+      "label": "Regions",
+      "kind": "regions",
+      "default": null
+    },
+    {
+      "key": "profile_face",
+      "label": "Planar face",
+      "kind": "profile_face",
+      "default": null
+    },
     {
       "key": "sketch",
       "label": "Sketch",
@@ -41,6 +53,18 @@
       ]
     },
     {
+      "key": "axis_ref",
+      "label": "Revolve axis",
+      "kind": "axis",
+      "default": null
+    },
+    {
+      "key": "targets",
+      "label": "Merge scope",
+      "kind": "bodies",
+      "default": []
+    },
+    {
       "key": "angle",
       "label": "Angle",
       "kind": "number",
@@ -53,5 +77,5 @@
       "default": "0"
     }
   ],
-  "description": "Revolve a profile about one of its sketch axes."
+  "description": "Revolve sketch regions or a planar face about a selected axis."
 }

@@ -1,4 +1,4 @@
-//! Rejected first attempts retained separately from the ten completed projects.
+//! Original failed workflows: preserve precise rejection or prove a shared fix.
 use cad::{engine::Runtime, model::Document, plugins::Registry};
 use std::path::Path;
 
@@ -35,6 +35,19 @@ fn through_bore_in_fused_loft_reducer_is_rejected_exactly() {
     rejected("circular-reducer", "mesh approximation")
 }
 #[test]
-fn chamfer_after_comb_cutouts_rejects_an_open_shell() {
-    rejected("cable-comb", "shell is not closed")
+fn chamfer_after_comb_cutouts_preserves_a_closed_exact_solid() {
+    let mut document = Document::load(&Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/project-rejections/cable-comb.cadpart")).unwrap();
+    for width in [120., 130.] {
+        document.variables.insert("width".into(), width.to_string());
+        let result = Runtime::new(Registry::builtin().unwrap()).evaluate(&document).unwrap();
+        assert!(result.scene.error.is_none(), "{:?}", result.scene.error);
+        assert_eq!(result.geometry.parts.len(), 1);
+        let expected = width * 24. * 12. - 5. * 12. * 16. * 12.
+            - 2. * std::f64::consts::PI * 6.25 * 12. - 0.5 * 0.5 * width / 2.;
+        assert!((result.scene.meshes[0].volume - expected).abs() < 1e-6);
+        let validity = brepkit_operations::validate::validate_solid(
+            &result.geometry.topo, result.geometry.parts[0].solid).unwrap();
+        assert!(validity.is_valid(), "{:?}", validity.issues);
+    }
 }

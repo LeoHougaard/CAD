@@ -1,4 +1,6 @@
 //! Native geometry execution. This module knows operations, never feature types.
+mod edge_setback;
+mod feature_controls;
 mod sweep_loft;
 use crate::{
     model::{Document, Feature, Plane, Result},
@@ -14,6 +16,7 @@ use brepkit_topology::{
     face::{FaceId, FaceSurface},
     solid::SolidId,
 };
+use feature_controls::analytic_edge_axis;
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
@@ -159,6 +162,8 @@ pub struct EdgeView {
     pub part: String,
     pub points: Vec<[f32; 3]>,
     pub seam: bool,
+    /// Exact analytical axis for straight and circular edges.
+    pub axis: Option<([f64; 3], [f64; 3])>,
 }
 #[derive(Clone, Debug)]
 pub struct MeshView {
@@ -401,7 +406,8 @@ impl Geometry {
     pub fn resolve_plane(&self, p: &Value, numbers: &Numbers) -> Result<Plane> {
         let offset = numbers.value(p.get("offset").unwrap_or(&Value::from(0)))?;
         if let Some(value) = p.get("context_plane").filter(|v| !v.is_null()) {
-            let plane: Plane = serde_json::from_value(value.clone()).map_err(|e| format!("Invalid context plane: {e}"))?;
+            let plane: Plane = serde_json::from_value(value.clone())
+                .map_err(|e| format!("Invalid context plane: {e}"))?;
             plane.validate()?;
             return Ok(plane.shifted(offset));
         }
@@ -419,7 +425,10 @@ impl Geometry {
         let mut matches = 0;
         let mut conflicting_orientation = false;
         for part in &self.parts {
-            for id in solid_faces(&self.topo, part.solid).map_err(err)? {
+            for (id, key) in self.face_keys(part.solid)? {
+                if key != support {
+                    continue;
+                }
                 let face = self.topo.face(id).map_err(err)?;
                 if let FaceSurface::Plane { normal, d } = face.surface()
                     && plane_matches(&anchor.1, *normal, *d)
@@ -532,6 +541,7 @@ impl Geometry {
     fn execute(&mut self, f: &Feature, ordinal: usize, p: &Value, numbers: &Numbers) -> Result<()> {
         let op = text(p, "op", "");
         match op {
+            "boolean" => self.execute_boolean(f, p)?,
             "sweep" => self.execute_sweep(f, ordinal, p)?,
             "loft" => self.execute_loft(f, ordinal, p)?,
             "sketch" => {
@@ -540,162 +550,8 @@ impl Geometry {
                 self.sketches
                     .insert(f.id.clone(), sketch::resolve(&s, plane, numbers)?);
             }
-            "extrude" | "revolve" => {
-                let sk = self
-                    .sketches
-                    .get(text(p, "sketch", ""))
-                    .ok_or("Choose an earlier, unsuppressed sketch")?
-                    .clone();
-                let mut profile = sk.clone();
-                let mut depth = num(p, "depth", 10.);
-                if op == "extrude"
-                    && let Some(value) = f.params.get("context_up_to").filter(|v| !v.is_null()) {
-                        if flag(p, "symmetric") { return Err("Up to context face cannot use symmetric extent".into()); }
-                        let plane: Plane = serde_json::from_value(value.clone()).map_err(|e| format!("Invalid context extent plane: {e}"))?;
-                        plane.validate()?;
-                        let parallel = dot(plane.normal, sk.plane.normal);
-                        if parallel.abs() < 1.-1e-7 {
-                            return Err("Up to context face currently requires a plane parallel to the sketch".into());
-                        }
-                        let signed_depth = dot(sub(plane.origin, sk.plane.origin), sk.plane.normal);
-                        depth = signed_depth * if flag(p, "reverse") { -1. } else { 1. };
-                }
-                if depth <= 1e-7 {
-                    return Err("Depth must be positive; use Reverse to change direction".into());
-                }
-                let direction = if flag(p, "reverse") { -1. } else { 1. };
-                let start = if flag(p, "symmetric") {
-                    -direction * depth / 2.
-                } else {
-                    0.
-                };
-                if op == "extrude" {
-                    profile.plane = profile.plane.shifted(start);
-                }
-                let mut region_sides = vec![];
-                let mut region_edges = vec![];
-                let faces = if op == "extrude" {
-                    let selected = match p.get("regions") {
-                        None | Some(Value::Null) => None,
-                        Some(Value::Array(values)) => {
-                            if values.is_empty() {
-                                return Err("Choose at least one sketch region".into());
-                            }
-                            Some(
-                                values
-                                    .iter()
-                                    .map(|v| {
-                                        v.as_str().map(str::to_owned).ok_or_else(|| {
-                                            "Sketch region selections must be identities".to_owned()
-                                        })
-                                    })
-                                    .collect::<Result<Vec<_>>>()?,
-                            )
-                        }
-                        _ => return Err("Sketch region selections must be an array or null".into()),
-                    };
-                    if let Some(selected) = selected {
-                        let profile =
-                            sketch::profile_for_regions(&mut self.topo, &profile, &selected)?;
-                        region_sides = profile.sides;
-                        region_edges = profile.edges;
-                        profile.faces
-                    } else {
-                        // Preserve exact legacy topology, output order, and references
-                        // for saved whole-sketch features. New subdivided profiles use
-                        // the arrangement only when that legacy path is unavailable.
-                        match sketch::faces(&mut self.topo, &profile) {
-                            Ok(faces) => {
-                                region_edges = sketch::region_edges(&sk).unwrap_or_default();
-                                faces
-                            }
-                            Err(_) => {
-                                let profile =
-                                    sketch::profile_for_regions(&mut self.topo, &profile, &[])?;
-                                region_sides = profile.sides;
-                                region_edges = profile.edges;
-                                profile.faces
-                            }
-                        }
-                    }
-                } else {
-                    sketch::faces(&mut self.topo, &profile)?
-                };
-                if op == "extrude" {
-                    self.register_profile_edges(
-                        f,
-                        &sk,
-                        &region_edges,
-                        start,
-                        start + direction * depth,
-                    );
-                }
-                for (i, face) in faces.into_iter().enumerate() {
-                    let solid = if op == "extrude" {
-                        ops::extrude::extrude(
-                            &mut self.topo,
-                            face,
-                            v3(sk.plane.normal) * direction,
-                            depth,
-                        )
-                        .map_err(err)?
-                    } else {
-                        let axis = if text(p, "axis", "V") == "U" {
-                            sk.plane.u
-                        } else {
-                            sk.plane.v
-                        };
-                        let offset = num(p, "axis_offset", 0.);
-                        let shift = if text(p, "axis", "V") == "U" {
-                            sk.plane.v
-                        } else {
-                            sk.plane.u
-                        };
-                        let origin =
-                            std::array::from_fn(|k| sk.plane.origin[k] + shift[k] * offset);
-                        let angle = num(p, "angle", 360.);
-                        if angle <= 0. || angle > 360. {
-                            return Err("Revolve angle must be between 0 and 360 degrees".into());
-                        }
-                        ops::revolve::revolve(
-                            &mut self.topo,
-                            face,
-                            p3(origin),
-                            v3(axis),
-                            angle.to_radians(),
-                        )
-                        .map_err(err)?
-                    };
-                    self.add_result(
-                        f,
-                        solid,
-                        text(p, "mode", "New"),
-                        text(p, "target", ""),
-                        ordinal * 100 + i,
-                    )?;
-                }
-                if op == "extrude" {
-                    self.register_extrude_anchors(f, &sk, start, start + direction * depth);
-                    for (key, a, b) in region_sides {
-                        let origin = sk.plane.at(a);
-                        let mut u = sub(sk.plane.at(b), origin);
-                        let length = dot(u, u).sqrt();
-                        if length < 1e-8 {
-                            continue;
-                        }
-                        u = u.map(|x| x / length);
-                        self.anchors.push((
-                            format!("{}:region-side:{key}", f.id),
-                            Plane {
-                                origin,
-                                u,
-                                v: sk.plane.normal,
-                                normal: cross(u, sk.plane.normal),
-                            },
-                        ));
-                    }
-                }
-            }
+            "revolve" => self.execute_revolve(f, ordinal, p)?,
+            "extrude" => self.execute_extrude(f, ordinal, p)?,
             "box" | "cylinder" => {
                 let h = num(p, "height", 10.);
                 let solid = if op == "box" {
@@ -728,7 +584,7 @@ impl Geometry {
                 let i = self.target(text(p, "target", ""))?;
                 let solid =
                     ops::copy::copy_solid(&mut self.topo, self.parts[i].solid).map_err(err)?;
-                let available = self.edge_keys(solid)?;
+                let available = self.edge_keys_scoped(solid, Some(&self.parts[i].key))?;
                 let keys: Vec<String> = p
                     .get("edges")
                     .and_then(Value::as_array)
@@ -774,17 +630,33 @@ impl Geometry {
                 let result = if op == "fillet" {
                     ops::blend_ops::fillet_v2(&mut self.topo, solid, &edges, num(p, "radius", 2.))
                         .map(|r| r.solid)
-                } else if planar {
+                } else if self.has_analytic_chamfer_rims(solid, &edges)?
+                    || (planar
+                        && !solid_faces(&self.topo, solid)
+                            .map_err(err)?
+                            .iter()
+                            .any(|id| {
+                                self.topo
+                                    .face(*id)
+                                    .is_ok_and(|face| !face.inner_wires().is_empty())
+                            }))
+                {
                     ops::chamfer::chamfer(&mut self.topo, solid, &edges, num(p, "distance", 2.))
                 } else {
-                    ops::blend_ops::chamfer_v2(
-                        &mut self.topo,
-                        solid,
-                        &edges,
-                        num(p, "distance", 2.),
-                        num(p, "distance", 2.),
-                    )
-                    .map(|r| r.solid)
+                    if let Some(result) =
+                        self.prismatic_chamfer(solid, &edges, num(p, "distance", 2.))?
+                    {
+                        Ok(result)
+                    } else {
+                        ops::blend_ops::chamfer_v2(
+                            &mut self.topo,
+                            solid,
+                            &edges,
+                            num(p, "distance", 2.),
+                            num(p, "distance", 2.),
+                        )
+                        .map(|r| r.solid)
+                    }
                 }
                 .map_err(err)?;
                 self.parts[i].solid = result;
@@ -811,7 +683,7 @@ impl Geometry {
                             .into(),
                     );
                 }
-                let available = self.face_keys(solid)?;
+                let available = self.face_keys_scoped(solid, Some(&self.parts[i].key))?;
                 let faces = keys
                     .iter()
                     .map(|k| {
@@ -927,6 +799,19 @@ impl Geometry {
         Ok(())
     }
     pub fn face_keys(&self, solid: SolidId) -> Result<Vec<(FaceId, String)>> {
+        let owner = self
+            .parts
+            .iter()
+            .find(|p| p.solid == solid)
+            .map(|p| p.key.as_str());
+        self.face_keys_scoped(solid, owner)
+    }
+    fn face_keys_scoped(
+        &self,
+        solid: SolidId,
+        owner: Option<&str>,
+    ) -> Result<Vec<(FaceId, String)>> {
+        let prefix = owner.map(|key| format!("{}:", key.split(':').next().unwrap_or(key)));
         solid_faces(&self.topo, solid)
             .map_err(err)?
             .into_iter()
@@ -936,7 +821,10 @@ impl Geometry {
                     FaceSurface::Plane { normal, d } => self
                         .anchors
                         .iter()
-                        .find(|(_, p)| plane_matches(p, *normal, *d))
+                        .filter(|(_, p)| plane_matches(p, *normal, *d))
+                        .min_by_key(|(key, _)| {
+                            usize::from(!prefix.as_ref().is_some_and(|p| key.starts_with(p)))
+                        })
                         .map(|(key, _)| key.clone())
                         .unwrap_or_else(|| {
                             format!(
@@ -958,6 +846,14 @@ impl Geometry {
                                 }
                             }
                         }
+                        let owned = sources
+                            .iter()
+                            .filter(|key| prefix.as_ref().is_some_and(|p| key.starts_with(p)))
+                            .cloned()
+                            .collect::<BTreeSet<_>>();
+                        if !owned.is_empty() {
+                            sources = owned;
+                        }
                         if sources.len() == 1 {
                             sources.into_iter().next().unwrap()
                         } else {
@@ -971,7 +867,19 @@ impl Geometry {
             .collect()
     }
     pub fn edge_keys(&self, solid: SolidId) -> Result<Vec<(EdgeId, String)>> {
-        let faces = self.face_keys(solid)?;
+        let owner = self
+            .parts
+            .iter()
+            .find(|p| p.solid == solid)
+            .map(|p| p.key.as_str());
+        self.edge_keys_scoped(solid, owner)
+    }
+    fn edge_keys_scoped(
+        &self,
+        solid: SolidId,
+        owner: Option<&str>,
+    ) -> Result<Vec<(EdgeId, String)>> {
+        let faces = self.face_keys_scoped(solid, owner)?;
         let mut adjacent: HashMap<EdgeId, Vec<String>> = HashMap::new();
         for (id, key) in faces {
             for edge in face_edges(&self.topo, id).map_err(err)? {
@@ -1109,6 +1017,12 @@ impl Geometry {
                     part: part.key.clone(),
                     points,
                     seam,
+                    axis: analytic_edge_axis(&self.topo, id)?.map(|(point, direction)| {
+                        (
+                            [point.x(), point.y(), point.z()],
+                            [direction.x(), direction.y(), direction.z()],
+                        )
+                    }),
                 });
             }
             let volume = solid_volume(&self.topo, part.solid)?;

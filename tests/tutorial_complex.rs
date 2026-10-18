@@ -58,6 +58,7 @@ fn extrude(
     f.params["depth"] = json!(depth);
     f.params["mode"] = json!(mode);
     f.params["target"] = json!("f2:0");
+    f.params["targets"] = json!(["f2:0"]);
     f.params["reverse"] = json!(reverse);
     let id = f.id.clone();
     doc.features.push(f);

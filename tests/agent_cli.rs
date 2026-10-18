@@ -79,6 +79,58 @@ fn document() -> Document {
 fn request(path: &Path, action: Value) -> Value {
     json!({"version":1,"path":path,"action":action})
 }
+#[test]
+fn agent_accepts_face_profiles_axis_references_and_explicit_body_scopes() {
+    let fixture = Fixture::new();
+    let first = fixture.inspect();
+    let (ok, response) = call(apply(
+        &fixture.path,
+        &first["revision"],
+        json!([{"op":"add_feature","plugin":"extrude","params":{"profile_face":{"part":"f2:0","face":"f2:end"},"depth":"5"}}]),
+    ));
+    assert!(ok, "{response}");
+    let next = fixture.inspect();
+    assert_eq!(next["model"]["parts"].as_array().unwrap().len(), 2);
+    let (ok, response) = call(apply(
+        &fixture.path,
+        &next["revision"],
+        json!([{"op":"add_feature","plugin":"boolean","params":{"mode":"Union","tools":["f2:0","f3:0"],"keep_tools":false}}]),
+    ));
+    assert!(ok, "{response}");
+    let united = fixture.inspect();
+    assert_eq!(united["model"]["parts"].as_array().unwrap().len(), 1);
+    assert!((united["model"]["parts"][0]["volume_mm3"].as_f64().unwrap() - 3000.).abs() < 1e-5);
+    let fresh = Fixture::new();
+    let first = fresh.inspect();
+    let (ok, response) = call(apply(
+        &fresh.path,
+        &first["revision"],
+        json!([{"op":"add_feature","plugin":"revolve","params":{"profile_face":{"part":"f2:0","face":"f2:start"},"axis_ref":{"kind":"origin","axis":"Y"}}}]),
+    ));
+    assert!(ok, "{response}");
+    assert_eq!(
+        fresh.inspect()["model"]["parts"].as_array().unwrap().len(),
+        2
+    );
+}
+#[test]
+fn malformed_new_feature_inputs_fail_without_writing() {
+    let fixture = Fixture::new();
+    let initial = fixture.inspect();
+    let bytes = std::fs::read(&fixture.path).unwrap();
+    for edit in [
+        json!({"op":"set_param","feature":"f2","key":"profile_face","value":{"part":"f2:0"}}),
+        json!({"op":"set_param","feature":"f2","key":"targets","value":["f2:0","f2:0"]}),
+        json!({"op":"set_param","feature":"f2","key":"targets","value":["@last"]}),
+        json!({"op":"add_feature","plugin":"revolve","params":{"sketch":"f1","axis_ref":{"kind":"edge","part":"f2:0","edge":17}}}),
+        json!({"op":"add_feature","plugin":"revolve","params":{"sketch":"f1","axis_ref":{"kind":"sketch_entity","sketch":"f1","entity":999}}}),
+        json!({"op":"add_feature","plugin":"revolve","params":{"sketch":"f1","axis_ref":{"kind":"origin","axis":"Q"}}}),
+    ] {
+        let (ok, response) = call(apply(&fixture.path, &initial["revision"], json!([edit])));
+        assert!(!ok, "{response}");
+        assert_eq!(std::fs::read(&fixture.path).unwrap(), bytes);
+    }
+}
 fn call(request: Value) -> (bool, Value) {
     raw(&serde_json::to_vec(&request).unwrap())
 }

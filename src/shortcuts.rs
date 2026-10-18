@@ -14,6 +14,8 @@ pub enum SketchTool {
     CornerRectangle,
     CenterRectangle,
     Circle,
+    ThreePointArc,
+    Trim,
     Dimension,
 }
 
@@ -243,6 +245,8 @@ pub fn command_for(key: Key, modifiers: Modifiers, context: Context) -> Option<C
             Key::G => Some(SketchTool(self::SketchTool::CornerRectangle)),
             Key::R => Some(SketchTool(self::SketchTool::CenterRectangle)),
             Key::C => Some(SketchTool(self::SketchTool::Circle)),
+            Key::A => Some(SketchTool(self::SketchTool::ThreePointArc)),
+            Key::M => Some(SketchTool(self::SketchTool::Trim)),
             Key::D => Some(SketchTool(self::SketchTool::Dimension)),
             Key::I => Some(Relationship("Coincident")),
             Key::H => Some(Relationship("Horizontal")),

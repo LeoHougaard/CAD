@@ -174,6 +174,11 @@ fn lock(path: &Path) -> Result<FileLock> {
     }
 }
 
+fn reference_text(value: Option<&Value>, max: usize) -> bool {
+    value
+        .and_then(Value::as_str)
+        .is_some_and(|s| !s.is_empty() && s != "@last" && s.len() <= max)
+}
 fn field_value(field: &Field, value: &Value) -> cad::model::Result<()> {
     let valid = match field.kind.as_str() {
         "number" => value.is_string() || value.is_number(),
@@ -196,6 +201,49 @@ fn field_value(field: &Field, value: &Value) -> cad::model::Result<()> {
                             .len()
                             == a.len()
                 })
+        }
+        "bodies" => value.as_array().is_some_and(|a| {
+            a.len() <= 100
+                && a.iter().all(|v| reference_text(Some(v), 1024))
+                && a.iter()
+                    .filter_map(Value::as_str)
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len()
+                    == a.len()
+        }),
+        "profile_face" => {
+            value.is_null()
+                || value.as_object().is_some_and(|o| {
+                    o.len() == 2
+                        && reference_text(o.get("part"), 1024)
+                        && reference_text(o.get("face"), 8192)
+                })
+        }
+        "axis" => {
+            value.is_null()
+                || value
+                    .as_object()
+                    .is_some_and(|o| match o.get("kind").and_then(Value::as_str) {
+                        Some("origin") => {
+                            o.len() == 2
+                                && o.get("axis")
+                                    .and_then(Value::as_str)
+                                    .is_some_and(|s| ["X", "Y", "Z"].contains(&s))
+                        }
+                        Some("sketch_entity" | "sketch_line") => {
+                            o.len() == 3
+                                && reference_text(o.get("sketch"), 128)
+                                && o.get("entity")
+                                    .and_then(Value::as_u64)
+                                    .is_some_and(|id| id > 0)
+                        }
+                        Some("edge") => {
+                            o.len() == 3
+                                && reference_text(o.get("part"), 1024)
+                                && reference_text(o.get("edge"), 8192)
+                        }
+                        _ => false,
+                    })
         }
         "sketches" => value.as_array().is_some_and(|a| {
             (2..=32).contains(&a.len())
@@ -566,7 +614,13 @@ fn validate(document: &Document, registry: &Registry) -> cad::model::Result<()> 
             if field.kind == "number" {
                 numbers.value(value)?;
             }
-            if field.kind == "sketch" || field.kind == "sketches" {
+            if (field.kind == "sketch" || field.kind == "sketches")
+                && !(field.key == "sketch"
+                    && feature
+                        .params
+                        .get("profile_face")
+                        .is_some_and(Value::is_object))
+            {
                 let references = if field.kind == "sketches" {
                     value
                         .as_array()
@@ -591,6 +645,30 @@ fn validate(document: &Document, registry: &Registry) -> cad::model::Result<()> 
                             field.key
                         ));
                     }
+                }
+            }
+            if field.kind == "axis"
+                && value
+                    .get("kind")
+                    .and_then(Value::as_str)
+                    .is_some_and(|kind| matches!(kind, "sketch_entity" | "sketch_line"))
+            {
+                let reference = value["sketch"].as_str().expect("axis shape checked");
+                let entity = value["entity"].as_u64().expect("axis shape checked");
+                if !document.features[..index].iter().any(|f| {
+                    f.id == reference
+                        && !f.suppressed
+                        && f.sketch().is_some_and(|s| {
+                            s.entities.iter().any(|e| {
+                                e.id == entity
+                                    && matches!(e.kind.as_str(), "line" | "circle" | "arc")
+                            })
+                        })
+                }) {
+                    return Err(
+                        "Revolve axis needs an earlier, unsuppressed sketch line, circle or arc"
+                            .into(),
+                    );
                 }
             }
         }

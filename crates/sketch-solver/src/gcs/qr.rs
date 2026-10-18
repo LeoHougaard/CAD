@@ -10,6 +10,8 @@
 /// Stores the factored matrix in compact form: Householder vectors below
 /// the diagonal, R on and above the diagonal.
 pub struct QrResult {
+    /// Reuse the complete factorization when projecting several drag targets.
+    complete: std::cell::OnceCell<Box<QrResult>>,
     /// Row-major storage: Householder vectors below diagonal, R on/above.
     data: Vec<f64>,
     /// Householder scaling factors (one per column processed).
@@ -158,6 +160,7 @@ impl QrResult {
         }
 
         Self {
+            complete: std::cell::OnceCell::new(),
             data: data.to_vec(),
             tau,
             perm,
@@ -211,29 +214,55 @@ impl QrResult {
         result
     }
 
-    /// Solve the least-squares problem min ||Jx - b|| via back-substitution
-    /// on the R factor, then unpermute.
+    /// Minimum-norm least-squares solution, using the same numerical rank as DOF.
+    /// A second orthogonal factorization of the independent R rows avoids
+    /// freezing arbitrary pivot columns or dividing by redundant tiny pivots.
     pub fn solve_least_squares(&self, b: &[f64]) -> Vec<f64> {
         let qtb = self.qt_mul(b);
-        let k = self.m.min(self.n);
-
-        // Back-substitute R * z = qtb[0..k]
-        let mut z = vec![0.0; self.n];
-        for i in (0..k).rev() {
-            let rii = self.data[i * self.n + i];
-            if rii.abs() < 1e-300 {
-                continue;
+        let rank = self.rank(1e-10);
+        let mut z = vec![0.; self.n];
+        if rank == self.n {
+            for i in (0..rank).rev() {
+                let mut value = qtb[i];
+                for j in i + 1..rank {
+                    value -= self.data[i * self.n + j] * z[j];
+                }
+                z[i] = value / self.data[i * self.n + i];
             }
-            let mut s = qtb[i];
-            for j in (i + 1)..k.min(self.n) {
-                s -= self.data[i * self.n + j] * z[j];
+        } else if rank > 0 {
+            // R_rank^T = Q2 R2 P2^T. Solve R2^T y = P2^T Q1^T b,
+            // then z = Q2 [y, 0], the unique solution orthogonal to null(J).
+            let complete = self.complete.get_or_init(|| {
+                let mut transpose = vec![0.; self.n * rank];
+                for row in 0..rank {
+                    for col in row..self.n {
+                        transpose[col * rank + row] = self.data[row * self.n + col];
+                    }
+                }
+                Box::new(Self::factorize(&mut transpose, self.n, rank))
+            });
+            for i in 0..rank {
+                let mut value = qtb[complete.perm[i]];
+                for j in 0..i {
+                    value -= complete.data[j * rank + i] * z[j];
+                }
+                z[i] = value / complete.data[i * rank + i];
             }
-            z[i] = s / rii;
+            for step in (0..rank).rev() {
+                let mut dot = z[step];
+                for i in step + 1..self.n {
+                    dot += complete.data[i * rank + step] * z[i];
+                }
+                let t = complete.tau[step] * dot;
+                z[step] -= t;
+                for i in step + 1..self.n {
+                    z[i] -= complete.data[i * rank + step] * t;
+                }
+            }
         }
-
-        let mut x = vec![0.0; self.n];
-        for (i, &pi) in self.perm.iter().enumerate() {
-            x[pi] = z[i];
+        let mut x = vec![0.; self.n];
+        for (i, &original) in self.perm.iter().enumerate() {
+            x[original] = z[i];
         }
         x
     }
@@ -243,6 +272,41 @@ impl QrResult {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rank_deficient_minimum_norm_respects_all_independent_rows_and_permutations() {
+        let mut data = vec![
+            1., 2., 0., 0., 1., 0., 1., 3., 2., 0., 2., 0., 1., 1., 1., 1., 3., 3., 2., 1.,
+        ];
+        let qr = QrResult::factorize(&mut data, 4, 5);
+        assert_eq!(qr.rank(1e-10), 3);
+        let expected = [8., 3., 0., 1., 5.];
+        for _ in 0..2 {
+            let result = qr.solve_least_squares(&[19., 5., 22., 24.]);
+            for (a, b) in result.iter().zip(expected) {
+                assert!((a - b).abs() < 1e-10, "{result:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn underdetermined_solution_is_minimum_norm() {
+        let mut data = vec![1., 1.];
+        let qr = QrResult::factorize(&mut data, 1, 2);
+        let x = qr.solve_least_squares(&[1.]);
+        assert!((x[0] - 0.5).abs() < 1e-10, "{x:?}");
+        assert!((x[1] - 0.5).abs() < 1e-10, "{x:?}");
+    }
+
+    #[test]
+    fn numerical_rank_deficiency_cannot_create_arbitrary_large_steps() {
+        let mut data = vec![1., 1., 2., 2. + 1e-14];
+        let qr = QrResult::factorize(&mut data, 2, 2);
+        assert_eq!(qr.rank(1e-10), 1);
+        let x = qr.solve_least_squares(&[1., 2.]);
+        assert!((x[0] - 0.5).abs() < 1e-10, "{x:?}");
+        assert!((x[1] - 0.5).abs() < 1e-10, "{x:?}");
+    }
 
     #[test]
     fn identity_3x3() {

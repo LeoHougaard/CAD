@@ -15,6 +15,7 @@ use std::{
     time::{Duration, Instant},
 };
 mod assembly_workspace;
+mod feature_inputs;
 
 fn rgb(value: [u8; 3]) -> Color32 { Color32::from_rgb(value[0], value[1], value[2]) }
 
@@ -66,6 +67,19 @@ enum Response {
     },
     Exported(crate::model::Result<PathBuf>),
 }
+#[derive(Default)]
+struct WorkState {
+    build: Option<u64>,
+    exports: usize,
+}
+impl WorkState {
+    fn busy(&self) -> bool { self.build.is_some() || self.exports > 0 }
+    fn finish_build(&mut self, serial: u64) -> bool {
+        if self.build != Some(serial) { return false; }
+        self.build = None;
+        true
+    }
+}
 struct Worker {
     send: mpsc::Sender<Request>,
     receive: mpsc::Receiver<Response>,
@@ -78,6 +92,7 @@ impl Worker {
             let mut runtime=Runtime::shared(registry);let mut pending=VecDeque::new();
             loop{let mut job=match pending.pop_front(){Some(x)=>x,None=>match rx.recv(){Ok(x)=>x,Err(_)=>break}};
                 while let Ok(next)=rx.try_recv(){if matches!((&job,&next),(Request::Build{..},Request::Build{..}))&&pending.is_empty(){job=next;}else{pending.push_back(next);}}
+                let build_serial=match &job {Request::Build{serial,..}=>Some(*serial),Request::Export{..}=>None};
                 let response=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||match job{
                     Request::Build{serial,document,registry,source_end}=>{
                         if !Arc::ptr_eq(&runtime.registry,&registry){runtime=Runtime::shared(registry);}
@@ -89,7 +104,7 @@ impl Worker {
                         let result=(||{let evaluation=runtime.evaluate(&document)?;if let Some(e)=&evaluation.scene.error{return Err(format!("Export stopped because the model has a feature error: {e}"));}evaluation.geometry.export(&format,&path)?;Ok(path)})();Response::Exported(result)
                     }
                 }));
-                match response{Ok(response)=>{let _=out_tx.send(response);},Err(_)=>{runtime=Runtime::shared(runtime.registry.clone());let _=out_tx.send(Response::Built{serial:u64::MAX,result:Err("Geometry operation panicked. The worker was reset; your editable document is preserved.".into()),source:None});}}
+                match response{Ok(response)=>{let _=out_tx.send(response);},Err(_)=>{runtime=Runtime::shared(runtime.registry.clone());let error="Geometry operation panicked. The worker was reset; your editable document is preserved.".to_owned();let response=match build_serial{Some(serial)=>Response::Built{serial,result:Err(error),source:None},None=>Response::Exported(Err(error))};let _=out_tx.send(response);}}
                 ctx.request_repaint();
             }
         }).expect("geometry worker starts");
@@ -100,12 +115,63 @@ impl Worker {
     }
 }
 
+// The editor borrows a workspace view. Preview rebuilds never own this state.
+struct EditWorkspace {
+    camera: Camera,
+    scene: Arc<Scene>,
+    hidden: BTreeSet<String>,
+    hidden_sketches: BTreeSet<String>,
+    selected_plane: Option<String>,
+    selected_feature: Option<usize>,
+    selection: Vec<Target>,
+    selection_filter: Filter,
+    show_planes: bool,
+    show_sketches: bool,
+}
+impl EditWorkspace {
+    fn capture(app: &CadApp) -> Self {
+        Self {
+            camera: app.camera.clone(), scene: app.scene.clone(),
+            hidden: app.hidden.clone(), hidden_sketches: app.hidden_sketches.clone(),
+            selected_plane: app.selected_plane.clone(), selected_feature: app.selected_feature,
+            selection: app.selection.items().to_vec(), selection_filter: app.selection_filter,
+            show_planes: app.show_planes, show_sketches: app.show_sketches,
+        }
+    }
+    fn restore(self, app: &mut CadApp) {
+        app.camera = self.camera;
+        app.scene = self.scene;
+        app.last_error = app.scene.error.clone();
+        app.hidden = self.hidden;
+        app.hidden_sketches = self.hidden_sketches;
+        app.selected_plane = self.selected_plane;
+        app.selected_feature = self.selected_feature;
+        app.selection.clear();
+        for item in self.selection { app.selection.add(item); }
+        app.selection_filter = self.selection_filter;
+        app.show_planes = self.show_planes;
+        app.show_sketches = self.show_sketches;
+        app.fit_when_ready = false;
+        app.align_when_ready = false;
+        app.choosing_plane = false;
+        app.mouse_orbiting = false;
+        app.selection_box = None;
+        app.select_other = None;
+        app.render_revision += 1;
+    }
+}
+enum EditRequest {
+    New(String),
+    Existing(String),
+}
 struct Editor {
+    workspace: EditWorkspace,
     index: usize,
     is_new: bool,
     feature: Feature,
     sketch: Option<Sketch>,
     changed: bool,
+    input_field: Option<String>,
     undo: Vec<Value>,
     redo: Vec<Value>,
 }
@@ -114,6 +180,15 @@ impl Editor {
         if let Some(sk) = &self.sketch {
             self.feature.set_sketch(sk);
         }
+    }
+    fn apply_to(&self, document: &mut Document) {
+        let mut feature = self.feature.clone();
+        if let Some(sketch) = &self.sketch { feature.set_sketch(sketch); }
+        if self.is_new {
+            document.allocate_id();
+            document.features.insert(self.index, feature);
+            if let Some(end) = &mut document.rollback { *end += 1; }
+        } else { document.features[self.index] = feature; }
     }
 }
 enum FileAction {
@@ -156,12 +231,15 @@ pub struct CadApp {
     worker: Worker,
     scene: Arc<Scene>,
     source_scene: Option<Arc<Scene>>,
+    edit_highlight: Option<(u64, String, Vec<usize>)>,
+    inspector_rect: Rect,
     serial: u64,
     render_revision: u64,
-    busy: bool,
+    work: WorkState,
     last_error: Option<String>,
     notice: String,
     editor: Option<Editor>,
+    pending_edit: Option<EditRequest>,
     selected_feature: Option<usize>,
     selection: Selection,
     selection_filter: Filter,
@@ -264,12 +342,15 @@ impl CadApp {
             worker,
             scene: Arc::new(Scene::default()),
             source_scene: None,
+            edit_highlight: None,
+            inspector_rect: Rect::NOTHING,
             serial: 0,
             render_revision: 0,
-            busy: false,
+            work: WorkState::default(),
             last_error: None,
             notice: String::new(),
             editor: None,
+            pending_edit: None,
             selected_feature: None,
             selection: Selection::default(),
             selection_filter: Filter::All,
@@ -327,23 +408,14 @@ impl CadApp {
     fn preview_document(&self) -> Document {
         let mut d = self.document.clone();
         if let Some(edit) = &self.editor {
-            let mut feature = edit.feature.clone();
-            if let Some(sk) = &edit.sketch {
-                feature.set_sketch(sk);
-            }
-            if edit.is_new {
-                d.next_id += 1;
-                d.features.insert(edit.index, feature);
-            } else {
-                d.features[edit.index] = feature;
-            }
+            edit.apply_to(&mut d);
             d.rollback = Some(edit.index + 1);
         }
         d
     }
     fn rebuild(&mut self) {
         self.serial += 1;
-        self.busy = true;
+        self.work.build = Some(self.serial);
         self.pending_rebuild = None;
         let _ = self.worker.send.send(Request::Build {
             serial: self.serial,
@@ -360,7 +432,7 @@ impl CadApp {
                                 p.manifest
                                     .fields
                                     .iter()
-                                    .any(|f| f.kind == "edges" || f.kind == "faces")
+                                    .any(|f| feature_inputs::selectable(&f.kind))
                             })
                     })
                     .map(|e| e.index)
@@ -403,7 +475,7 @@ impl CadApp {
         if !self.origin_planes_visible() {
             return vec![];
         }
-        let size = self.camera.span as f64 * 0.22;
+        let size = render::ORIGIN_PLANE_HALF_SIZE;
         let (origin, ray) = self.camera.ray(pos, rect);
         let mut hits = vec![];
         for name in ["Top", "Front", "Right"] {
@@ -426,7 +498,6 @@ impl CadApp {
         if !self.origin_planes_visible() {
             return;
         }
-        let size = self.camera.span as f64 * 0.22;
         let hover = pointer.and_then(|p| self.origin_plane_hits(p, rect).into_iter().next());
         for name in ["Top", "Front", "Right"] {
             let selected = self.selected_plane.as_deref() == Some(name);
@@ -434,9 +505,9 @@ impl CadApp {
                 continue;
             }
             let plane = Plane::named(name, 0.);
-            let points: Vec<_> = [[-size, -size], [size, -size], [size, size], [-size, size]]
+            let points: Vec<_> = render::origin_plane_points(&plane)
                 .into_iter()
-                .map(|p| self.camera.project(plane.at(p), rect))
+                .map(|p| self.camera.project(p, rect))
                 .collect();
             let color = if selected {
                 rgb(self.settings.appearance.turquoise)
@@ -450,16 +521,34 @@ impl CadApp {
                 color.gamma_multiply(0.06),
                 Stroke::new(1.0f32, color),
             ));
-            let label = self
-                .camera
-                .project(plane.at([size * 0.75, size * 0.75]), rect);
-            ui.painter().text(
-                label,
-                egui::Align2::CENTER_CENTER,
-                name,
-                egui::FontId::proportional(12.),
-                color,
-            );
+            render::paint_plane_label(ui, &self.camera, &plane, rect, name, color);
+        }
+    }
+    fn edited_faces(&mut self) -> Vec<usize> {
+        let Some(edit) = &self.editor else { self.edit_highlight = None; return vec![]; };
+        if self.edit_highlight.as_ref().is_none_or(|(revision, id, _)| {
+            *revision != self.render_revision || id != &edit.feature.id
+        }) {
+            let faces = render::edited_face_ids(&self.scene, self.source_scene.as_deref(), &edit.feature.id);
+            self.edit_highlight = Some((self.render_revision, edit.feature.id.clone(), faces));
+        }
+        self.edit_highlight.as_ref().unwrap().2.clone()
+    }
+    fn paint_edit_inputs(&self, ui: &egui::Ui, rect: Rect) {
+        let Some(edit) = &self.editor else { return; };
+        let inputs = feature_inputs::referenced_sketches(&edit.feature, &self.registry);
+        let projector = self.camera.projector(rect);
+        for id in inputs {
+            let sketch = self.scene.sketches.get(id)
+                .or_else(|| self.source_scene.as_ref().and_then(|s| s.sketches.get(id)));
+            if let Some(sketch) = sketch {
+                for entity in &sketch.entities {
+                    let points = entity.points().into_iter()
+                        .map(|p| projector.project(sketch.plane.at(p), rect)).collect();
+                    ui.painter().add(egui::Shape::line(points,
+                        Stroke::new(4_f32, rgb(self.settings.appearance.purple).gamma_multiply(0.45))));
+                }
+            }
         }
     }
     fn choose_plane(&mut self, name: &str) {
@@ -497,27 +586,9 @@ impl CadApp {
         if self.selection_filter != Filter::All {
             return self.selection_filter;
         }
-        self.editor
-            .as_ref()
-            .and_then(|e| self.registry.plugins.get(&e.feature.plugin))
-            .and_then(|p| {
-                [
-                    ("regions", Filter::Regions),
-                    ("edges", Filter::Edges),
-                    ("faces", Filter::Faces),
-                    ("body", Filter::Parts),
-                ]
-                .into_iter()
-                .find_map(|(kind, filter)| {
-                    p.manifest
-                        .fields
-                        .iter()
-                        .any(|f| f.kind == kind)
-                        .then_some(filter)
-                })
-            })
-            .unwrap_or(self.selection_filter)
+        self.editor.as_ref().map_or(self.selection_filter, |e| feature_inputs::filter(e, &self.registry))
     }
+
     fn face_ids(&self, scene: &Scene, targets: &[Target]) -> Vec<usize> {
         scene
             .meshes
@@ -545,18 +616,9 @@ impl CadApp {
             .as_ref()
             .and_then(|e| e.feature.params.get("sketch"))
             .and_then(Value::as_str);
-        if self
-            .editor
-            .as_ref()
-            .and_then(|e| self.registry.plugins.get(&e.feature.plugin))
-            .is_some_and(|p| p.manifest.fields.iter().any(|f| f.kind == "regions"))
-        {
-            return scene
-                .sketches
-                .iter()
-                .filter(|(id, _)| input == Some(id.as_str()))
-                .map(|(id, sk)| (id.as_str(), sk))
-                .collect();
+        let axis = self.editor.as_ref().is_some_and(|e| feature_inputs::filter(e, &self.registry) == Filter::Edges && e.input_field.as_deref() == Some("axis_ref"));
+        if axis {
+            return scene.sketches.iter().filter(|(id, _)| !self.hidden_sketches.contains(*id)).map(|(id, sk)| (id.as_str(), sk)).collect();
         }
         scene
             .sketches
@@ -728,170 +790,10 @@ impl CadApp {
         self.sync_selection_to_editor(ctx);
     }
     fn sync_selection_to_editor(&mut self, ctx: &egui::Context) {
-        let active_filter = self.active_selection_filter();
-        let Some(edit) = &mut self.editor else { return };
-        let Some(plugin) = self.registry.plugins.get(&edit.feature.plugin) else {
-            return;
-        };
-        let before = edit.feature.params.clone();
-        for field in &plugin.manifest.fields {
-            match field.kind.as_str() {
-                "edges" => {
-                    edit.feature.params[&field.key] = json!(
-                        self.selection
-                            .edges()
-                            .map(|(_, key)| key)
-                            .collect::<Vec<_>>()
-                    )
-                }
-                "faces" => {
-                    edit.feature.params[&field.key] = json!(
-                        self.selection
-                            .faces()
-                            .map(|(_, key)| key)
-                            .collect::<Vec<_>>()
-                    )
-                }
-                "body" if active_filter == Filter::Parts => {
-                    edit.feature.params[&field.key] = json!(self.selection.part().unwrap_or(""))
-                }
-                "regions" if active_filter == Filter::Regions || active_filter == Filter::All => {
-                    let sketch = edit
-                        .feature
-                        .params
-                        .get("sketch")
-                        .and_then(Value::as_str)
-                        .unwrap_or("");
-                    edit.feature.params[&field.key] = json!(
-                        self.selection
-                            .items()
-                            .iter()
-                            .filter_map(|t| match t {
-                                Target::Region { sketch: id, key } if id == sketch => Some(key),
-                                _ => None,
-                            })
-                            .collect::<Vec<_>>()
-                    );
-                }
-                _ => (),
-            }
-        }
-        if matches!(active_filter, Filter::Edges | Filter::Faces) {
-            let owners: BTreeSet<_> = if active_filter == Filter::Edges {
-                self.selection.edges().map(|(part, _)| part).collect()
-            } else {
-                self.selection.faces().map(|(part, _)| part).collect()
-            };
-            if owners.len() == 1 {
-                for field in &plugin.manifest.fields {
-                    if field.kind == "body" {
-                        edit.feature.params[&field.key] = json!(owners.first().unwrap());
-                    }
-                }
-            }
-        }
-        if before != edit.feature.params {
-            edit.undo.push(before);
-            edit.redo.clear();
-            edit.changed = true;
-            self.schedule(ctx);
-        }
+        self.route_feature_selection(ctx);
     }
     fn sync_selection_from_editor(&mut self) {
-        let Some(edit) = &self.editor else { return };
-        let Some(plugin) = self.registry.plugins.get(&edit.feature.plugin) else {
-            return;
-        };
-        let scene = self.source_scene.as_ref().unwrap_or(&self.scene);
-        for field in &plugin.manifest.fields {
-            match field.kind.as_str() {
-                "body"
-                    if !plugin
-                        .manifest
-                        .fields
-                        .iter()
-                        .any(|f| matches!(f.kind.as_str(), "regions" | "edges" | "faces")) =>
-                {
-                    self.selection.retain(|t| !matches!(t, Target::Part(_)));
-                    if let Some(part) = edit
-                        .feature
-                        .params
-                        .get(&field.key)
-                        .and_then(Value::as_str)
-                        .filter(|s| !s.is_empty())
-                    {
-                        self.selection.add(Target::Part(part.into()));
-                    }
-                }
-                "regions" => {
-                    self.selection
-                        .retain(|t| !matches!(t, Target::Region { .. }));
-                    let sketch = edit
-                        .feature
-                        .params
-                        .get("sketch")
-                        .and_then(Value::as_str)
-                        .unwrap_or("");
-                    let explicit = edit
-                        .feature
-                        .params
-                        .get(&field.key)
-                        .and_then(Value::as_array);
-                    if let Some(regions) = scene.regions.get(sketch) {
-                        for r in regions {
-                            if explicit.map_or(r.legacy_selected, |a| {
-                                a.iter().any(|v| v.as_str() == Some(&r.key))
-                            }) {
-                                self.selection.add(Target::Region {
-                                    sketch: sketch.into(),
-                                    key: r.key.clone(),
-                                });
-                            }
-                        }
-                    }
-                }
-                "edges" | "faces" => {
-                    let edges = field.kind == "edges";
-                    self.selection.retain(|t| {
-                        if edges {
-                            !matches!(t, Target::Edge { .. })
-                        } else {
-                            !matches!(t, Target::Face { .. })
-                        }
-                    });
-                    if let Some(keys) = edit
-                        .feature
-                        .params
-                        .get(&field.key)
-                        .and_then(Value::as_array)
-                    {
-                        for key in keys.iter().filter_map(Value::as_str) {
-                            for mesh in &scene.meshes {
-                                let found = if edges {
-                                    mesh.edges.iter().any(|e| e.key == key)
-                                } else {
-                                    mesh.faces.iter().any(|f| f.key == key)
-                                };
-                                if found {
-                                    self.selection.add(if edges {
-                                        Target::Edge {
-                                            part: mesh.part.clone(),
-                                            key: key.into(),
-                                        }
-                                    } else {
-                                        Target::Face {
-                                            part: mesh.part.clone(),
-                                            key: key.into(),
-                                        }
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-                _ => (),
-            }
-        }
+        self.restore_feature_selection();
     }
     fn box_regions(
         &self,
@@ -1105,9 +1007,14 @@ impl CadApp {
     fn begin(&mut self, id: &str) {
         self.notice.clear();
         self.sketch_ui = SketchUi::default();
-        if self.editor.is_some() {
+        if self.editor.is_some() || self.rename_feature.is_some() {
             return;
         }
+        if self.work.busy() || self.pending_rebuild.is_some() {
+            self.pending_edit = Some(EditRequest::New(id.into()));
+            return;
+        }
+        let workspace = EditWorkspace::capture(self);
         let index = self
             .document
             .rollback
@@ -1216,18 +1123,17 @@ impl CadApp {
         } else {
             self.sketch_ui.cancel_gesture();
         }
+        let input_field = feature_inputs::seed(&mut f, self.selection.items(), &self.scene);
         let sketch = f.sketch();
         self.source_scene = Some(self.scene.clone());
-        if id == "extrude" || id == "revolve" {
-            self.camera.rotation = Camera::default().rotation;
-            self.fit_when_ready = true;
-        }
         self.editor = Some(Editor {
+            workspace,
             index,
             is_new: true,
             feature: f,
             sketch,
             changed: false,
+            input_field,
             undo: vec![],
             redo: vec![],
         });
@@ -1237,27 +1143,31 @@ impl CadApp {
         self.rebuild();
     }
     fn edit_feature(&mut self, index: usize) {
-        self.choosing_plane = false;
         self.notice.clear();
         self.sketch_ui = SketchUi::default();
-        if self.editor.is_some() {
+        if self.editor.is_some() || self.rename_feature.is_some() {
             return;
         }
         let Some(feature) = self.document.features.get(index).cloned() else {
             return;
         };
+        if self.work.busy() || self.pending_rebuild.is_some() {
+            self.pending_edit = Some(EditRequest::Existing(feature.id));
+            return;
+        }
+        let workspace = EditWorkspace::capture(self);
+        self.choosing_plane = false;
         let sketch = feature.sketch();
         self.source_scene = None;
         let align = sketch.is_some();
-        if feature.params.get("sketch").is_some() {
-            self.fit_when_ready = true;
-        }
         self.editor = Some(Editor {
+            workspace,
             index,
             is_new: false,
             feature,
             sketch,
             changed: false,
+            input_field: None,
             undo: vec![],
             redo: vec![],
         });
@@ -1269,31 +1179,22 @@ impl CadApp {
         self.rebuild();
     }
     fn finish_editor(&mut self, apply: bool) {
-        self.choosing_plane = false;
+        let Some(mut edit) = self.editor.take() else { return; };
         self.pending_accept = None;
         self.source_scene = None;
-        if let Some(mut edit) = self.editor.take() {
-            if apply {
-                edit.sync();
-                let before = self.document.clone();
-                if edit.is_new {
-                    self.document.allocate_id();
-                    self.document.features.insert(edit.index, edit.feature);
-                } else {
-                    self.document.features[edit.index] = edit.feature;
-                }
-                self.selected_feature = Some(edit.index);
-                self.selection.clear();
-                self.selection.add(Target::Feature(
-                    self.document.features[edit.index].id.clone(),
-                ));
-                self.document.rollback = None;
-                self.remember(before);
-            } else {
-                self.rebuild();
-            }
+        edit.sync();
+        let before = self.document.clone();
+        if apply {
+            edit.apply_to(&mut self.document);
+        }
+        edit.workspace.restore(self);
+        if apply {
+            self.selected_feature = Some(edit.index);
+            self.selection.clear();
+            self.selection.add(Target::Feature(self.document.features[edit.index].id.clone()));
         }
         self.sketch_ui.cancel_gesture();
+        if before == self.document { self.rebuild(); } else { self.remember(before); }
     }
     fn undo(&mut self, redo: bool) {
         if let Some(editor) = &mut self.editor {
@@ -1348,6 +1249,7 @@ impl CadApp {
         self.past.clear();
         self.future.clear();
         self.editor = None;
+        self.pending_edit = None;
         self.source_scene = None;
         self.selected_feature = None;
         self.selection.clear();
@@ -1477,10 +1379,7 @@ impl CadApp {
                     result,
                     source,
                 } => {
-                    if serial != self.serial && serial != u64::MAX {
-                        continue;
-                    }
-                    self.busy = false;
+                    if !self.work.finish_build(serial) { continue; }
                     if source.is_some() {
                         self.source_scene = source;
                     }
@@ -1519,7 +1418,7 @@ impl CadApp {
                     }
                 }
                 Response::Exported(result) => {
-                    self.busy = false;
+                    self.work.exports = self.work.exports.saturating_sub(1);
                     match result {
                         Ok(_) => self.notice = "Exported".into(),
                         Err(e) => self.last_error = Some(e),
@@ -1527,10 +1426,21 @@ impl CadApp {
                 }
             }
         }
+        if !self.work.busy() && self.pending_rebuild.is_none()
+            && let Some(request) = self.pending_edit.take() {
+            match request {
+                EditRequest::New(id) => self.begin(&id),
+                EditRequest::Existing(id) => {
+                    if let Some(index) = self.document.features.iter().position(|f| f.id == id) {
+                        self.edit_feature(index);
+                    }
+                }
+            }
+        }
     }
     fn start_feature(&mut self, id: &str) {
         if self.is_sketching() {
-            if self.busy || self.pending_rebuild.is_some() || self.last_error.is_some() {
+            if self.work.busy() || self.pending_rebuild.is_some() || self.last_error.is_some() {
                 return;
             }
             self.finish_editor(true);
@@ -1612,6 +1522,7 @@ impl CadApp {
             match command {
                 Command::ClearSelection if !sketching => self.clear_selection(ctx),
                 Command::Cancel => {
+                    self.pending_edit = None;
                     if self.select_other.take().is_none() && !sketching {
                         self.finish_editor(false);
                     }
@@ -1619,7 +1530,7 @@ impl CadApp {
                 }
                 Command::Accept | Command::AcceptAndRepeat if self.select_other.is_none() => {
                     if self.editor.is_some()
-                        && !self.busy
+                        && !self.work.busy()
                         && self.pending_rebuild.is_none()
                         && self.last_error.is_none()
                     {
@@ -1950,7 +1861,7 @@ impl CadApp {
                     if self.dirty() {
                         ui.label(RichText::new("●").color(rgb(self.settings.appearance.turquoise)));
                     }
-                    if self.busy {
+                    if self.work.busy() {
                         ui.add(egui::Spinner::new().size(14.));
                     }
                     if let Some(error) = &self.last_error {
@@ -2019,7 +1930,7 @@ impl CadApp {
                             }
                             if ui
                                 .add_enabled(
-                                    !self.busy
+                                    !self.work.busy()
                                         && self.pending_rebuild.is_none()
                                         && self.last_error.is_none(),
                                     egui::Button::new(
@@ -2152,7 +2063,8 @@ impl CadApp {
                             } else {
                                 ""
                             };
-                            let response = ui.add(
+                            let editing = self.editor.as_ref().is_some_and(|e| e.feature.id == f.id);
+                            let button =
                                 egui::Button::new(
                                     RichText::new(format!("{prefix}{}", f.name)).color(color),
                                 )
@@ -2160,8 +2072,13 @@ impl CadApp {
                                 .frame(false)
                                 .min_size(Vec2::new(ui.available_width(), 24.))
                                 .truncate()
-                                .sense(Sense::click_and_drag()),
-                            );
+                                .sense(Sense::click_and_drag());
+                            let button = if editing {
+                                button.fill(rgb(self.settings.appearance.purple).gamma_multiply(0.18))
+                                    .stroke(Stroke::new(1_f32, rgb(self.settings.appearance.purple).gamma_multiply(0.6)))
+                                    .frame(true)
+                            } else { button };
+                            let response = ui.add(button);
                             if let Some(e) = error {
                                 response.clone().on_hover_text(e);
                             } else if let Some(s) = status {
@@ -2203,7 +2120,7 @@ impl CadApp {
                                     open_edit = Some(index);
                                     ui.close();
                                 }
-                                if ui.button("Rename").clicked() {
+                                if ui.add_enabled(self.editor.is_none(), egui::Button::new("Rename")).clicked() {
                                     self.rename_feature = Some(index);
                                     self.rename_text = f.name.clone();
                                     ui.close();
@@ -2286,7 +2203,7 @@ impl CadApp {
                 ui.separator();
                 ui.horizontal(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("End").clicked() {
+                        if ui.add_enabled(self.editor.is_none(), egui::Button::new("End").small()).clicked() {
                             self.document.rollback = None;
                             self.rebuild();
                         }
@@ -2361,12 +2278,10 @@ impl CadApp {
 
     fn inspector(&mut self, ctx: &egui::Context) {
         if self.editor.is_none() {
+            self.inspector_rect = Rect::NOTHING;
             return;
         }
-        egui::SidePanel::right("properties")
-            .default_width(244.)
-            .width_range(220. ..=380.)
-            .show(ctx, |ui| {
+        self.inspector_rect = editor_overlay(ctx, rgb(self.settings.appearance.purple), |ui| {
                 if let Some(mut edit) = self.editor.take() {
                     edit.sync();
                     let before_params = edit.feature.params.clone();
@@ -2376,6 +2291,7 @@ impl CadApp {
                         .get(&edit.feature.plugin)
                         .map(|p| p.manifest.clone());
                     let mut changed = false;
+                    let mut input_changed = false;
                     let mut apply = false;
                     let mut cancel = false;
                     ui.horizontal(|ui| {
@@ -2384,7 +2300,8 @@ impl CadApp {
                             ui.set_max_width((ui.available_width() - reserved).max(40.));
                             ui.add(
                                 egui::Label::new(
-                                    RichText::new(&edit.feature.name).size(18.).strong(),
+                                    RichText::new(&edit.feature.name).size(18.).strong()
+                                        .color(rgb(self.settings.appearance.purple)),
                                 )
                                 .truncate(),
                             );
@@ -2406,6 +2323,7 @@ impl CadApp {
                             .max_height((ui.available_height() - 70.).max(150.))
                             .show(ui, |ui| {
                                 for field in &m.fields {
+                                    if !feature_inputs::visible(field, &edit.feature) { continue; }
                                     if (edit.feature.params.get("context_plane").is_some_and(|v|!v.is_null()) && matches!(field.key.as_str(),"plane"|"support")) || (edit.feature.params.get("context_up_to").is_some_and(|v|!v.is_null()) && matches!(field.key.as_str(),"depth"|"symmetric")) {continue;}
                                     if field.kind == "support"
                                         && edit
@@ -2423,20 +2341,39 @@ impl CadApp {
                                     {
                                         continue;
                                     }
-                                    if field.kind != "bool" {
+                                    if feature_inputs::selectable(&field.kind) {
+                                        let selected = feature_inputs::active_key(&edit, &self.registry) == Some(field.key.as_str());
+                                        if ui.selectable_label(selected, &field.label).on_hover_text("Select this input, then pick in the viewport").clicked() {
+                                            edit.input_field = Some(field.key.clone());
+                                            input_changed = true;
+                                        }
+                                    } else if field.kind != "bool" {
                                         ui.label(RichText::new(&field.label).small().color(MUTED));
                                     }
                                     let old_plane = edit.feature.params.get("plane").cloned();
                                     let old_sketch = edit.feature.params.get("sketch").cloned();
-                                    changed |= parameter_ui(
-                                        ui,
-                                        field,
-                                        &mut edit.feature.params,
-                                        &self.document,
-                                        edit.index,
-                                        &self.registry,
-                                        &self.scene,
-                                    );
+                                    let parameter = ui.scope(|ui| parameter_ui(
+                                        ui, field, &mut edit.feature.params, &self.document,
+                                        edit.index, &self.registry,
+                                        self.source_scene.as_ref().unwrap_or(&self.scene),
+                                    ));
+                                    changed |= parameter.inner;
+                                    if field.key == "target" && m.fields.iter().any(|f| f.key == "targets")
+                                        && let Some(source) = &self.source_scene
+                                        && ui.small_button("Multiple parts").clicked() {
+                                        let target = edit.feature.params["target"].as_str().filter(|s| !s.is_empty())
+                                            .or_else(|| source.meshes.last().map(|m| m.part.as_str()));
+                                        edit.feature.params["targets"] = json!(target.into_iter().collect::<Vec<_>>());
+                                        edit.feature.params["target"] = json!("");
+                                        edit.input_field = Some("targets".into());
+                                        changed = true;
+                                        input_changed = true;
+                                    }
+                                    if feature_inputs::selectable(&field.kind)
+                                        && (parameter.inner || (parameter.response.contains_pointer() && ui.input(|i| i.pointer.any_pressed()))) {
+                                        edit.input_field = Some(field.key.clone());
+                                        input_changed = true;
+                                    }
                                     if field.key == "plane"
                                         && old_plane != edit.feature.params.get("plane").cloned()
                                     {
@@ -2489,7 +2426,7 @@ impl CadApp {
                         }
                         apply = ui
                             .add_enabled(
-                                !self.busy
+                                !self.work.busy()
                                     && self.pending_rebuild.is_none()
                                     && self.last_error.is_none(),
                                 egui::Button::new(RichText::new("Apply").color(Color32::BLACK))
@@ -2508,10 +2445,8 @@ impl CadApp {
                         edit.sync();
                     }
                     self.editor = Some(edit);
-                    if changed {
-                        self.sync_selection_from_editor();
-                        self.schedule(ctx);
-                    }
+                    if changed || input_changed { self.sync_selection_from_editor(); }
+                    if changed { self.schedule(ctx); }
                     if apply {
                         self.finish_editor(true);
                     }
@@ -2555,7 +2490,7 @@ impl CadApp {
                     .and_then(|id| self.scene.sketches.get(id))
                     .map(|s| s.plane.clone());
 
-                if !self.busy && self.pending_rebuild.is_none() {
+                if !self.work.busy() && self.pending_rebuild.is_none() {
                     if self.fit_when_ready {
                         if self.context_picking() { self.camera.fit_with_rect(&display_scene, rect); }
                         else if self.editor.is_some()
@@ -2584,7 +2519,8 @@ impl CadApp {
                 let select_control =
                     Rect::from_min_size(rect.min + egui::vec2(8., 8.), egui::vec2(170., 28.));
                 let canvas_hover =
-                    pointer.is_some_and(|p| !controls.contains(p) && !select_control.contains(p));
+                    pointer.is_some_and(|p| !controls.contains(p) && !select_control.contains(p)
+                        && !(self.editor.is_some() && self.inspector_rect.contains(p)));
                 let orbiting = canvas_hover
                     && response.hovered()
                     && (!self.is_sketching() || self.choosing_plane || self.context_picking())
@@ -2651,6 +2587,7 @@ impl CadApp {
                     hover = targets.get(*index).cloned();
                 }
                 let selected = self.face_ids(&display_scene, self.selection.items());
+                let edited = self.edited_faces();
                 let hovered =
                     self.face_ids(&display_scene, &hover.clone().into_iter().collect::<Vec<_>>());
                 ui.painter().add(render::paint_callback(
@@ -2661,6 +2598,7 @@ impl CadApp {
                     self.render_revision,
                     render::View {
                         matrix: self.camera.matrix(rect),
+                        edited,
                         selected,
                         hovered,
                         selected_edges: self
@@ -2695,6 +2633,7 @@ impl CadApp {
                         crate::sketch_ui::paint_readonly(ui, sk, &projector, rect);
                     }
                 }
+                self.paint_edit_inputs(ui, rect);
                 self.paint_origin_planes(ui, rect, pointer);
                 if self.context_picking() {
                     if response.clicked() && canvas_hover && let Some(pos) = pointer { self.pick_context_reference(pos, rect); }
@@ -2768,7 +2707,7 @@ impl CadApp {
                         }
                     }
                 } else {
-                    if response.clicked() && canvas_hover {
+                    if response.clicked() && canvas_hover && !self.pick_sketch_axis(pointer.unwrap(), rect, ctx) {
                         if let Some(target) = candidates.first().cloned() {
                             self.toggle_target(target, ctx);
                         } else {
@@ -2876,7 +2815,8 @@ impl CadApp {
                             }
                         }
                     });
-                    self.paint_regions(ui, &pick_scene, rect, hover.as_ref());
+                    self.paint_feature_axis(ui, &pick_scene, rect);
+                self.paint_regions(ui, &pick_scene, rect, hover.as_ref());
                     if !self.selection.items().is_empty()
                         && let Some(pos) = pointer
                     {
@@ -3022,6 +2962,8 @@ impl CadApp {
             if self.is_sketching() {
                 for (name, tool) in [("Line  L", Tool::Line), ("Corner rectangle  G", Tool::Rectangle),
                     ("Center rectangle  R", Tool::CenterRectangle), ("Circle  C", Tool::Circle),
+                    ("Three-point arc  A", Tool::ThreePointArc), ("Center-point arc", Tool::Arc),
+                    ("Trim  M", Tool::Trim),
                     ("Dimension  D", Tool::Dimension), ("Select", Tool::Select)] {
                     entries.push((name.to_owned(), SearchAction::SketchTool(tool)));
                 }
@@ -3048,7 +2990,7 @@ impl CadApp {
                 entries.push((format!("Part: {}", mesh.name), SearchAction::Part(mesh.part.clone())));
             }
             let history_available = self.editor.is_none();
-            let feature_available = history_available || (self.is_sketching() && !self.busy && self.pending_rebuild.is_none() && self.last_error.is_none());
+            let feature_available = history_available || (self.is_sketching() && !self.work.busy() && self.pending_rebuild.is_none() && self.last_error.is_none());
             let export_available = history_available && !self.scene.meshes.is_empty() && self.scene.error.is_none();
             let available = |action: &SearchAction| match action {
                 SearchAction::Feature(_) => feature_available,
@@ -3262,8 +3204,11 @@ impl CadApp {
                             self.save_to(&path)
                         }
                     }
+                    FileAction::Export(_) if self.editor.is_some() => {
+                        Err("Finish the active feature before exporting".into())
+                    }
                     FileAction::Export(format) => {
-                        self.busy = true;
+                        self.work.exports += 1;
                         self.worker
                             .send
                             .send(Request::Export {
@@ -3429,7 +3374,7 @@ impl CadApp {
                 ui.label("Click to add or remove selections. Use the selection filter for faces, edges, parts or sketch regions. The ` key opens Select other. Shell removes selected faces. Pattern and mirror create separate parts.");
                 ui.separator();
                 ui.label("Save as .cadpart. STEP exports boundary geometry; STL exports a mesh in millimeters.");
-                ui.label(RichText::new("Arcs, splines, trim and FeatureScript are not implemented.").small().color(MUTED));
+                ui.label(RichText::new("Splines, offset, projected edges and FeatureScript are not implemented.").small().color(MUTED));
             });
         }
         if let Some(index) = self.rename_feature {
@@ -3480,6 +3425,23 @@ impl CadApp {
 if ui.button("Discard and close").clicked(){self.allow_close=true;ctx.send_viewport_cmd(egui::ViewportCommand::Close);}});});
         }
     }
+}
+
+fn editor_overlay(ctx: &egui::Context, accent: Color32, contents: impl FnOnce(&mut egui::Ui)) -> Rect {
+    let viewport = ctx.available_rect();
+    egui::Area::new(egui::Id::new("feature_editor_overlay"))
+        .order(egui::Order::Foreground)
+        .movable(false)
+        .fixed_pos(viewport.min + egui::vec2(10., 44.))
+        .default_size(egui::vec2(244., 180.))
+        .constrain_to(viewport)
+        .show(ctx, |ui| {
+            ui.set_width(244.);
+            ui.set_max_height((viewport.height() - 56.).max(180.));
+            egui::Frame::new().fill(PANEL).inner_margin(8.)
+                .stroke(Stroke::new(1_f32, accent.gamma_multiply(0.6)))
+                .show(ui, contents);
+        }).response.rect
 }
 
 impl eframe::App for CadApp {
@@ -3540,7 +3502,7 @@ impl eframe::App for CadApp {
         self.dialogs(ctx);
         self.settings_dialog(ctx);
         if let Some(repeat) = self.pending_accept {
-            if !self.busy && self.pending_rebuild.is_none() {
+            if !self.work.busy() && self.pending_rebuild.is_none() {
                 self.pending_accept = None;
                 if self.last_error.is_none() && self.editor.is_some() {
                     let id = self.editor.as_ref().unwrap().feature.plugin.clone();
@@ -3583,6 +3545,7 @@ fn parameter_ui(
         .entry(field.key.clone())
         .or_insert_with(|| field.default.clone());
     match field.kind.as_str() {
+        "bodies" | "profile_face" | "axis" => feature_inputs::input_ui(ui, field, value, scene),
         "regions" => {
             let before = value.clone();
             let regions = scene.regions.get(&sketch_reference);
@@ -3849,6 +3812,98 @@ fn parameter_ui(
 #[cfg(test)]
 mod save_tests {
     use super::*;
+    fn edit(document: &Document, index: usize, is_new: bool) -> Editor {
+        Editor {
+            workspace: EditWorkspace {
+                camera: Camera::default(), scene: Arc::new(Scene::default()),
+                hidden: BTreeSet::new(), hidden_sketches: BTreeSet::new(),
+                selected_plane: None, selected_feature: None, selection: vec![],
+                selection_filter: Filter::All, show_planes: true, show_sketches: false,
+            },
+            index, is_new, feature: document.features[index].clone(),
+            sketch: document.features[index].sketch(), changed: false,
+            input_field: None, undo: vec![], redo: vec![],
+        }
+    }
+    #[test]
+    fn export_completion_cannot_accept_an_unvalidated_edit_preview() {
+        let mut work = WorkState { build: Some(2), exports: 1 };
+        work.exports -= 1;
+        assert!(work.busy(), "Export must not finish a newer preview");
+        assert!(!work.finish_build(1), "An obsolete build must not finish the active preview");
+        assert!(work.busy());
+        assert!(work.finish_build(2));
+        assert!(!work.busy());
+        work.build = Some(3);
+        work.exports = 1;
+        assert!(work.finish_build(3));
+        assert!(work.busy(), "Build completion must not finish an export");
+    }
+    #[test]
+    fn history_edit_preview_and_commit_preserve_the_whole_document() {
+        let original = crate::model::demo();
+        let mut session = edit(&original, 0, false);
+        session.feature.name = "Edited outline".into();
+        let mut preview = original.clone();
+        session.apply_to(&mut preview);
+        preview.rollback = Some(session.index + 1);
+        assert_eq!(original.features.len(), preview.features.len());
+        assert_eq!(&original.features[1..], &preview.features[1..]);
+        assert_eq!(original.rollback, None, "Preview must not mutate the real history");
+        let mut committed = original.clone();
+        session.apply_to(&mut committed);
+        assert_eq!(committed.rollback, None);
+        assert_eq!(&committed.features[1..], &original.features[1..]);
+        let mut runtime = crate::engine::Runtime::new(Registry::builtin().unwrap());
+        let final_scene = runtime.evaluate(&committed).unwrap().scene;
+        assert!(final_scene.error.is_none(), "{:?}", final_scene.error);
+        assert_eq!(final_scene.meshes.len(), 1, "Downstream extrusion must return");
+        let mut manual = original.clone();
+        manual.rollback = Some(1);
+        session.apply_to(&mut manual);
+        assert_eq!(manual.rollback, Some(1), "Editing preserves a deliberate rollback");
+        session.is_new = true;
+        session.index = 1;
+        session.feature.id = format!("f{}", manual.next_id);
+        session.apply_to(&mut manual);
+        assert_eq!(manual.rollback, Some(2), "Insertion advances the manual bar");
+        assert_eq!(manual.features[2..], original.features[1..]);
+    }
+    #[test]
+    fn editor_overlay_does_not_resize_or_shift_the_model_view() {
+        for size in [egui::vec2(1024., 900.), egui::vec2(700., 1000.)] {
+            for editing in [false, true] {
+                let ctx = egui::Context::default();
+                let camera = Camera::default();
+                for _ in 0..3 {
+                    let _ = ctx.run(egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, size)),
+                        ..Default::default()
+                    }, |ctx| {
+                        egui::TopBottomPanel::top("tools").exact_height(60.).show(ctx, |_| {});
+                        egui::SidePanel::left("history").exact_width(188.).show(ctx, |_| {});
+                        let before = ctx.available_rect();
+                        let marker = camera.project([10., 20., 30.], before);
+                        if editing {
+                            let overlay = editor_overlay(ctx, ACCENT, |ui| {
+                                ui.label("Extrude");
+                                ui.label("Depth");
+                                ui.text_edit_singleline(&mut "10".to_owned());
+                                ui.button("Apply").clicked();
+                            });
+                            assert!(before.contains_rect(overlay), "The editor must stay over the viewport: {before:?} {overlay:?}");
+                        }
+                        assert_eq!(before, ctx.available_rect());
+                        egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| {
+                            let viewport = ui.available_rect_before_wrap();
+                            assert_eq!(viewport, before);
+                            assert!(camera.project([10., 20., 30.], viewport).distance(marker) < 0.001);
+                        });
+                    });
+                }
+            }
+        }
+    }
     #[test]
     fn extensionless_save_and_export_names_detect_the_existing_destination() {
         let directory = PathBuf::from("output").join(format!("dialog-target-{}", std::process::id()));

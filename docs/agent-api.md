@@ -50,6 +50,15 @@ Supported edits are:
 
 Parameters use their plugin's declared types. Numeric values can be numbers or expression strings. Dimensions, variables, and sketch entity values use expression strings. `set_param` cannot replace sketch geometry or feature metadata. Add a sketch through `add_feature` with a complete serialized `Sketch` in `params.geometry`. It contains `entities`, `constraints`, and `next_id`. Entity and constraint structures match `result.document` from inspect. `add_feature` also accepts its normal plane, offset, and support parameters.
 
+Fields with kind `bodies` take distinct persistent part IDs, not `@last`.
+Extrude and Revolve use an explicit `targets` scope for Add, Remove and Intersect;
+an empty scope is an error. `profile_face` is null or `{"part":"f2:0","face":"f2:end"}`.
+Revolve's `axis_ref` is null for its legacy sketch axis, or an origin, sketch entity
+or solid edge reference. Inspect the installed field schema and see
+[geometry controls](geometry-controls.md) for the exact shapes and compatibility.
+The agent validator checks these structures before regeneration and keeps the
+source file unchanged on failure.
+
 Fields with kind `sketches`, such as a loft's `profiles`, take an ordered array of up to 32 distinct earlier, unsuppressed sketch IDs. Change the array with `set_param`, including its previous array as the `before` guard. The feature then validates its required profile count and supported geometry.
 
 For example, change an existing width dimension without changing its references:

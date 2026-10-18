@@ -35,20 +35,35 @@ pub struct Plugin {
     ast: AST,
 }
 impl Plugin {
-    /// The bundled 1.1 Extrude adds an optional region input without changing
-    /// legacy whole-sketch semantics. Only these exact bundled packages match.
+    /// Additive builtin inputs preserve old region, profile and scope semantics.
+    /// Compatibility applies only to these exact bundled package identities.
     pub fn matches(&self, feature: &Feature) -> bool {
         (self.hash == feature.plugin_hash && self.manifest.version == feature.plugin_version)
             || (feature.plugin == "extrude"
-                && feature.plugin_version == "1.0.0"
-                && feature.plugin_hash == "b3447843f1693770"
+                && ((feature.plugin_version == "1.0.0"
+                    && feature.plugin_hash == "b3447843f1693770")
+                    || (feature.plugin_version == "1.1.0"
+                        && feature.plugin_hash == "094953e2178e0cde"))
                 && self.manifest.id == "extrude"
-                && self.manifest.version == "1.1.0"
+                && self.manifest.version == "1.2.0"
                 && self.hash
                     == source_hash(
                         &[
                             include_str!("../plugins/extrude.json"),
                             include_str!("../plugins/extrude.rhai"),
+                        ]
+                        .concat(),
+                    ))
+            || (feature.plugin == "revolve"
+                && feature.plugin_version == "1.0.0"
+                && feature.plugin_hash == "967fd7d645e4df99"
+                && self.manifest.id == "revolve"
+                && self.manifest.version == "1.1.0"
+                && self.hash
+                    == source_hash(
+                        &[
+                            include_str!("../plugins/revolve.json"),
+                            include_str!("../plugins/revolve.rhai"),
                         ]
                         .concat(),
                     ))
@@ -102,6 +117,10 @@ impl Registry {
             (
                 include_str!("../plugins/revolve.json"),
                 include_str!("../plugins/revolve.rhai"),
+            ),
+            (
+                include_str!("../plugins/boolean.json"),
+                include_str!("../plugins/boolean.rhai"),
             ),
             (
                 include_str!("../plugins/sweep.json"),

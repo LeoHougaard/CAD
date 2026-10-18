@@ -178,6 +178,27 @@ impl Sketch {
             construction: false,
         });
     }
+    /// Center and two endpoints, with an explicit orientation for major arcs.
+    pub fn add_arc(&mut self, center: [f64; 2], start: [f64; 2], end: [f64; 2], clockwise: bool) {
+        let id = self.allocate_id();
+        self.entities.push(Entity {
+            id,
+            kind: "arc".into(),
+            values: [
+                center[0],
+                center[1],
+                start[0],
+                start[1],
+                end[0],
+                end[1],
+                if clockwise { -1. } else { 1. },
+            ]
+            .into_iter()
+            .map(fmt)
+            .collect(),
+            construction: false,
+        });
+    }
     pub fn add_line(&mut self, a: [f64; 2], b: [f64; 2]) {
         let id = self.allocate_id();
         for entity in &self.entities {
@@ -346,6 +367,7 @@ pub fn demo() -> Document {
     cut.params["depth"] = json!("thickness");
     cut.params["reverse"] = json!(true);
     cut.params["target"] = json!("f2");
+    cut.params["targets"] = json!(["f2:0"]);
     d.features.push(cut);
     d
 }

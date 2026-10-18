@@ -8,6 +8,8 @@ The defaults follow [Onshape's keyboard map](https://cad.onshape.com/help/Conten
 | Corner rectangle | G |
 | Center rectangle | R |
 | Circle | C |
+| 3 point arc | A |
+| Trim | M |
 | Dimension | D |
 | Coincident | I |
 | Horizontal / vertical | H / V |
@@ -49,3 +51,5 @@ Press a tool's key again to exit it. Escape cancels the current gesture or tool.
 Selection follows [Onshape's toggle behavior](https://cad.onshape.com/help/Content/Home/selection.htm). Click entities to add them. Click a selected entity to remove it. Click empty space or press Space to clear. Turquoise marks selected geometry; purple marks the entity under the pointer.
 
 In sketches, drag from empty space left to right to select only enclosed curves. Drag right to left to select curves the box crosses. Hold Ctrl while dragging to subtract those curves from the selection. Individual rectangle edges can be selected. Construction geometry participates in sketch selection and constraints but does not add solid regions.
+
+A draws a three-point arc by start, end, then a point on its span. Center arc uses center, start, then end; its Clockwise option selects the opposite span. M removes the exact curve interval under the pointer. No intersection removes the entire curve. Trimming preserves valid surviving constraints and reports removed dimensions or endpoint references.

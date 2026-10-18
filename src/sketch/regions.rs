@@ -71,6 +71,31 @@ struct Source {
     key: String,
     curve: Curve,
     splits: Vec<(f64, String)>,
+    /// A bounded CCW interval on a circle; None denotes a complete circle.
+    arc: Option<(f64, f64)>,
+}
+impl Source {
+    fn parameter(&self, p: [f64; 2]) -> Option<f64> {
+        let t = self.curve.parameter(p);
+        if let Some((lo, hi)) = self.arc {
+            let t = lo + (t - lo).rem_euclid(TAU);
+            if (t - lo - TAU).abs() < EPS {
+                return Some(lo);
+            }
+            (t <= hi + EPS).then_some(t.clamp(lo, hi))
+        } else {
+            Some(t)
+        }
+    }
+    fn endpoint(&self, p: [f64; 2]) -> bool {
+        match (self.curve, self.arc) {
+            (Curve::Line { a, b }, _) => distance(a, p) < EPS || distance(b, p) < EPS,
+            (_, Some((lo, hi))) => {
+                distance(self.curve.at(lo), p) < EPS || distance(self.curve.at(hi), p) < EPS
+            }
+            _ => false,
+        }
+    }
 }
 #[derive(Clone, Debug)]
 struct Segment {
@@ -286,6 +311,21 @@ fn sources(sketch: &ResolvedSketch) -> Result<Vec<Source>> {
                     radius: e.values[2],
                 },
                 splits: vec![],
+                arc: None,
+            });
+        } else if let Some(arc) = e.arc() {
+            let lo = (arc.start + arc.sweep.min(0.)).rem_euclid(TAU);
+            let hi = lo + arc.sweep.abs();
+            let key = format!("a{}", e.id);
+            let (a, b) = if arc.sweep > 0. { (1, 2) } else { (2, 1) };
+            result.push(Source {
+                curve: Curve::Circle {
+                    center: arc.center,
+                    radius: arc.radius,
+                },
+                splits: vec![(lo, format!("{key}:{a}")), (hi, format!("{key}:{b}"))],
+                key,
+                arc: Some((lo, hi)),
             });
         } else {
             let ps = e.points();
@@ -299,6 +339,7 @@ fn sources(sketch: &ResolvedSketch) -> Result<Vec<Source>> {
                     format!("r{}.{i}", e.id)
                 };
                 result.push(Source {
+                    arc: None,
                     splits: vec![(0., format!("{key}:0")), (1., format!("{key}:1"))],
                     key,
                     curve: Curve::Line {
@@ -367,11 +408,6 @@ fn intersections(a: &Curve, b: &Curve) -> Result<Vec<[f64; 2]>> {
                 (-bb - discriminant.max(0.).sqrt()) / (2. * aa),
                 (-bb + discriminant.max(0.).sqrt()) / (2. * aa),
             ];
-            if discriminant.abs() <= threshold
-                && roots.iter().any(|t| (-EPS..=1. + EPS).contains(t))
-            {
-                return Err("Tangent sketch boundaries need a small separation or a shared trimmed endpoint".into());
-            }
             Ok(roots
                 .into_iter()
                 .filter(|t| (-EPS..=1. + EPS).contains(t))
@@ -396,9 +432,6 @@ fn intersections(a: &Curve, b: &Curve) -> Result<Vec<[f64; 2]>> {
             if d > r + s + EPS || d < (r - s).abs() - EPS {
                 return Ok(vec![]);
             }
-            if (d - r - s).abs() < EPS || (d - (r - s).abs()).abs() < EPS {
-                return Err("Tangent sketch circles need a small separation".into());
-            }
             if d < EPS {
                 return Ok(vec![]);
             }
@@ -411,6 +444,174 @@ fn intersections(a: &Curve, b: &Curve) -> Result<Vec<[f64; 2]>> {
             ])
         }
     }
+}
+
+fn source_intersections(a: &Source, b: &Source) -> Result<Vec<[f64; 2]>> {
+    let coincident = matches!((a.curve,b.curve), (Curve::Circle {center:p,radius:r}, Curve::Circle {center:q,radius:s}) if distance(p,q)<EPS && (r-s).abs()<EPS);
+    let points = if coincident {
+        let (Some((lo, hi)), Some((u, v))) = (a.arc, b.arc) else {
+            return Err("Duplicate circular sketch boundaries are ambiguous".into());
+        };
+        // Adjacent arcs on one circle are valid; overlapping spans are not.
+        let interior = |source: &Source, p| source.parameter(p).is_some() && !source.endpoint(p);
+        if [u, (u + v) / 2., v]
+            .into_iter()
+            .any(|t| interior(a, b.curve.at(t)))
+            || [lo, (lo + hi) / 2., hi]
+                .into_iter()
+                .any(|t| interior(b, a.curve.at(t)))
+        {
+            return Err("Overlapping circular sketch arcs are ambiguous".into());
+        }
+        vec![a.curve.at(lo), a.curve.at(hi), b.curve.at(u), b.curve.at(v)]
+    } else {
+        intersections(&a.curve, &b.curve)?
+    };
+    let mut result = Vec::new();
+    for p in points {
+        let (Some(u), Some(v)) = (a.parameter(p), b.parameter(p)) else {
+            continue;
+        };
+        if !coincident
+            && (matches!(a.curve, Curve::Circle { .. }) || matches!(b.curve, Curve::Circle { .. }))
+        {
+            let x = a.curve.tangent(u);
+            let y = b.curve.tangent(v);
+            if cross(x, y).abs() <= EPS * dot(x, x).sqrt() * dot(y, y).sqrt()
+                && !(a.endpoint(p) && b.endpoint(p))
+            {
+                return Err(
+                    "Tangent sketch boundaries must meet at shared trimmed endpoints".into(),
+                );
+            }
+        }
+        if !result.iter().any(|&q| distance(p, q) < EPS) {
+            result.push(p);
+        }
+    }
+    Ok(result)
+}
+
+#[derive(Clone, Debug)]
+pub struct TrimPiece {
+    pub kind: String,
+    pub values: Vec<f64>,
+    pub source_edge: usize,
+}
+
+/// Remove the interval under the pointer. Display sampling never defines cuts.
+pub fn trim_entity(
+    sketch: &ResolvedSketch,
+    entity: u64,
+    edge: usize,
+    point: [f64; 2],
+) -> Result<Vec<TrimPiece>> {
+    let original = sketch
+        .entities
+        .iter()
+        .find(|e| e.id == entity)
+        .ok_or("Trim entity is missing")?;
+    let mut all = sketch.clone();
+    for e in &mut all.entities {
+        e.construction = false;
+    }
+    let boundaries = sources(&all)?;
+    let key = match original.kind.as_str() {
+        "line" => format!("l{entity}"),
+        "rectangle" => format!("r{entity}.{edge}"),
+        "circle" => format!("c{entity}"),
+        "arc" => format!("a{entity}"),
+        _ => return Err("This curve cannot be trimmed".into()),
+    };
+    let target = boundaries
+        .iter()
+        .find(|s| s.key == key)
+        .ok_or("Trim edge is missing")?;
+    let mut cuts = Vec::new();
+    for other in boundaries.iter().filter(|s| s.key != key) {
+        for p in intersections(&target.curve, &other.curve)? {
+            if let (Some(t), Some(_)) = (target.parameter(p), other.parameter(p)) {
+                cuts.push(t);
+            }
+        }
+    }
+    cuts.sort_by(f64::total_cmp);
+    cuts.dedup_by(|a, b| (*a - *b).abs() < 1e-10);
+    let circle = matches!(target.curve, Curve::Circle { .. }) && target.arc.is_none();
+    let (lo, hi) = target
+        .arc
+        .unwrap_or(if circle { (0., TAU) } else { (0., 1.) });
+    let cursor = target.parameter(point).unwrap_or_else(|| {
+        if distance(point, target.curve.at(lo)) < distance(point, target.curve.at(hi)) {
+            lo
+        } else {
+            hi
+        }
+    });
+    let mut intervals = vec![];
+    if circle {
+        if cuts.len() >= 2 {
+            let index = cuts.partition_point(|&t| t <= cursor);
+            let start = cuts[(index + cuts.len() - 1) % cuts.len()];
+            let mut end = cuts[index % cuts.len()];
+            if end <= start {
+                end += TAU;
+            }
+            if end - start < TAU - 1e-10 {
+                intervals.push((end, start + TAU));
+            }
+        }
+    } else {
+        cuts.retain(|&t| t > lo + 1e-10 && t < hi - 1e-10);
+        let left = cuts.iter().copied().rfind(|&t| t <= cursor).unwrap_or(lo);
+        let right = cuts.iter().copied().find(|&t| t > cursor).unwrap_or(hi);
+        if left > lo + 1e-10 {
+            intervals.push((lo, left));
+        }
+        if right < hi - 1e-10 {
+            intervals.push((right, hi));
+        }
+    }
+    let mut result = vec![];
+    if original.kind == "rectangle" {
+        let points = original.points();
+        for (index, pair) in points.windows(2).enumerate().filter(|(i, _)| *i != edge) {
+            result.push(TrimPiece {
+                kind: "line".into(),
+                values: pair.iter().flatten().copied().collect(),
+                source_edge: index,
+            });
+        }
+    }
+    for (start, end) in intervals {
+        let (mut a, mut b) = (target.curve.at(start), target.curve.at(end));
+        if distance(a, b) < EPS {
+            continue;
+        }
+        let (kind, values) = match target.curve {
+            Curve::Line { .. } => ("line", vec![a[0], a[1], b[0], b[1]]),
+            Curve::Circle { center, .. } => {
+                let direction = if original.kind == "arc" {
+                    original.values[6]
+                } else {
+                    1.
+                };
+                if direction < 0. {
+                    std::mem::swap(&mut a, &mut b);
+                }
+                (
+                    "arc",
+                    vec![center[0], center[1], a[0], a[1], b[0], b[1], direction],
+                )
+            }
+        };
+        result.push(TrimPiece {
+            kind: kind.into(),
+            values,
+            source_edge: edge,
+        });
+    }
+    Ok(result)
 }
 
 #[derive(Clone)]
@@ -557,15 +758,15 @@ fn graph(sketch: &ResolvedSketch) -> Result<Graph> {
     let mut split_count = sources.iter().map(|s| s.splits.len()).sum::<usize>();
     for i in 0..sources.len() {
         for j in i + 1..sources.len() {
-            let points = intersections(&sources[i].curve, &sources[j].curve)?;
+            let points = source_intersections(&sources[i], &sources[j])?;
             split_count += points.len() * 2;
             if split_count > MAX_EDGES * 4 {
                 return Err("Sketch region subdivision exceeds the intersection limit".into());
             }
             for (branch, p) in points.into_iter().enumerate() {
                 let label = format!("x{}&{}#{branch}", sources[i].key, sources[j].key);
-                let a = sources[i].curve.parameter(p);
-                let b = sources[j].curve.parameter(p);
+                let a = sources[i].parameter(p).unwrap();
+                let b = sources[j].parameter(p).unwrap();
                 sources[i].splits.push((a, label.clone()));
                 sources[j].splits.push((b, label));
             }
@@ -595,7 +796,7 @@ fn graph(sketch: &ResolvedSketch) -> Result<Graph> {
                 cuts.push((*t, index))
             }
         }
-        let circle = matches!(source.curve, Curve::Circle { .. });
+        let circle = matches!(source.curve, Curve::Circle { .. }) && source.arc.is_none();
         let count = if circle {
             cuts.len()
         } else {
@@ -1043,4 +1244,146 @@ fn display_triangles(region: &ResolvedRegion) -> Result<Vec<[[f64; 2]; 3]>> {
             region.contains(center).then_some(tri)
         })
         .collect())
+}
+
+#[cfg(test)]
+mod arc_tests {
+    use super::*;
+    use crate::sketch::ResolvedEntity;
+    fn entity(id: u64, kind: &str, values: &[f64]) -> ResolvedEntity {
+        ResolvedEntity {
+            id,
+            kind: kind.into(),
+            values: values.to_vec(),
+            construction: false,
+            fixed: false,
+        }
+    }
+    fn sketch(entities: Vec<ResolvedEntity>) -> ResolvedSketch {
+        ResolvedSketch {
+            entities,
+            plane: Plane::named("Top", 0.),
+            dof: 0,
+        }
+    }
+    #[test]
+    fn trim_uses_exact_intersections_and_returns_all_remaining_pieces() {
+        let sk = sketch(vec![
+            entity(1, "line", &[0., 0., 10., 0.]),
+            entity(2, "line", &[2., -2., 2., 2.]),
+            entity(3, "line", &[8., -2., 8., 2.]),
+        ]);
+        let pieces = trim_entity(&sk, 1, 0, [5., 0.]).unwrap();
+        assert_eq!(pieces.len(), 2);
+        assert_eq!(pieces[0].values, vec![0., 0., 2., 0.]);
+        assert_eq!(pieces[1].values, vec![8., 0., 10., 0.]);
+        let sk = sketch(vec![
+            entity(1, "circle", &[0., 0., 5.]),
+            entity(2, "line", &[-6., 0., 6., 0.]),
+        ]);
+        let pieces = trim_entity(&sk, 1, 0, [0., 5.]).unwrap();
+        assert_eq!(pieces.len(), 1);
+        assert_eq!(pieces[0].kind, "arc");
+        let arc = super::super::arc_geometry(&pieces[0].values).unwrap();
+        assert!((arc.sweep - std::f64::consts::PI).abs() < 1e-12);
+        assert!(arc.start.sin().abs() < 1e-12);
+        assert!(arc.start.cos() < 0.);
+    }
+    #[test]
+    fn trim_preserves_clockwise_orientation_and_other_rectangle_sides() {
+        let sk = sketch(vec![
+            entity(1, "arc", &[0., 0., 5., 0., 0., 5., -1.]),
+            entity(2, "line", &[0., -6., 0., 6.]),
+        ]);
+        let pieces = trim_entity(&sk, 1, 0, [-5., 0.]).unwrap();
+        assert_eq!(pieces.len(), 1);
+        let arc = super::super::arc_geometry(&pieces[0].values).unwrap();
+        assert!((arc.sweep + std::f64::consts::FRAC_PI_2).abs() < 1e-12);
+        let sk = sketch(vec![
+            entity(1, "rectangle", &[0., 0., 10., 10.]),
+            entity(2, "line", &[5., -5., 5., 15.]),
+        ]);
+        let pieces = trim_entity(&sk, 1, 0, [2., 0.]).unwrap();
+        assert_eq!(pieces.len(), 4);
+        assert_eq!(pieces.iter().filter(|p| p.source_edge != 0).count(), 3);
+        assert!(
+            pieces
+                .iter()
+                .any(|p| p.source_edge == 0 && p.values == vec![5., 0., 10., 0.])
+        );
+        assert!(
+            trim_entity(
+                &sketch(vec![entity(1, "circle", &[0., 0., 5.])]),
+                1,
+                0,
+                [0., 5.]
+            )
+            .unwrap()
+            .is_empty()
+        );
+    }
+    #[test]
+    fn bounded_semicircle_is_exact_and_clockwise_selects_the_other_half() {
+        for (direction, sign) in [(1., 1.), (-1., -1.)] {
+            let sk = sketch(vec![
+                entity(1, "arc", &[0., 0., 5., 0., -5., 0., direction]),
+                entity(2, "line", &[-5., 0., 5., 0.]),
+            ]);
+            let cells = regions(&sk).unwrap();
+            assert_eq!(cells.len(), 1);
+            assert!((cells[0].boundary.area() - std::f64::consts::PI * 12.5).abs() < 1e-9);
+            assert!(cells[0].contains([0., sign * 2.]));
+            assert!(!cells[0].contains([0., -sign * 2.]));
+            let mut topo = Topology::new();
+            let faces = faces_for_regions(&mut topo, &sk, &[]).unwrap();
+            assert_eq!(faces.len(), 1);
+            assert!(
+                cells[0]
+                    .boundary
+                    .segments
+                    .iter()
+                    .any(|e| matches!(e.curve, Curve::Circle { .. }))
+            );
+        }
+    }
+    #[test]
+    fn tangent_arc_line_endpoints_make_an_exact_stadium() {
+        let sk = sketch(vec![
+            entity(1, "arc", &[-10., 0., -10., 5., -10., -5., 1.]),
+            entity(2, "line", &[-10., -5., 10., -5.]),
+            entity(3, "arc", &[10., 0., 10., -5., 10., 5., 1.]),
+            entity(4, "line", &[10., 5., -10., 5.]),
+        ]);
+        let cells = regions(&sk).unwrap();
+        assert_eq!(cells.len(), 1);
+        assert!((cells[0].boundary.area() - (200. + std::f64::consts::PI * 25.)).abs() < 1e-8);
+        for p in [[-14., 0.], [14., 0.], [0., 4.]] {
+            assert!(cells[0].contains(p));
+        }
+        assert!(!cells[0].contains([14., 4.]));
+    }
+    #[test]
+    fn complementary_arcs_close_one_circle_and_overlaps_reject() {
+        let mut sk = sketch(vec![
+            entity(1, "arc", &[0., 0., 5., 0., -5., 0., 1.]),
+            entity(2, "arc", &[0., 0., -5., 0., 5., 0., 1.]),
+        ]);
+        let cells = regions(&sk).unwrap();
+        assert_eq!(cells.len(), 1);
+        assert!((cells[0].boundary.area() - std::f64::consts::PI * 25.).abs() < 1e-9);
+        sk.entities[1].values = sk.entities[0].values.clone();
+        assert!(regions(&sk).unwrap_err().contains("Overlapping"));
+    }
+    #[test]
+    fn off_span_intersections_do_not_split_an_arc() {
+        let sk = sketch(vec![
+            entity(1, "arc", &[0., 0., 5., 0., -5., 0., 1.]),
+            entity(2, "line", &[-5., 0., 5., 0.]),
+            entity(3, "line", &[-8., -2., 8., -2.]),
+        ]);
+        let cells = regions(&sk).unwrap();
+        assert_eq!(cells.len(), 1);
+        assert!((cells[0].boundary.area() - std::f64::consts::PI * 12.5).abs() < 1e-9);
+        assert_eq!(cells[0].boundary.segments.len(), 2);
+    }
 }

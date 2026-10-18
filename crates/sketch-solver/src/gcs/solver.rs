@@ -179,6 +179,80 @@ where
     }
 }
 
+/// Project temporary drag requests into the hard system's null space. Every
+/// accepted step is rebuilt against the original constraints, so an impossible
+/// mouse position never relaxes a dimension or makes a sketch fully constrained.
+#[allow(clippy::too_many_arguments)]
+pub fn move_in_nullspace<F, G, H, I>(
+    params: &mut [f64],
+    residuals: &F,
+    jacobian: &G,
+    targets: &H,
+    target_jacobian: &I,
+    m: usize,
+    k: usize,
+    tolerance: f64,
+) where
+    F: Fn(&[f64]) -> Vec<f64>,
+    G: Fn(&[f64]) -> Vec<f64>,
+    H: Fn(&[f64]) -> Vec<f64>,
+    I: Fn(&[f64]) -> Vec<f64>,
+{
+    let n = params.len();
+    if n == 0 || k == 0 {
+        return;
+    }
+    let cost = |p: &[f64]| targets(p).iter().map(|v| v * v).sum::<f64>();
+    for _ in 0..24 {
+        let current = cost(params);
+        if current < tolerance * tolerance {
+            break;
+        }
+        let hard = jacobian(params);
+        let mut factor = hard.clone();
+        let qr = QrResult::factorize(&mut factor, m, n);
+        let mut projected = target_jacobian(params);
+        for row in projected.chunks_exact_mut(n) {
+            let scale = row.iter().map(|v| v * v).sum::<f64>().sqrt().max(1.);
+            let along = hard
+                .chunks_exact(n)
+                .map(|r| r.iter().zip(row.iter()).map(|(a, b)| a * b).sum())
+                .collect::<Vec<_>>();
+            let constrained = qr.solve_least_squares(&along);
+            for (value, correction) in row.iter_mut().zip(constrained) {
+                *value -= correction;
+                if value.abs() < 1e-10 * scale {
+                    *value = 0.;
+                }
+            }
+        }
+        let soft = QrResult::factorize(&mut projected, k, n);
+        let step =
+            soft.solve_least_squares(&targets(params).iter().map(|v| -v).collect::<Vec<_>>());
+        if step.iter().map(|v| v * v).sum::<f64>() < tolerance * tolerance {
+            break;
+        }
+        let mut accepted = false;
+        for backtrack in 0..10 {
+            let scale = 0.5_f64.powi(backtrack);
+            let mut trial = params
+                .iter()
+                .zip(&step)
+                .map(|(p, d)| p + scale * d)
+                .collect::<Vec<_>>();
+            let restored = solve_dogleg(&mut trial, residuals, jacobian, m, 50, tolerance);
+            if restored.converged && cost(&trial) < current - (1e-12 * current).max(1e-16) {
+                params.copy_from_slice(&trial);
+                accepted = true;
+                break;
+            }
+        }
+        if !accepted {
+            break;
+        }
+    }
+}
+
 /// Compute the DogLeg step: choose GN, SD, or a blend based on trust radius.
 fn dogleg_step(h_gn: &[f64], h_sd: &[f64], delta: f64) -> Vec<f64> {
     let gn_norm = h_gn.iter().map(|&v| v * v).sum::<f64>().sqrt();

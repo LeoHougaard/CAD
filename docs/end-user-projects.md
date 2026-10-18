@@ -43,17 +43,19 @@ unsupported here; this example is a different complete handle design. Threads,
 helical sweeps, and guided/spline lofts remain outside these project scopes.
 
 Three first attempts exposed kernel failures. Their unsuppressed documents are
-preserved in [tests/fixtures/project-rejections](../tests/fixtures/project-rejections)
-and tested as explicit rejections that retain the previous precise solid.
+preserved in [tests/fixtures/project-rejections](../tests/fixtures/project-rejections).
+The shared chamfer fix now passes the original cable-comb ordering, including an
+upstream width edit, closed topology and analytical volume. The other two remain
+explicit rejections that retain the previous precise solid.
 
 | Rejected workflow | Observed result | Completed project workflow |
 | --- | --- | --- |
 | Drill enclosure boss centers after fusing annular bosses into the shell floor | Boolean requires a mesh approximation, so the operation is rejected | Drill the floor first, then add annular bosses above it; final geometry is unchanged |
 | Bore through a fused circular loft and flange | Boolean requires a mesh approximation, so the operation is rejected | Revolve the complete hollow radial section, then drill flange bolts; the two conical sections and axial passage are explicit in the section |
-| Chamfer the comb's long back edge after making the channel and mounting cutouts | Result has two boundary edges and is rejected as an open shell | Chamfer the uncut blank first, then make the independent cutouts; final geometry is unchanged |
+| Chamfer the comb's long back edge after making the channel and mounting cutouts | Fixed by preserving inner wires in the shared exact setback operation | Both original and alternative orders pass |
 
 The successful alternatives are saved as the examples. Failed features are not
-suppressed in those projects. These failures remain material limits for designs
+suppressed in those projects. The two Boolean failures remain material limits for designs
 that require the original feature ordering.
 
 ## Reproduce verification

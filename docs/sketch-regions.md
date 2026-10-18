@@ -6,7 +6,7 @@ removes their shared internal boundary before extrusion. Disjoint selections
 produce separate parts for a New operation.
 
 This follows Onshape's [Faces and sketch regions selection workflow](https://cad.onshape.com/help/Content/PartStudio/extrude.htm).
-It covers solid extrusion of the line, rectangle, and circle tools available here.
+It covers solid extrusion of the line, rectangle, circle and bounded arc tools available here.
 
 Each enclosed cell is selectable, including the disc inside an annulus. A circle
 inside another circle therefore gives an annulus and an inner disc. Crossing
@@ -16,11 +16,11 @@ region. Open line tails do not create regions.
 
 Circle intersections and the resulting boundaries remain analytic circle arcs.
 Display polylines and fill triangles are never used to build solid geometry.
-Coincident circles and tangent curve contacts are rejected with a feature error.
+Overlapping coincident curves and interior tangent contacts are rejected with a feature error. Shared tangent line/arc endpoints may form closed profiles.
 The current subdivision limit is 2,000 input boundary curves, 8,192 edges, and a
 bounded number of intersection records.
 
-The Extrude plugin is version 1.1.0. Its `regions` parameter is either `null` for
+The Extrude plugin is version 1.2.0. Its `regions` parameter is either `null` for
 whole-sketch selection or an array of region identity strings. An empty array is
 an explicit empty selection and cannot be applied. Missing parameters in older
 documents retain whole-sketch behavior, including the previous alternating-hole

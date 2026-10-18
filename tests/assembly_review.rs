@@ -262,3 +262,29 @@ fn linked_source_inspection_and_reload_use_assembly_directory() {
         "linked.cadpart"
     );
 }
+
+#[test]
+fn assembly_transforms_exact_edge_axes_with_the_display_geometry() {
+    let r = Registry::builtin().unwrap();
+    let document = block(&r, "5");
+    let mut runtime = cad::engine::Runtime::new(r);
+    let evaluation = runtime.evaluate(&document).unwrap();
+    let original = &evaluation.scene.meshes[0];
+    let mut pose = Transform::from_euler_degrees([31., 52., 90.]);
+    pose.translation = [17., -9., 23.];
+    let displayed = transform_mesh(original, &pose);
+    let mut checked = 0;
+    for (before, after) in original.edges.iter().zip(&displayed.edges) {
+        if let Some((point, direction)) = before.axis {
+            let (actual_point, actual_direction) = after.axis.unwrap();
+            for (actual, expected) in actual_point.into_iter().zip(pose.point(point)) {
+                assert!((actual - expected).abs() < 1e-10);
+            }
+            for (actual, expected) in actual_direction.into_iter().zip(pose.vector(direction)) {
+                assert!((actual - expected).abs() < 1e-10);
+            }
+            checked += 1;
+        }
+    }
+    assert_eq!(checked, 12);
+}

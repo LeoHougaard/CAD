@@ -89,6 +89,7 @@ fn add_cut(doc: &mut Document) {
     f.params["sketch"] = json!("f3");
     f.params["mode"] = json!("Remove");
     f.params["target"] = json!("f2:0");
+    f.params["targets"] = json!(["f2:0"]);
     f.params["depth"] = json!("1*inch");
     f.params["reverse"] = json!(true);
     doc.features.push(f);
@@ -111,6 +112,7 @@ fn add_boss(doc: &mut Document) {
     f.params["sketch"] = json!("f5");
     f.params["mode"] = json!("Add");
     f.params["target"] = json!("f2:0");
+    f.params["targets"] = json!(["f2:0"]);
     f.params["depth"] = json!("1*inch");
     doc.features.push(f);
 }
@@ -143,6 +145,7 @@ fn circle_feature(
     f.params["sketch"] = json!(sketch_id);
     f.params["mode"] = json!(mode);
     f.params["target"] = json!("f2:0");
+    f.params["targets"] = json!(["f2:0"]);
     f.params["depth"] = json!(depth);
     f.params["reverse"] = json!(true);
     doc.features.push(f);
@@ -411,7 +414,7 @@ fn jourden_holes_and_whole_circle_reorder() {
 }
 
 #[test]
-fn attachment_rejects_opposing_planes_missing_faces_and_missing_anchors() {
+fn attachment_uses_its_named_part_and_rejects_missing_faces_and_anchors() {
     let registry = Registry::builtin().unwrap();
     let mut doc = Document::default();
     for offset in [0., -10.] {
@@ -432,14 +435,12 @@ fn attachment_rejects_opposing_planes_missing_faces_and_missing_anchors() {
     doc.features.push(f);
     let mut runtime = Runtime::new(registry);
     let opposed = runtime.evaluate(&doc).unwrap();
-    assert!(
-        opposed
-            .scene
-            .error
-            .as_ref()
-            .unwrap()
-            .contains("conflicting orientation")
-    );
+    assert!(opposed.scene.error.is_none(), "{:?}", opposed.scene.error);
+    let source_plane = opposed.scene.meshes.iter().find(|m| m.part == "f2:0").unwrap()
+        .faces.iter().find(|f| f.key == "f2:start").unwrap().plane.as_ref().unwrap();
+    assert_eq!(opposed.scene.sketches["f5"].plane.normal, source_plane.normal,
+        "An unrelated opposing coplanar part must not replace the named support");
+    assert_eq!(opposed.scene.sketches["f5"].plane.origin, [0., 0., 0.]);
     doc.features[3].params["depth"] = json!("5");
     let single = runtime.evaluate(&doc).unwrap();
     assert!(single.scene.error.is_none(), "{:?}", single.scene.statuses);

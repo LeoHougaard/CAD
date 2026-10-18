@@ -241,7 +241,7 @@ impl CadApp {
     }
     pub(super) fn assembly_workspace_ui(&mut self, ctx: &egui::Context) {
         self.ensure_assembly(ctx);
-        let ready = !self.busy && self.editor.is_none() && self.scene.error.is_none();
+        let ready = !self.work.busy() && self.editor.is_none() && self.scene.error.is_none();
         let actions = self.assembly_workspace.as_mut().unwrap().show(
             ctx,
             Host {
@@ -271,7 +271,7 @@ impl CadApp {
             .as_ref()
             .is_some_and(AssemblyUi::busy);
         let valid = !busy
-            && !self.busy
+            && !self.work.busy()
             && self.pending_rebuild.is_none()
             && self.editor.is_none()
             && self.last_error.is_none();
@@ -303,7 +303,7 @@ impl CadApp {
     }
     pub(super) fn commit_context(&mut self, save_after: bool) {
         if self.editor.is_some()
-            || self.busy
+            || self.work.busy()
             || self.pending_rebuild.is_some()
             || self.last_error.is_some()
         {

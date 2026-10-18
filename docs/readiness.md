@@ -35,3 +35,37 @@ Pending entries are updated from results, not from a successful compile.
 The selection baseline was rebuilt from a matching source fingerprint on Windows and Pixel. The initial full Pixel release run passed 188 tests; the final selection-focused run passed 59. These runs precede settings and assemblies and do not validate those later additions. [Native evidence](../output/selection-pixel-verification.json) records the hashes and individual checks.
 
 With the 29-feature housing open, the process used 122,984 KiB RSS and no swap. It accumulated zero CPU seconds during a 10.002-second idle sample. The graphics server is excluded. Physical SpaceMouse feel still needs the user's feedback because automated input cannot reproduce moving the device.
+
+## Interaction regression pass
+
+The starting point is `f341bb3`, with 254 passing checks on Windows and native Pixel Linux and passing CI on both systems. User testing still exposed basic workflow failures. This pass measures improvements against those workflows, including related cases, rather than treating the existing test count as readiness.
+
+| Shared area | Regression set | Acceptance |
+| --- | --- | --- |
+| Sketch solving | Redundant dimensions, free rectangles, rigid joined line chains, multiple selected entities, constrained circle/arc dragging | Minimum necessary motion, hard constraints retained, no permanent drag constraints, unrelated geometry unchanged, save/reopen agrees with the display |
+| Sketch curves | Center and three-point arcs, CW/CCW/major spans, tangency, construction, trimming lines/circles/arcs/rectangles | Exact curves, stable editable dimensions, transactional trim with valid surviving references, closed profiles extrude to analytical volume |
+| Feature inputs | Boolean modes and keep-tools; separate scopes; region/face profiles; sketch, origin and solid axes | Only the active input changes; preview and saved feature agree; unsupported references preserve the old model |
+| Camera and editing | Open/edit/cancel old and new features in landscape/portrait | Editor overlays the viewport; model position/scale stay fixed; history, affected result and input geometry visibly identify the edit |
+| Reference planes | Zoom/fit/orbit all origin planes from both sides | Fixed 100 by 100 mm model-space footprint, same hit bounds, readable projected labels |
+| Geometry | Planar and curved Boolean examples, plate with through-hole, one/multiple edge blends, unrelated coplanar parts | Closed exact B-reps, analytical measures and independent STEP imports; no silent mesh fallback or reference reassignment |
+
+Each final native run must use the same frozen source fingerprint as the shipping binaries. The Pixel owns GUI verification; Windows interaction is limited to preserving the old session and handing over the new build. Remaining unsupported sketch tools and kernel cases must be listed explicitly after verification.
+
+### Shared edit lifecycle
+
+An editor owns a snapshot of its surrounding workspace. All features use the same
+preview, commit and cancel path. Preview applies the same feature replacement as
+commit to a cloned document, then limits evaluation to the edited feature. It
+never removes later feature definitions or mutates the saved rollback bar.
+Ending the session restores camera, visibility, display flags and selection
+filter, and returns the full scene while regeneration runs. Cancel restores the
+previous selection; commit selects the edited feature. Committing an edit keeps
+an existing manual rollback bar; inserting at that bar advances it one feature.
+Even accepting an unchanged feature rebuilds the surrounding history.
+
+Feature selection has one active manifest input. Its values and missing references
+belong to the feature, while viewport selection is only that input's current
+view. Switching inputs restores that input's values rather than copying the same
+selection into every compatible field. Extrude and Revolve share profile, axis
+and operation-scope resolution. Geometry operations preserve part identities and
+source provenance so later tools refer to the same analytical geometry.

@@ -1479,6 +1479,7 @@ impl AssemblyUi {
                     self.revision,
                     render::View {
                         matrix: camera.matrix(rect),
+                        edited: Vec::new(),
                         selected: face_ids(&self.scene, &self.selection),
                         hovered: face_ids(&self.scene, &hovered),
                         selected_edges: self

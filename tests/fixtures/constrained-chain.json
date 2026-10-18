@@ -1,0 +1,123 @@
+{
+  "entities": [
+    {
+      "id": 1,
+      "kind": "line",
+      "values": [
+        "-20",
+        "-10",
+        "20",
+        "-10"
+      ],
+      "construction": false
+    },
+    {
+      "id": 2,
+      "kind": "line",
+      "values": [
+        "20",
+        "-10",
+        "20",
+        "10"
+      ],
+      "construction": false
+    },
+    {
+      "id": 3,
+      "kind": "line",
+      "values": [
+        "20",
+        "10",
+        "-20",
+        "10"
+      ],
+      "construction": false
+    },
+    {
+      "id": 4,
+      "kind": "line",
+      "values": [
+        "-20",
+        "10",
+        "-20",
+        "-10"
+      ],
+      "construction": false
+    },
+    {
+      "id": 5,
+      "kind": "circle",
+      "values": [
+        "50",
+        "20",
+        "6"
+      ],
+      "construction": false
+    }
+  ],
+  "constraints": [
+    {
+      "kind": "Coincident",
+      "a": 1,
+      "b": 2,
+      "points": [
+        1,
+        0
+      ]
+    },
+    {
+      "kind": "Coincident",
+      "a": 2,
+      "b": 3,
+      "points": [
+        1,
+        0
+      ]
+    },
+    {
+      "kind": "Coincident",
+      "a": 3,
+      "b": 4,
+      "points": [
+        1,
+        0
+      ]
+    },
+    {
+      "kind": "Coincident",
+      "a": 4,
+      "b": 1,
+      "points": [
+        1,
+        0
+      ]
+    },
+    {
+      "kind": "Horizontal",
+      "a": 1
+    },
+    {
+      "kind": "Horizontal",
+      "a": 3
+    },
+    {
+      "kind": "Vertical",
+      "a": 2
+    },
+    {
+      "kind": "Vertical",
+      "a": 4
+    },
+    {
+      "kind": "Length",
+      "a": 1,
+      "value": "40"
+    },
+    {
+      "kind": "Length",
+      "a": 2,
+      "value": "20"
+    }
+  ],
+  "next_id": 5
+}

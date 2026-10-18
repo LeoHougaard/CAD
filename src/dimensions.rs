@@ -42,13 +42,10 @@ pub fn point(sk: &ResolvedSketch, id: u64, index: usize) -> Result<[f64; 2]> {
         .iter()
         .find(|e| e.id == id)
         .ok_or("Selected entity is missing")?;
-    let v = &e.values;
-    match e.kind.as_str() {
-        "circle" if index == 0 => Ok([v[0], v[1]]),
-        "rectangle" if index < 4 => Ok(e.points()[index]),
-        "line" if index < 2 => Ok([v[index * 2], v[index * 2 + 1]]),
-        _ => Err("Selected point is missing".into()),
-    }
+    e.control_points()
+        .get(index)
+        .copied()
+        .ok_or("Selected point is missing".into())
 }
 pub fn line(sk: &ResolvedSketch, id: u64, index: usize) -> Result<[[f64; 2]; 2]> {
     let e = sk
@@ -75,6 +72,8 @@ pub fn is_dimension(kind: &str) -> bool {
             | "DistanceY"
             | "X"
             | "Y"
+            | "StartX"
+            | "StartY"
             | "EndX"
             | "EndY"
             | "Angle"
@@ -94,14 +93,23 @@ pub fn measure(sk: &ResolvedSketch, c: &SketchConstraint) -> Result<f64> {
             let e = sk
                 .entities
                 .iter()
-                .find(|e| e.id == c.a && e.kind == "circle")
+                .find(|e| e.id == c.a && matches!(e.kind.as_str(), "circle" | "arc"))
                 .ok_or("Circle is missing")?;
-            Ok(e.values[2] * if c.kind == "Diameter" { 2. } else { 1. })
+            let radius = e.arc().map_or(e.values[2], |a| a.radius);
+            Ok(radius * if c.kind == "Diameter" { 2. } else { 1. })
         }
         "X" => Ok(p()?[0]),
         "Y" => Ok(p()?[1]),
-        "EndX" => Ok(point(sk, c.a, 1)?[0]),
-        "EndY" => Ok(point(sk, c.a, 1)?[1]),
+        "StartX" | "StartY" | "EndX" | "EndY" => {
+            let index = if c.kind.starts_with("End")
+                && sk.entities.iter().any(|e| e.id == c.a && e.kind == "arc")
+            {
+                2
+            } else {
+                1
+            };
+            Ok(point(sk, c.a, index)?[usize::from(c.kind.ends_with('Y'))])
+        }
         "Width" | "Height" => {
             let e = sk
                 .entities
@@ -141,12 +149,16 @@ fn label_anchor(sk: &ResolvedSketch, c: &SketchConstraint) -> [f64; 2] {
             .map(|l| midpoint(l[0], l[1]))
             .unwrap_or(a),
         "Radius" | "Diameter" => point(sk, c.a, 0).unwrap_or(a),
-        "X" | "Y" | "EndX" | "EndY" => midpoint(
+        "X" | "Y" | "StartX" | "StartY" | "EndX" | "EndY" => midpoint(
             [0., 0.],
             point(
                 sk,
                 c.a,
-                if c.kind.starts_with("End") {
+                if c.kind.starts_with("End")
+                    && sk.entities.iter().any(|e| e.id == c.a && e.kind == "arc")
+                {
+                    2
+                } else if c.kind.starts_with("End") || c.kind.starts_with("Start") {
                     1
                 } else {
                     c.points[0]
@@ -200,6 +212,7 @@ pub fn infer(
         (Sub::Edge(_), None) => {
             c.kind = match kind(a) {
                 "circle" => "Diameter",
+                "arc" => "Radius",
                 "rectangle" => {
                     if a.index() % 2 == 0 {
                         "Width"
@@ -231,11 +244,15 @@ pub fn infer(
             }
         }
         (Sub::Edge(_), Some(b)) if matches!(b.sub, Sub::Edge(_)) => {
-            if kind(a) == "circle" && kind(b) == "circle" {
+            if matches!(kind(a), "circle" | "arc") && matches!(kind(b), "circle" | "arc") {
                 c.kind = "Distance".into();
                 c.points = [0, 0];
-            } else if kind(a) == "circle" || kind(b) == "circle" {
-                let (circle, edge) = if kind(a) == "circle" { (a, b) } else { (b, a) };
+            } else if matches!(kind(a), "circle" | "arc") || matches!(kind(b), "circle" | "arc") {
+                let (circle, edge) = if matches!(kind(a), "circle" | "arc") {
+                    (a, b)
+                } else {
+                    (b, a)
+                };
                 c.kind = "PointLineDistance".into();
                 c.a = circle.entity;
                 c.b = edge.entity;
@@ -266,7 +283,7 @@ pub fn infer(
             c.a = p.entity;
             c.b = e.entity;
             c.points = [p.index(), e.index()];
-            if kind(e) == "circle" {
+            if matches!(kind(e), "circle" | "arc") {
                 c.kind = "Distance".into();
                 c.points[1] = 0;
             } else {

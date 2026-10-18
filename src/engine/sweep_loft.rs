@@ -34,6 +34,13 @@ impl Geometry {
                 return Err("A loft profile cannot be selected twice".into());
             }
             let sk = self.input_sketch(id)?;
+            if sk
+                .entities
+                .iter()
+                .any(|e| !e.construction && e.kind == "arc")
+            {
+                return Err("Loft with arc boundaries is not supported yet; the curved profile was preserved".into());
+            }
             let mut loops = sketch::loops(&sk)?;
             if loops.len() != 1 {
                 return Err(
@@ -206,6 +213,14 @@ impl Geometry {
     pub(super) fn execute_sweep(&mut self, f: &Feature, ordinal: usize, p: &Value) -> Result<()> {
         let profile = self.input_sketch(text(p, "profile", ""))?;
         let path = self.input_sketch(text(p, "path", ""))?;
+        if profile
+            .entities
+            .iter()
+            .chain(&path.entities)
+            .any(|e| !e.construction && e.kind == "arc")
+        {
+            return Err("Sweep with arc boundaries or paths is not supported yet; the curved sketches were preserved".into());
+        }
         if text(p, "profile", "") == text(p, "path", "") {
             return Err("Sweep profile and path must be different sketches".into());
         }

@@ -13,8 +13,10 @@ use brepkit_topology::{
 use std::collections::{BTreeMap, BTreeSet};
 
 mod regions;
+mod trim;
 pub(crate) use regions::{RegionEdge, profile_for_regions, region_edges};
-pub use regions::{ResolvedRegion, faces_for_regions, regions};
+pub use regions::{ResolvedRegion, TrimPiece, faces_for_regions, regions, trim_entity};
+pub use trim::{TrimEdit, apply_trim};
 
 #[derive(Clone, Debug)]
 pub struct ResolvedEntity {
@@ -24,7 +26,61 @@ pub struct ResolvedEntity {
     pub construction: bool,
     pub fixed: bool,
 }
+#[derive(Clone, Copy, Debug)]
+pub struct ArcGeometry {
+    pub center: [f64; 2],
+    pub radius: f64,
+    pub start: f64,
+    pub sweep: f64,
+}
+pub fn arc_geometry(values: &[f64]) -> Result<ArcGeometry> {
+    if values.len() != 7 || values.iter().any(|v| !v.is_finite()) || values[6].abs() != 1. {
+        return Err("Arc needs center, start, end and a direction of +1 or -1".into());
+    }
+    let center = [values[0], values[1]];
+    let radius = (values[2] - center[0]).hypot(values[3] - center[1]);
+    let end_radius = (values[4] - center[0]).hypot(values[5] - center[1]);
+    if radius <= 1e-7 || end_radius <= 1e-7 {
+        return Err("Arc radius must be positive".into());
+    }
+    let start = (values[3] - center[1]).atan2(values[2] - center[0]);
+    let end = (values[5] - center[1]).atan2(values[4] - center[0]);
+    let sweep = if values[6] > 0. {
+        (end - start).rem_euclid(std::f64::consts::TAU)
+    } else {
+        -(start - end).rem_euclid(std::f64::consts::TAU)
+    };
+    if sweep.abs() < 1e-7 {
+        return Err("Arc endpoints must be distinct; use a circle for a full turn".into());
+    }
+    Ok(ArcGeometry {
+        center,
+        radius,
+        start,
+        sweep,
+    })
+}
 impl ResolvedEntity {
+    pub fn control_points(&self) -> Vec<[f64; 2]> {
+        match self.kind.as_str() {
+            "rectangle" => self.points().into_iter().take(4).collect(),
+            "circle" => vec![[self.values[0], self.values[1]]],
+            "arc" => vec![
+                [self.values[0], self.values[1]],
+                [self.values[2], self.values[3]],
+                [self.values[4], self.values[5]],
+            ],
+            _ => vec![
+                [self.values[0], self.values[1]],
+                [self.values[2], self.values[3]],
+            ],
+        }
+    }
+    pub fn arc(&self) -> Option<ArcGeometry> {
+        (self.kind == "arc")
+            .then(|| arc_geometry(&self.values).ok())
+            .flatten()
+    }
     pub fn points(&self) -> Vec<[f64; 2]> {
         let p = &self.values;
         match self.kind.as_str() {
@@ -35,6 +91,23 @@ impl ResolvedEntity {
                 [p[0], p[1] + p[3]],
                 [p[0], p[1]],
             ],
+            "arc" => self
+                .arc()
+                .map(|arc| {
+                    let count = (arc.sweep.abs() / std::f64::consts::TAU * 128.)
+                        .ceil()
+                        .max(2.) as usize;
+                    (0..=count)
+                        .map(|i| {
+                            let angle = arc.start + arc.sweep * i as f64 / count as f64;
+                            [
+                                arc.center[0] + arc.radius * angle.cos(),
+                                arc.center[1] + arc.radius * angle.sin(),
+                            ]
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
             "circle" => (0..=96)
                 .map(|i| {
                     let a = i as f64 * std::f64::consts::TAU / 96.;
@@ -52,7 +125,57 @@ pub struct ResolvedSketch {
     pub dof: usize,
 }
 
+pub fn seed_from_resolved(sketch: &mut Sketch, resolved: Option<&ResolvedSketch>) {
+    if let Some(sk) = resolved {
+        for e in &mut sketch.entities {
+            if let Some(s) = sk.entities.iter().find(|s| s.id == e.id) {
+                for (value, &v) in e.values.iter_mut().zip(&s.values) {
+                    if value.parse::<f64>().is_ok() {
+                        *value = crate::model::fmt(v);
+                    }
+                }
+            }
+        }
+    }
+}
+fn constraints_with_expressions(sketch: &Sketch) -> Vec<crate::model::SketchConstraint> {
+    let mut constraints = sketch.constraints.clone();
+    for entity in &sketch.entities {
+        let labels = match entity.kind.as_str() {
+            "rectangle" => vec!["X", "Y", "Width", "Height"],
+            "circle" => vec!["X", "Y", "Radius"],
+            "arc" => vec!["X", "Y", "StartX", "StartY", "EndX", "EndY"],
+            _ => vec!["X", "Y", "EndX", "EndY"],
+        };
+        for (label, value) in labels.into_iter().zip(&entity.values) {
+            if value.parse::<f64>().is_err()
+                && !constraints
+                    .iter()
+                    .any(|c| c.a == entity.id && c.kind == label)
+            {
+                constraints.push(crate::model::SketchConstraint {
+                    kind: label.into(),
+                    a: entity.id,
+                    value: value.clone(),
+                    ..Default::default()
+                });
+            }
+        }
+    }
+    constraints
+}
+
 pub fn resolve(sketch: &Sketch, plane: Plane, numbers: &Numbers) -> Result<ResolvedSketch> {
+    resolve_with_targets(sketch, plane, numbers, &[])
+}
+
+/// Temporary mouse targets have lower priority than every persisted constraint.
+pub fn resolve_with_targets(
+    sketch: &Sketch,
+    plane: Plane,
+    numbers: &Numbers,
+    targets: &[crate::model::SketchConstraint],
+) -> Result<ResolvedSketch> {
     if sketch.entities.len() > 1000 {
         return Err("Sketch exceeds 1000 entities".into());
     }
@@ -67,7 +190,11 @@ pub fn resolve(sketch: &Sketch, plane: Plane, numbers: &Numbers) -> Result<Resol
             .iter()
             .map(|s| numbers.eval(s))
             .collect::<Result<_>>()?;
-        let needed = if entity.kind == "circle" { 3 } else { 4 };
+        let needed = match entity.kind.as_str() {
+            "circle" => 3,
+            "arc" => 7,
+            _ => 4,
+        };
         if values.len() != needed {
             return Err("Invalid sketch entity parameter count".into());
         }
@@ -77,7 +204,10 @@ pub fn resolve(sketch: &Sketch, plane: Plane, numbers: &Numbers) -> Result<Resol
         if entity.kind == "circle" && values[2] <= 1e-7 {
             return Err("Circle radius must be positive".into());
         }
-        if !["rectangle", "circle", "line"].contains(&entity.kind.as_str()) {
+        if entity.kind == "arc" {
+            arc_geometry(&values)?;
+        }
+        if !["rectangle", "circle", "line", "arc"].contains(&entity.kind.as_str()) {
             return Err(format!("Unsupported sketch entity '{}'", entity.kind));
         }
         entities.push(ResolvedEntity {
@@ -98,6 +228,7 @@ pub fn resolve(sketch: &Sketch, plane: Plane, numbers: &Numbers) -> Result<Resol
         BTreeMap::from([(0, vec![origin])]);
     let mut lines: BTreeMap<u64, Vec<brepkit_sketch::LineId>> = BTreeMap::new();
     let mut circles = BTreeMap::new();
+    let mut arcs = BTreeMap::new();
     for entity in &entities {
         let fixed = sketch
             .constraints
@@ -112,6 +243,7 @@ pub fn resolve(sketch: &Sketch, plane: Plane, numbers: &Numbers) -> Result<Resol
                 [v[0], v[1] + v[3]],
             ],
             "circle" => vec![[v[0], v[1]]],
+            "arc" => vec![[v[0], v[1]], [v[2], v[3]], [v[4], v[5]]],
             _ => vec![[v[0], v[1]], [v[2], v[3]]],
         };
         let ps: Vec<_> = coords
@@ -124,7 +256,12 @@ pub fn resolve(sketch: &Sketch, plane: Plane, numbers: &Numbers) -> Result<Resol
                 })
             })
             .collect();
-        if entity.kind == "circle" {
+        if entity.kind == "arc" {
+            let arc = sys
+                .add_arc(ps[0], ps[1], ps[2])
+                .map_err(|e| e.to_string())?;
+            arcs.insert(entity.id, arc);
+        } else if entity.kind == "circle" {
             let c = sys.add_circle(ps[0], v[2]).map_err(|e| e.to_string())?;
             circles.insert(entity.id, c);
             if fixed {
@@ -191,29 +328,7 @@ pub fn resolve(sketch: &Sketch, plane: Plane, numbers: &Numbers) -> Result<Resol
             }
         }
     }
-    // Expressions in old documents are driving parameters, never free seeds.
-    let mut constraints = sketch.constraints.clone();
-    for entity in &sketch.entities {
-        let labels = match entity.kind.as_str() {
-            "rectangle" => vec!["X", "Y", "Width", "Height"],
-            "circle" => vec!["X", "Y", "Radius"],
-            _ => vec!["X", "Y", "EndX", "EndY"],
-        };
-        for (label, value) in labels.into_iter().zip(&entity.values) {
-            if value.parse::<f64>().is_err()
-                && !constraints
-                    .iter()
-                    .any(|c| c.a == entity.id && c.kind == label)
-            {
-                constraints.push(crate::model::SketchConstraint {
-                    kind: label.into(),
-                    a: entity.id,
-                    value: value.clone(),
-                    ..Default::default()
-                });
-            }
-        }
-    }
+    let constraints = constraints_with_expressions(sketch);
     for (index, c) in constraints.iter().enumerate() {
         if c.reference {
             continue;
@@ -258,12 +373,26 @@ pub fn resolve(sketch: &Sketch, plane: Plane, numbers: &Numbers) -> Result<Resol
             }
             "X" => Constraint::FixX(pa()?, dim()?),
             "Y" => Constraint::FixY(pa()?, dim()?),
-            "EndX" => Constraint::FixX(point(c.a, 1)?, dim()?),
-            "EndY" => Constraint::FixY(point(c.a, 1)?, dim()?),
+            "StartX" => Constraint::FixX(point(c.a, 1)?, dim()?),
+            "StartY" => Constraint::FixY(point(c.a, 1)?, dim()?),
+            "EndX" => Constraint::FixX(
+                point(c.a, if arcs.contains_key(&c.a) { 2 } else { 1 })?,
+                dim()?,
+            ),
+            "EndY" => Constraint::FixY(
+                point(c.a, if arcs.contains_key(&c.a) { 2 } else { 1 })?,
+                dim()?,
+            ),
             "Width" => Constraint::DistanceX(point(c.a, 0)?, point(c.a, 1)?, positive()?),
             "Height" => Constraint::DistanceY(point(c.a, 0)?, point(c.a, 3)?, positive()?),
-            "Radius" => Constraint::Radius(circle(c.a)?, positive()?),
-            "Diameter" => Constraint::Radius(circle(c.a)?, positive()? / 2.),
+            "Radius" | "Diameter" => {
+                let radius = positive()? / if c.kind == "Diameter" { 2. } else { 1. };
+                if arcs.contains_key(&c.a) {
+                    Constraint::Distance(point(c.a, 0)?, point(c.a, 1)?, radius)
+                } else {
+                    Constraint::Radius(circle(c.a)?, radius)
+                }
+            }
             "Length" => {
                 let id = la()?;
                 let l = sys.line(id).unwrap();
@@ -280,7 +409,13 @@ pub fn resolve(sketch: &Sketch, plane: Plane, numbers: &Numbers) -> Result<Resol
             "Perpendicular" => Constraint::Perpendicular(la()?, lb()?),
             "Angle" => Constraint::Angle(la()?, lb()?, dim()?.to_radians()),
             "Equal" => {
-                if circles.contains_key(&c.a) && circles.contains_key(&c.b) {
+                if let (Some(&a), Some(&b)) = (arcs.get(&c.a), arcs.get(&c.b)) {
+                    Constraint::EqualRadiusArcArc(a, b)
+                } else if let (Some(&a), Some(&b)) = (arcs.get(&c.a), circles.get(&c.b)) {
+                    Constraint::EqualRadiusArcCircle(a, b)
+                } else if let (Some(&a), Some(&b)) = (arcs.get(&c.b), circles.get(&c.a)) {
+                    Constraint::EqualRadiusArcCircle(a, b)
+                } else if circles.contains_key(&c.a) && circles.contains_key(&c.b) {
                     Constraint::EqualRadius(circle(c.a)?, circle(c.b)?)
                 } else {
                     Constraint::EqualLength(la()?, lb()?)
@@ -288,7 +423,13 @@ pub fn resolve(sketch: &Sketch, plane: Plane, numbers: &Numbers) -> Result<Resol
             }
             "Concentric" => Constraint::Coincident(point(c.a, 0)?, point(c.b, 0)?),
             "PointOnLine" => Constraint::PointLineDistance(pa()?, lb()?, 0.),
-            "PointOnCircle" => Constraint::PointOnCircle(pa()?, circle(c.b)?),
+            "PointOnCircle" => {
+                if let Some(&arc) = arcs.get(&c.b) {
+                    Constraint::PointOnArc(pa()?, arc)
+                } else {
+                    Constraint::PointOnCircle(pa()?, circle(c.b)?)
+                }
+            }
             "LineDistance" => {
                 constrain(&mut sys, Constraint::Parallel(la()?, lb()?))?;
                 let l = sys.line(lb()?).unwrap();
@@ -303,6 +444,53 @@ pub fn resolve(sketch: &Sketch, plane: Plane, numbers: &Numbers) -> Result<Resol
                 lb()?,
                 dim()? * if c.negative { -1. } else { 1. },
             ),
+            "Tangent" if arcs.contains_key(&c.a) || arcs.contains_key(&c.b) => {
+                let (arc_id, other) = if arcs.contains_key(&c.a) {
+                    (c.a, c.b)
+                } else {
+                    (c.b, c.a)
+                };
+                let edge = c
+                    .value
+                    .strip_prefix("edge:")
+                    .map(|v| v.parse::<usize>().map_err(|_| "Invalid tangent edge"))
+                    .transpose()?
+                    .unwrap_or(0);
+                let other_indices = if arcs.contains_key(&other) {
+                    vec![1, 2]
+                } else if points[&other].len() == 4 {
+                    vec![edge % 4, (edge + 1) % 4]
+                } else {
+                    vec![0, 1]
+                };
+                let (arc_endpoint, other_endpoint) = if arc_id == c.a {
+                    (c.points[0], c.points[1])
+                } else {
+                    (c.points[1], c.points[0])
+                };
+                let mut shared =
+                    if [1, 2].contains(&arc_endpoint) && other_indices.contains(&other_endpoint) {
+                        Some((point(arc_id, arc_endpoint)?, point(other, other_endpoint)?))
+                    } else {
+                        None
+                    };
+                for i in [1, 2] {
+                    for &j in &other_indices {
+                        let a = sys.point(point(arc_id, i)?).unwrap();
+                        let b = sys.point(point(other, j)?).unwrap();
+                        if shared.is_none() && (a.x - b.x).hypot(a.y - b.y) < 1e-5 {
+                            shared = Some((point(arc_id, i)?, point(other, j)?));
+                        }
+                    }
+                }
+                let (a, b) = shared.ok_or("Arc tangency requires a shared endpoint")?;
+                constrain(&mut sys, Constraint::Coincident(a, b))?;
+                if let Some(&other_arc) = arcs.get(&other) {
+                    Constraint::TangentArcArc(arcs[&arc_id], other_arc, a)
+                } else {
+                    Constraint::TangentLineArc(line(other, edge)?, arcs[&arc_id], a)
+                }
+            }
             "Tangent" => {
                 let (l, circle_id) = if circles.contains_key(&c.a) {
                     (lb()?, circle(c.a)?)
@@ -316,7 +504,40 @@ pub fn resolve(sketch: &Sketch, plane: Plane, numbers: &Numbers) -> Result<Resol
         constrain(&mut sys, relation)
             .map_err(|e| format!("Constraint {} ({}): {e}", index + 1, c.kind))?;
     }
-    let outcome = sys.solve(100, 1e-8).map_err(|e| e.to_string())?;
+    let requests = targets
+        .iter()
+        .map(|c| {
+            let value = numbers.eval(&c.value)?;
+            match c.kind.as_str() {
+                "X" => Ok(Constraint::FixX(point(c.a, c.points[0])?, value)),
+                "Y" => Ok(Constraint::FixY(point(c.a, c.points[0])?, value)),
+                "CurvePoint" => {
+                    let p = c.position.ok_or("A curve drag needs a pointer position")?;
+                    let mouse = sys.add_point(PointData {
+                        x: p[0],
+                        y: p[1],
+                        fixed: true,
+                    });
+                    if let Some(&arc) = arcs.get(&c.a) {
+                        Ok(Constraint::PointOnArc(mouse, arc))
+                    } else {
+                        Ok(Constraint::PointOnCircle(mouse, circle(c.a)?))
+                    }
+                }
+                "Radius" => {
+                    if arcs.contains_key(&c.a) {
+                        Ok(Constraint::Distance(point(c.a, 0)?, point(c.a, 1)?, value))
+                    } else {
+                        Ok(Constraint::Radius(circle(c.a)?, value))
+                    }
+                }
+                _ => Err("Unsupported temporary sketch target".into()),
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let outcome = sys
+        .solve_with_targets(&requests, 100, 1e-8)
+        .map_err(|e| e.to_string())?;
     if !outcome.converged {
         return Err(format!(
             "Sketch constraints conflict or failed to converge (residual {:.3e}). Edit or remove a dimension/constraint.",
@@ -328,6 +549,11 @@ pub fn resolve(sketch: &Sketch, plane: Plane, numbers: &Numbers) -> Result<Resol
         let a = sys.point(ps[0]).unwrap();
         e.values = match e.kind.as_str() {
             "circle" => vec![a.x, a.y, sys.circle(circles[&e.id]).unwrap().radius],
+            "arc" => {
+                let start = sys.point(ps[1]).unwrap();
+                let end = sys.point(ps[2]).unwrap();
+                vec![a.x, a.y, start.x, start.y, end.x, end.y, e.values[6]]
+            }
             "rectangle" => {
                 let b = sys.point(ps[1]).unwrap();
                 let d = sys.point(ps[3]).unwrap();
@@ -338,6 +564,9 @@ pub fn resolve(sketch: &Sketch, plane: Plane, numbers: &Numbers) -> Result<Resol
                 vec![a.x, a.y, b.x, b.y]
             }
         };
+        if e.kind == "arc" {
+            arc_geometry(&e.values)?;
+        }
         if e.values.iter().any(|v| !v.is_finite())
             || e.kind == "circle" && e.values[2] <= 1e-7
             || e.kind == "rectangle" && (e.values[2] <= 1e-7 || e.values[3] <= 1e-7)
@@ -625,6 +854,13 @@ pub fn loops(sketch: &ResolvedSketch) -> Result<Vec<RegionLoop>> {
 }
 
 pub fn faces(topo: &mut Topology, sketch: &ResolvedSketch) -> Result<Vec<FaceId>> {
+    if sketch
+        .entities
+        .iter()
+        .any(|e| e.kind == "arc" && !e.construction)
+    {
+        return faces_for_regions(topo, sketch, &[]);
+    }
     let loops = loops(sketch)?;
     let parents: Vec<Option<usize>> = loops
         .iter()

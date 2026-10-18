@@ -343,6 +343,20 @@ impl GcsSystem {
         max_iterations: usize,
         tolerance: f64,
     ) -> Result<SolveResult, SketchError> {
+        self.solve_with_targets(&[], max_iterations, tolerance)
+    }
+
+    /// Move toward temporary targets only in the hard constraints' remaining
+    /// freedom. Targets are never stored or included in DOF analysis.
+    pub fn solve_with_targets(
+        &mut self,
+        targets: &[Constraint],
+        max_iterations: usize,
+        tolerance: f64,
+    ) -> Result<SolveResult, SketchError> {
+        for target in targets {
+            self.validate_constraint(target)?;
+        }
         self.rebuild_if_dirty();
 
         let n = self.param_map.len();
@@ -413,6 +427,42 @@ impl GcsSystem {
             tolerance,
         );
 
+        if result.converged && !targets.is_empty() {
+            let count = targets.iter().map(residual_count).sum();
+            let target_residuals = |p: &[f64]| {
+                let snapshot = build_snapshot_from_params(p, &param_map, &param_index, self);
+                let mut residuals = Vec::with_capacity(count);
+                for target in targets {
+                    eval_residuals(target, &snapshot, &mut residuals);
+                }
+                residuals
+            };
+            let target_jacobian = |p: &[f64]| {
+                let snapshot = build_snapshot_from_params(p, &param_map, &param_index, self);
+                let mut jacobian = vec![0.; count * n];
+                let mut writer = JacobianWriter {
+                    data: &mut jacobian,
+                    ncols: n,
+                    param_index: &param_index,
+                };
+                let mut row = 0;
+                for target in targets {
+                    eval_jacobian(target, &snapshot, &mut writer, row);
+                    row += residual_count(target);
+                }
+                jacobian
+            };
+            solver::move_in_nullspace(
+                &mut params,
+                &residual_fn,
+                &jacobian_fn,
+                &target_residuals,
+                &target_jacobian,
+                m,
+                count,
+                tolerance,
+            );
+        }
         self.write_params(&params);
 
         Ok(result)

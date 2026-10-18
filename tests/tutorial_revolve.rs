@@ -134,6 +134,7 @@ fn add_bolt_hole(doc: &mut Document, registry: &Registry) {
     feature.name = "Bolt Hole Cut".into();
     feature.params["sketch"] = json!("f3");
     feature.params["mode"] = json!("Remove");
+    feature.params["targets"] = json!(["f2:0"]);
     feature.params["depth"] = json!("0.5*inch");
     feature.params["reverse"] = json!(true);
     doc.features.push(feature);

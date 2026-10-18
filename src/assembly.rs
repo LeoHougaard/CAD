@@ -966,6 +966,7 @@ pub fn transform_mesh(original: &MeshView, pose: &Transform) -> MeshView {
         face.plane = face.plane.as_ref().map(|p| pose.plane(p));
     }
     for edge in &mut mesh.edges {
+        edge.axis = edge.axis.map(|(point, direction)| (pose.point(point), pose.vector(direction)));
         for point in &mut edge.points {
             *point = pose.point(point.map(f64::from)).map(|v| v as f32);
         }

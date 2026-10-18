@@ -19,6 +19,68 @@ pub struct Camera {
 pub struct Projector {
     matrix: Mat4,
 }
+
+pub const ORIGIN_PLANE_HALF_SIZE: f64 = 50.;
+
+pub fn origin_plane_points(plane: &Plane) -> [[f64; 3]; 4] {
+    let half = ORIGIN_PLANE_HALF_SIZE;
+    [[-half, -half], [half, -half], [half, half], [-half, half]].map(|p| plane.at(p))
+}
+
+pub(crate) fn projected_text(
+    ui: &egui::Ui,
+    text: &str,
+    font: egui::FontId,
+    color: egui::Color32,
+    project: impl Fn(egui::Vec2) -> egui::Pos2,
+) -> egui::epaint::Mesh {
+    let galley = ui.painter().layout_no_wrap(text.into(), font, color);
+    let atlas = ui.fonts(|f| f.font_image_size());
+    let mut mesh = egui::epaint::Mesh::default();
+    for row in &galley.rows {
+        let offset = mesh.vertices.len() as u32;
+        for vertex in &row.visuals.mesh.vertices {
+            let p = row.pos.to_vec2() + vertex.pos.to_vec2() - galley.rect.center().to_vec2();
+            mesh.vertices.push(egui::epaint::Vertex {
+                pos: project(p),
+                uv: egui::pos2(vertex.uv.x / atlas[0] as f32, vertex.uv.y / atlas[1] as f32),
+                color: vertex.color,
+            });
+        }
+        mesh.indices.extend(row.visuals.mesh.indices.iter().map(|i| i + offset));
+    }
+    mesh
+}
+
+fn plane_label_axes(camera: &Camera, plane: &Plane) -> Option<(Vec3, Vec3)> {
+    let facing = (camera.rotation * Vec3::Z).dot(Vec3::from_array(plane.normal.map(|v| v as f32)));
+    (facing.abs() > 0.24).then(|| (
+        Vec3::from_array(plane.u.map(|v| v as f32)) * facing.signum(),
+        Vec3::from_array(plane.v.map(|v| v as f32)),
+    ))
+}
+
+pub fn paint_plane_label(ui: &egui::Ui, camera: &Camera, plane: &Plane, rect: egui::Rect, text: &str, color: egui::Color32) {
+    let Some((u, v)) = plane_label_axes(camera, plane) else { return; };
+    let scale = camera.span / rect.height().max(1.);
+    let anchor = Vec3::from_array(plane.at([25., 35.]).map(|v| v as f32));
+    let mesh = projected_text(ui, text, egui::FontId::proportional(12.), color, |p| {
+        let point = anchor + (u * p.x - v * p.y) * scale;
+        camera.project(point.to_array().map(f64::from), rect)
+    });
+    ui.painter().add(egui::Shape::mesh(mesh));
+}
+
+/// Called once per preview rebuild; pointer movement never compares meshes.
+pub fn edited_face_ids(scene: &Scene, source: Option<&Scene>, feature: &str) -> Vec<usize> {
+    scene.meshes.iter().filter(|mesh| {
+        let old = source.and_then(|s| s.meshes.iter().find(|m| m.part == mesh.part));
+        old.map_or_else(
+            || mesh.part.split(':').next() == Some(feature),
+            |old| old.positions != mesh.positions || old.indices != mesh.indices || old.normals != mesh.normals,
+        )
+    }).flat_map(|m| m.faces.iter().map(|f| f.global_id)).collect()
+}
 impl Projector {
     pub fn project(&self, p: [f64; 3], rect: egui::Rect) -> egui::Pos2 {
         let q = self
@@ -547,6 +609,7 @@ struct Vertex {
 #[derive(Clone, Default)]
 pub struct View {
     pub matrix: Mat4,
+    pub edited: Vec<usize>,
     pub selected: Vec<usize>,
     pub hovered: Vec<usize>,
     pub selected_edges: Vec<(String, String)>,
@@ -628,6 +691,7 @@ void main(){
  vec3 base=ghost?vec3(0.55,0.57,0.62):v_color;
  if(highlight==1)base=selection_color;
  if(highlight==2)base=hover_color;
+ if(highlight==3)base=mix(base,hover_color,0.45);
  if(lines){color=vec4(base,opacity);return;}
  vec3 n=normalize(v_normal);
  float shade=0.48+0.39*abs(dot(n,normalize(vec3(0.35,-0.5,0.9))))+0.13*abs(n.z);
@@ -803,7 +867,7 @@ void main(){
                     .filter(|m| !view.ghost_parts.contains(&m.part))
                     .filter_map(|m| self.part_ranges.get(&m.part).copied()));
             }
-            for (ids, color) in [(&view.hovered, 2), (&view.selected, 1)] {
+            for (ids, color) in [(&view.edited, 3), (&view.hovered, 2), (&view.selected, 1)] {
                 gl.uniform_1_i32(highlight.as_ref(), color);
                 Self::draw_ranges(
                     gl,
@@ -893,6 +957,87 @@ pub fn point_segment_distance(p: egui::Pos2, a: egui::Pos2, b: egui::Pos2) -> f3
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn origin_planes_are_one_hundred_millimeters_at_every_zoom() {
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200., 800.));
+        for name in ["Top", "Front", "Right"] {
+            let plane = Plane::named(name, 0.);
+            let corners = origin_plane_points(&plane);
+            for i in 0..4 {
+                let a = glam::DVec3::from_array(corners[i]);
+                let b = glam::DVec3::from_array(corners[(i + 1) % 4]);
+                assert!((a.distance(b) - 100.).abs() < 1e-10);
+            }
+            let mut camera = Camera::default();
+            camera.align(&plane);
+            for span in [20., 130., 1000.] {
+                camera.span = span;
+                let edge = camera.project(corners[0], rect).distance(camera.project(corners[1], rect));
+                assert!((edge - 100. * rect.height() / span).abs() < 0.002);
+                for (distance, inside) in [(49., true), (51., false)] {
+                    let screen = camera.project(plane.at([distance, 0.]), rect);
+                    let hit = camera.plane_point(screen, rect, &plane).unwrap();
+                    assert_eq!(hit[0].abs() <= ORIGIN_PLANE_HALF_SIZE, inside);
+                }
+            }
+        }
+    }
+    #[test]
+    fn projected_plane_text_keeps_readable_winding_on_both_sides() {
+        let ctx = egui::Context::default();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200., 800.));
+                for name in ["Top", "Front", "Right"] {
+                    let plane = Plane::named(name, 0.);
+                    let normal = Vec3::from_array(plane.normal.map(|v| v as f32));
+                    for sign in [-1., 1.] {
+                        let mut camera = Camera::default();
+                        camera.set_view(normal * sign);
+                        for roll in [0., 0.65, 2.5] {
+                            camera.rotate_to(camera.rotation * Quat::from_rotation_z(roll));
+                            let (u, v) = plane_label_axes(&camera, &plane).unwrap();
+                            let mesh = projected_text(ui, name, egui::FontId::proportional(12.), egui::Color32::WHITE, |p| {
+                                camera.project((u * p.x - v * p.y).to_array().map(f64::from), rect)
+                            });
+                            assert!(!mesh.vertices.is_empty());
+                            assert!(mesh.vertices.iter().all(|v| v.uv.x >= 0. && v.uv.x <= 1. && v.uv.y >= 0. && v.uv.y <= 1.));
+                            for indices in mesh.indices.as_chunks::<3>().0 {
+                                let p = indices.map(|i| mesh.vertices[i as usize].pos);
+                                let a = p[1] - p[0];
+                                let b = p[2] - p[0];
+                                assert!(a.x * b.y - a.y * b.x >= -0.001, "Plane text was mirrored");
+                            }
+                        }
+                    }
+                }
+            });
+        });
+    }
+    #[test]
+    fn preview_highlight_tracks_old_history_without_tinting_unchanged_parts() {
+        let mut document = crate::model::demo();
+        let registry = crate::plugins::Registry::builtin().unwrap();
+        let mut runtime = crate::engine::Runtime::new(crate::plugins::Registry::builtin().unwrap());
+        document.rollback = Some(3);
+        let before_cut = runtime.evaluate(&document).unwrap().scene;
+        document.rollback = None;
+        let after_cut = runtime.evaluate(&document).unwrap().scene;
+        let all_faces: Vec<_> = after_cut.meshes[0].faces.iter().map(|f| f.global_id).collect();
+        assert_eq!(edited_face_ids(&after_cut, Some(&before_cut), "f4"), all_faces);
+        assert!(edited_face_ids(&after_cut, Some(&after_cut), "f4").is_empty());
+        let mut copy = registry.create("transform", &mut document).unwrap();
+        let id = copy.id.clone();
+        copy.params["copy"] = serde_json::json!(true);
+        copy.params["x"] = serde_json::json!("100");
+        document.features.push(copy);
+        let preview = runtime.evaluate(&document).unwrap().scene;
+        assert!(preview.error.is_none(), "{:?}", preview.error);
+        let expected: Vec<_> = preview.meshes.iter().filter(|m| m.part.starts_with(&format!("{id}:")))
+            .flat_map(|m| m.faces.iter().map(|f| f.global_id)).collect();
+        assert!(!expected.is_empty());
+        assert_eq!(edited_face_ids(&preview, Some(&after_cut), &id), expected);
+    }
     #[test]
     fn face_hits_are_depth_ordered_and_hidden_parts_are_not_pickable() {
         let mut runtime = crate::engine::Runtime::new(crate::plugins::Registry::builtin().unwrap());

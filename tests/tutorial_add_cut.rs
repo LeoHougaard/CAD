@@ -93,6 +93,7 @@ fn add_cut(doc: &mut Document) {
     f.params["sketch"] = json!("f3");
     f.params["mode"] = json!("Remove");
     f.params["target"] = json!("f2:0");
+    f.params["targets"] = json!(["f2:0"]);
     f.params["depth"] = json!("1*inch");
     f.params["reverse"] = json!(true);
     doc.features.push(f);
@@ -115,6 +116,7 @@ fn add_boss(doc: &mut Document) {
     f.params["sketch"] = json!("f5");
     f.params["mode"] = json!("Add");
     f.params["target"] = json!("f2:0");
+    f.params["targets"] = json!(["f2:0"]);
     f.params["depth"] = json!("1*inch");
     doc.features.push(f);
 }

@@ -497,6 +497,7 @@ fn point_on_circle_converges() {
         y: 0.0,
         fixed: false,
     });
+    sys.add_constraint(Constraint::Radius(circ, 2.0)).unwrap();
     sys.add_constraint(Constraint::PointOnCircle(pt, circ))
         .unwrap();
     let result = sys.solve(100, 1e-10).unwrap();
@@ -810,4 +811,166 @@ fn arc_endpoints_equidistant_from_center() {
         (r_end - r_start).abs() < 1e-6,
         "end radius ({r_end}) should track start radius ({r_start})"
     );
+}
+
+#[test]
+fn temporary_targets_use_remaining_freedom_without_relaxing_dimensions() {
+    let mut sys = GcsSystem::new();
+    let p = sys.add_point(PointData {
+        x: 2.,
+        y: 3.,
+        fixed: false,
+    });
+    sys.add_constraint(Constraint::FixX(p, 2.)).unwrap();
+    let before = sys.dof().dof;
+    let result = sys
+        .solve_with_targets(
+            &[Constraint::FixX(p, 20.), Constraint::FixY(p, 15.)],
+            100,
+            TOL,
+        )
+        .unwrap();
+    assert!(result.converged);
+    assert!((sys.point(p).unwrap().x - 2.).abs() < TOL);
+    assert!((sys.point(p).unwrap().y - 15.).abs() < TOL);
+    assert_eq!(sys.dof().dof, before);
+    assert_eq!(sys.constraint_count(), 1);
+}
+#[test]
+fn temporary_drag_along_a_circle_preserves_radius_and_tracks_closest_point() {
+    let mut sys = GcsSystem::new();
+    let center = sys.add_point(PointData {
+        x: 0.,
+        y: 0.,
+        fixed: true,
+    });
+    let p = sys.add_point(PointData {
+        x: 10.,
+        y: 0.,
+        fixed: false,
+    });
+    sys.add_constraint(Constraint::Distance(center, p, 10.))
+        .unwrap();
+    let result = sys
+        .solve_with_targets(
+            &[Constraint::FixX(p, 8.), Constraint::FixY(p, 8.)],
+            100,
+            TOL,
+        )
+        .unwrap();
+    assert!(result.converged);
+    let p = sys.point(p).unwrap();
+    assert!((p.x - 50_f64.sqrt()).abs() < 1e-5, "{p:?}");
+    assert!((p.y - 50_f64.sqrt()).abs() < 1e-5, "{p:?}");
+    assert_eq!(sys.dof().dof, 1);
+}
+#[test]
+fn changing_length_keeps_free_line_center_and_direction() {
+    let mut sys = GcsSystem::new();
+    let a = sys.add_point(PointData {
+        x: 10.,
+        y: 20.,
+        fixed: false,
+    });
+    let b = sys.add_point(PointData {
+        x: 40.,
+        y: 20.,
+        fixed: false,
+    });
+    let line = sys.add_line(a, b).unwrap();
+    sys.add_constraint(Constraint::Horizontal(line)).unwrap();
+    sys.add_constraint(Constraint::Distance(a, b, 50.)).unwrap();
+    sys.add_constraint(Constraint::Distance(a, b, 50.)).unwrap();
+    assert!(sys.solve(100, TOL).unwrap().converged);
+    let a = sys.point(a).unwrap();
+    let b = sys.point(b).unwrap();
+    assert!(
+        (a.x - 0.).abs() < 1e-7 && (b.x - 50.).abs() < 1e-7,
+        "{a:?} {b:?}"
+    );
+    assert!((a.y - 20.).abs() < TOL && (b.y - 20.).abs() < TOL);
+    assert_eq!(sys.dof().dof, 2);
+}
+
+#[test]
+fn driving_angle_cannot_accept_the_opposite_line_direction() {
+    for degrees in [180_f64, 150., -120., 30.] {
+        let mut sys = GcsSystem::new();
+        let origin = sys.add_point(PointData {
+            x: 0.,
+            y: 0.,
+            fixed: true,
+        });
+        let x = sys.add_point(PointData {
+            x: 10.,
+            y: 0.,
+            fixed: true,
+        });
+        let moving = sys.add_point(PointData {
+            x: 10.,
+            y: 0.,
+            fixed: false,
+        });
+        let base = sys.add_line(origin, x).unwrap();
+        let line = sys.add_line(origin, moving).unwrap();
+        sys.add_constraint(Constraint::Distance(origin, moving, 10.))
+            .unwrap();
+        sys.add_constraint(Constraint::Angle(base, line, degrees.to_radians()))
+            .unwrap();
+        assert!(sys.solve(100, TOL).unwrap().converged);
+        let point = sys.point(moving).unwrap();
+        assert!(
+            (point.x - 10. * degrees.to_radians().cos()).abs() < 1e-6,
+            "{degrees}: {point:?}"
+        );
+        assert!(
+            (point.y - 10. * degrees.to_radians().sin()).abs() < 1e-6,
+            "{degrees}: {point:?}"
+        );
+    }
+}
+
+#[test]
+fn moderate_connected_chain_drag_preserves_every_length_and_uses_only_free_motion() {
+    let mut sys = GcsSystem::new();
+    let points = (0..100)
+        .map(|i| {
+            sys.add_point(PointData {
+                x: i as f64 * 10.,
+                y: 0.,
+                fixed: false,
+            })
+        })
+        .collect::<Vec<_>>();
+    for pair in points.windows(2) {
+        let line = sys.add_line(pair[0], pair[1]).unwrap();
+        sys.add_constraint(Constraint::Horizontal(line)).unwrap();
+        sys.add_constraint(Constraint::Distance(pair[0], pair[1], 10.))
+            .unwrap();
+    }
+    let start = std::time::Instant::now();
+    assert!(
+        sys.solve_with_targets(
+            &[
+                Constraint::FixX(points[50], 510.),
+                Constraint::FixY(points[50], 10.)
+            ],
+            100,
+            TOL
+        )
+        .unwrap()
+        .converged
+    );
+    eprintln!(
+        "100-point constrained chain drag: {:.2} ms",
+        start.elapsed().as_secs_f64() * 1000.
+    );
+    for (i, &id) in points.iter().enumerate() {
+        let p = sys.point(id).unwrap();
+        assert!(
+            (p.x - i as f64 * 10. - 10.).abs() < 1e-6 && (p.y - 10.).abs() < 1e-6,
+            "{p:?}"
+        );
+    }
+    assert_eq!(sys.dof().dof, 2);
 }

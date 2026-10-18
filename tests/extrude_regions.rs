@@ -282,6 +282,7 @@ fn divided_region_side_support_follows_parameter_edits() {
     f.params["sketch"] = json!(id);
     f.params["depth"] = json!("2");
     f.params["mode"] = json!("Add");
+    f.params["targets"] = json!(["f2:0"]);
     doc.features.push(f);
     volume(&doc, 152., 1);
     sketch.entities[1].values[0] = "6".into();

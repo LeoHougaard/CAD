@@ -9,13 +9,14 @@ sys.path.insert(0, str(ROOT / ".tools" / "verification"))
 import gmsh
 
 
-def verify():
-    folder = ROOT / "target" / "test-output" / "assembly-performance"
+def verify(folder=None, names=("bearing-blocks", "analytic-rings", "context-bound")):
+    if folder is None:
+        folder = ROOT / "target" / "test-output" / "assembly-performance"
     results = []
     gmsh.initialize()
     try:
         gmsh.option.setNumber("General.Terminal", 0)
-        for name in ("bearing-blocks", "analytic-rings", "context-bound"):
+        for name in names:
             spec = json.loads((folder / f"{name}.json").read_text(encoding="utf-8"))
             assert spec["case"] == name and spec["step_exported"] is True
             gmsh.clear()
@@ -39,7 +40,7 @@ def verify():
         gmsh.finalize()
     report = {"result": "passed", "verifier": "Gmsh/Open CASCADE, independent of the app kernel", "step_files": len(results), "solids": sum(len(r["solids"]) for r in results), "cases": results}
     (folder / "independent-step-check.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    print(f"Independent assembly STEP checks passed for {report['solids']} positioned solids in {len(results)} files.")
+    print(f"Independent STEP checks passed for {report['solids']} positioned solids in {len(results)} files.")
 
 
 if __name__ == "__main__":

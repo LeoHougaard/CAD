@@ -56,6 +56,7 @@ fn varied_circular_holes_keep_exact_volumes() {
         let mut f = r.create("extrude", &mut d).unwrap();
         f.params["sketch"] = json!(id);
         f.params["mode"] = json!("Remove");
+    f.params["targets"] = json!(["f2:0"]);
         f.params["reverse"] = json!(true);
         f.params["depth"] = json!("10");
         d.features.push(f);
