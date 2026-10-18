@@ -612,6 +612,40 @@ pub(super) fn profiles_ui(ui: &mut egui::Ui, field: &Field, params: &mut Value, 
     before != params.get(&field.key).cloned()
 }
 
+// Preview operations can consume their selected topology. Keep those source
+// inputs visible without replacing the result or retessellating any geometry.
+pub(super) fn source_topology_shapes(source: &Scene, result: &Scene, projector: &render::Projector,
+    rect: Rect, target: &Target, stroke: Stroke) -> Vec<egui::Shape> {
+    let (part, key, edge) = match target {
+        Target::Edge {part,key} => (part,key,true),
+        Target::Face {part,key} => (part,key,false),
+        _ => return vec![],
+    };
+    if result.meshes.iter().filter(|mesh| &mesh.part == part).any(|mesh| if edge {
+        // GPU edge ranges use exact keys; canonical legacy aliases still need
+        // this overlay. Face highlights already resolve canonical references.
+        mesh.edges.iter().any(|e| &e.key == key)
+    } else { mesh.faces.iter().any(|f| reference_matches(&f.key,key)) }) { return vec![]; }
+    let Some(mesh) = source.meshes.iter().find(|mesh| &mesh.part == part) else { return vec![] };
+    if edge {
+        let Some(edge) = mesh.edges.iter().find(|edge| reference_matches(&edge.key,key)) else { return vec![] };
+        let points: Vec<_> = edge.points.iter().map(|p| projector.project(p.map(f64::from),rect)).collect();
+        vec![egui::Shape::line(points.clone(),Stroke::new(stroke.width+2.,Color32::BLACK)),
+            egui::Shape::line(points,stroke)]
+    } else {
+        let Some(face) = mesh.faces.iter().find(|face| reference_matches(&face.key,key)) else { return vec![] };
+        let mut fill = egui::epaint::Mesh::default();
+        for triangle in mesh.indices[face.start..face.end].as_chunks::<3>().0 {
+            let first = fill.vertices.len() as u32;
+            for &index in triangle {
+                fill.colored_vertex(projector.project(mesh.positions[index as usize].map(f64::from),rect),stroke.color.gamma_multiply(0.25));
+            }
+            fill.add_triangle(first,first+1,first+2);
+        }
+        vec![egui::Shape::mesh(fill)]
+    }
+}
+
 fn body_field<'a>(feature: &Feature, registry: &'a Registry) -> Option<&'a Field> {
     let mut fields = registry.plugins.get(&feature.plugin)?.manifest.fields.iter().filter(|f| f.kind == "body");
     let body = fields.next()?;
@@ -1303,6 +1337,53 @@ mod tests {
         }
         edit.is_new = true; edit.feature.params["target"] = json!("");
         assert!(CadApp::selection_from_input(&edit, &registry, &scene).unwrap().items().is_empty());
+    }
+    #[test]
+    fn consumed_source_topology_overlays_respect_owners_and_preserve_face_holes() {
+        let (_, source, _, registry) = profile_scene();
+        let mut camera = Camera::default(); camera.align(&Plane::named("Top",0.));
+        let rect = Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(800.,600.));
+        let projector = camera.projector(rect);
+        let stroke = Stroke::new(3.2_f32,ACCENT);
+        let first = &source.meshes[0];
+        let edge = Target::Edge {part:first.part.clone(), key:first.edges[0].key.clone()};
+        assert!(source_topology_shapes(&source,&source,&projector,rect,&edge,stroke).is_empty());
+        let lines = source_topology_shapes(&source,&Scene::default(),&projector,rect,&edge,stroke);
+        assert_eq!(lines.len(),2,"Consumed edges retain their black-backed selected stroke");
+        let egui::Shape::Path(path) = &lines[1] else { panic!("Expected a polyline") };
+        assert_eq!(path.points.len(),first.edges[0].points.len());
+        let mut aliased = source.clone();
+        aliased.meshes[0].edges[0].key = "f2:side[a2:1,l1:1>a2:2,l3:0] | f2:end".into();
+        let old_edge = Target::Edge {part:first.part.clone(),key:"f2:side[a2:1,l1:1,xa2&l1#0>a2:2,l3:0] | f2:end".into()};
+        assert_eq!(source_topology_shapes(&aliased,&aliased,&projector,rect,&old_edge,stroke).len(),2,
+            "Accepted canonical aliases still need highlighting when their exact GPU key is absent");
+        let shared = first.faces.iter().find(|face| source.meshes[1].faces.iter().any(|other| other.key == face.key)).unwrap();
+        let face = Target::Face {part:first.part.clone(), key:shared.key.clone()};
+        let mut other_owner = source.clone(); other_owner.meshes.remove(0);
+        assert_eq!(source_topology_shapes(&source,&other_owner,&projector,rect,&face,stroke).len(),1,
+            "A matching key on another part cannot suppress the selected source face");
+        assert!(source_topology_shapes(&source,&source,&projector,rect,&face,stroke).is_empty());
+        assert!(source_topology_shapes(&source,&Scene::default(),&projector,rect,
+            &Target::Face {part:"missing".into(),key:shared.key.clone()},stroke).is_empty());
+
+        let mut document = Document::default();
+        let mut sketch = Sketch::default(); sketch.add_circle([0.,0.],10.); sketch.add_circle([0.,0.],4.);
+        let mut feature = registry.create("sketch",&mut document).unwrap(); feature.set_sketch(&sketch);
+        let id = feature.id.clone(); document.features.push(feature);
+        let mut feature = registry.create("extrude",&mut document).unwrap(); feature.params["sketch"] = json!(id);
+        feature.params["depth"] = json!("2"); document.features.push(feature);
+        let scene = Runtime::new(registry).evaluate(&document).unwrap().scene;
+        assert!(scene.error.is_none(),"{:?}",scene.error);
+        let mesh = &scene.meshes[0];
+        let cap = mesh.faces.iter().find(|f| f.plane.as_ref().is_some_and(|p| p.normal[2] > 0.9)).unwrap();
+        let shapes = source_topology_shapes(&scene,&Scene::default(),&projector,rect,
+            &Target::Face {part:mesh.part.clone(),key:cap.key.clone()},stroke);
+        let egui::Shape::Mesh(fill) = &shapes[0] else { panic!("Expected the original face triangles") };
+        assert_eq!(fill.indices.len(),cap.end-cap.start);
+        let hole = Rect::from_center_size(projector.project([0.,0.,2.],rect),egui::vec2(1.,1.));
+        assert!(fill.indices.as_chunks::<3>().0.iter().all(|triangle|
+            !render::triangle_crosses_rect(triangle.map(|i|fill.vertices[i as usize].pos),hole)),
+            "A removed annular face must not fill its hole");
     }
     fn field(key: &str, kind: &str) -> Field {
         Field {

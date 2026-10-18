@@ -501,6 +501,16 @@ impl CadApp {
         if self.is_sketching() { return; }
         let scene = self.source_scene.as_ref().unwrap_or(&self.scene);
         let projector = self.camera.projector(rect);
+        if self.editor.is_some() && let Some(source) = &self.source_scene {
+            for target in hover.filter(|target| !self.selection.contains(target)).into_iter().chain(self.selection.items()) {
+                let part = match target { Target::Edge {part,..} | Target::Face {part,..} => part, _ => continue };
+                if self.hidden.contains(part) { continue; }
+                let selected = self.selection.contains(target);
+                let stroke = Stroke::new(if selected {3.2_f32} else {2.5_f32},
+                    rgb(if selected {self.settings.appearance.turquoise} else {self.settings.appearance.purple}));
+                ui.painter().with_clip_rect(rect).extend(feature_inputs::source_topology_shapes(source, &self.scene, &projector, rect, target, stroke));
+            }
+        }
         for (id, sketch) in self.region_sketches(scene) {
             let whole_selected = self.selection.items().iter().any(|t|matches!(t,Target::Feature(key) if key == id));
             let whole_hovered = matches!(hover,Some(Target::Feature(key)) if key == id);

@@ -184,3 +184,6 @@ removed by Shell. The input values remain authoritative throughout the rebuild.
 Restored edge and face inputs are scoped to the feature's part. Mixed-part picks
 leave the existing input unchanged, and changing Part clears its dependent
 edge/face input rather than reusing a matching name from another body.
+When a preview consumes selected source edges or faces, their original geometry
+remains highlighted over the result. Face highlights reuse the source triangles,
+preserving holes; existing result highlights retain their normal rendering.
