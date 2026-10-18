@@ -79,7 +79,14 @@ part naming, rotated plates, multiple holes, and 1/2 mm blends. It verifies vali
 closed topology and analytical volumes. Fresh STEP exports also undergo
 independent Open CASCADE volume, placement and solid-count checks. The exports
 include a trimmed semicircle extrusion, a bounded ring-torus arc revolution,
-and one Extrude mixing two sketch regions with an existing planar face:
+one Extrude mixing two sketch regions with an existing planar face, and a Revolve
+mixing an annular-cylinder profile with a full circular ring-torus profile.
+Collapsed periodic seam edges stay in the exact topology and STEP output; they
+have no selectable linear axis or visible point in the viewport. The full torus
+uses a 0.01 mm tolerance for OCC's triangulation-based bounding box, whose sampled
+points miss its axial extrema by 0.00592 mm. Six exact surface projections verify
+those extrema within 1e-7 mm, while the independent volume tolerance stays 1e-7:
+
 
 ```text
 cargo test --no-default-features --features step --release --test geometry_controls --test sketch_trim --test provenance_revolve --test unified_profiles

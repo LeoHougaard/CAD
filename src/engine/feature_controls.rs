@@ -862,7 +862,10 @@ pub(super) fn analytic_edge_axis(
         EdgeCurve::Line => {
             let a = topo.vertex(edge.start()).map_err(err)?.point();
             let b = topo.vertex(edge.end()).map_err(err)?.point();
-            (a, (b - a).normalize().map_err(err)?)
+            // Periodic surfaces use collapsed seam/pole edges. They have no
+            // linear axis, but remain valid topology for display and export.
+            let Ok(direction) = (b - a).normalize() else { return Ok(None); };
+            (a, direction)
         }
         EdgeCurve::Circle(c) => (c.center(), c.normal()),
         _ => return Ok(None),

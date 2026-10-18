@@ -430,6 +430,76 @@ fn changing_adopted_legacy_boundary_set_fails_closed_instead_of_reusing_part_ord
     close(after.scene.meshes[0].bounds[0][0] as f64, 10.);
 }
 
+#[test]
+fn mixed_rectangle_and_full_circle_revolve_produce_exact_annular_cylinder_and_torus() {
+    let r = Registry::builtin().unwrap();
+    let mut d = Document::default();
+    let rect = rectangle(&r, &mut d, [5., 0.], [20., 10.]);
+    let mut circle = Sketch::default();
+    circle.add_circle([30., 5.], 3.);
+    let circle = sketch(&r, &mut d, circle);
+    let before = valid(&d);
+    feature(
+        &r,
+        &mut d,
+        "revolve",
+        json!({"profiles":[region(&before,&rect,[10.,5.]),region(&before,&circle,[30.,5.])],"axis_ref":{"kind":"origin","axis":"Y"}}),
+    );
+    let e = valid(&d);
+    assert_eq!(e.geometry.parts.len(), 2);
+    close(total(&e), 3750. * PI + 540. * PI * PI);
+    let torus = e
+        .scene
+        .meshes
+        .iter()
+        .find(|m| (m.volume - 540. * PI * PI).abs() < 1e-7)
+        .unwrap();
+    assert_eq!(torus.faces.len(), 1);
+    assert!(
+        torus.edges.is_empty(),
+        "collapsed torus seams must not be pickable ghost points"
+    );
+    let torus_part = torus.part.clone();
+    #[cfg(feature = "step")]
+    {
+        let folder = std::path::Path::new("target/test-output/geometry-controls");
+        std::fs::create_dir_all(folder).unwrap();
+        d.save(&folder.join("mixed-revolve.cadpart")).unwrap();
+        e.geometry
+            .export("step", &folder.join("mixed-revolve.step"))
+            .unwrap();
+        std::fs::write(
+            folder.join("mixed-revolve.json"),
+            serde_json::to_vec_pretty(&json!({
+            "case":"mixed-revolve","step_exported":true,"expected_solids":[
+                {"volume_mm3":3750.*PI,"bounds_mm":[[-20.,0.,-20.],[20.,10.,20.]]},
+                {"volume_mm3":540.*PI*PI,"bounds_mm":[[-33.,2.,-33.],[33.,8.,33.]],
+                 "bounds_tolerance_mm":0.01,"boundary_points_mm":[[33.,5.,0.],[-33.,5.,0.],[0.,5.,33.],[0.,5.,-33.],[30.,2.,0.],[30.,8.,0.]]}
+            ]}))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+    d.features[2].params["profiles"] = json!([region(&before, &circle, [30., 5.])]);
+    let alone = valid(&d);
+    assert_eq!(alone.geometry.parts.len(), 1);
+    assert_eq!(alone.geometry.parts[0].key, torus_part);
+    close(total(&alone), 540. * PI * PI);
+    roundtrip(&d, "full-circle-revolve");
+    d.features[2].params["profiles"] = json!([
+        region(&before, &rect, [10., 5.]),
+        region(&before, &circle, [30., 5.])
+    ]);
+    let mut sk = d.features[1].sketch().unwrap();
+    sk.entities[0].values[0] = "35".into();
+    sk.entities[0].values[2] = "4".into();
+    d.features[1].set_sketch(&sk);
+    let edited = valid(&d);
+    close(total(&edited), 3750. * PI + 1120. * PI * PI);
+    assert!(edited.geometry.parts.iter().any(|p| p.key == torus_part));
+    roundtrip(&d, "mixed-full-circle-revolve");
+}
+
 fn call(path: &std::path::Path, action: Value) -> (bool, Value) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_cad-agent"))
         .stdin(Stdio::piped())

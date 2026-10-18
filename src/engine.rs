@@ -1073,6 +1073,8 @@ impl Geometry {
                 let edge = self.topo.edge(id).map_err(err)?;
                 let a = self.topo.vertex(edge.start()).map_err(err)?.point();
                 let b = self.topo.vertex(edge.end()).map_err(err)?.point();
+                // A collapsed periodic seam is topology, not a visible curve.
+                if matches!(edge.curve(), EdgeCurve::Line) && (b - a).length() < 1e-9 { continue; }
                 let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
                 let n = if matches!(edge.curve(), EdgeCurve::Line) {
                     1

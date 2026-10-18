@@ -32,10 +32,17 @@ def verify(folder=None, names=("bearing-blocks", "analytic-rings", "context-boun
                 mass = gmsh.model.occ.getMass(dim, tag)
                 box = gmsh.model.occ.getBoundingBox(dim, tag)
                 bounds = [list(box[:3]), list(box[3:])]
-                matches = [i for i, e in enumerate(expected) if math.isclose(mass, e["volume_mm3"], rel_tol=1e-7, abs_tol=1e-5) and all(abs(bounds[s][a] - e["bounds_mm"][s][a]) < 1e-5 for s in range(2) for a in range(3))]
+                matches = [i for i, e in enumerate(expected) if math.isclose(mass, e["volume_mm3"], rel_tol=1e-7, abs_tol=1e-5) and all(abs(bounds[s][a] - e["bounds_mm"][s][a]) < e.get("bounds_tolerance_mm", 1e-5) for s in range(2) for a in range(3))]
                 assert len(matches) == 1, (name, mass, bounds, expected)
-                expected.pop(matches[0])
-                actual.append({"volume_mm3": mass, "bounds_mm": bounds})
+                matched = expected.pop(matches[0])
+                # OCC's STL-based box can undershoot periodic extrema. Optional
+                # probes check those exact points on the imported CAD surfaces.
+                points = matched.get("boundary_points_mm", [])
+                faces = gmsh.model.getBoundary([(dim, tag)], oriented=False)
+                for point in points:
+                    distance = min(math.dist(point, gmsh.model.getClosestPoint(2, face, point)[0]) for d, face in faces if d == 2)
+                    assert distance < 1e-7, (name, point, distance)
+                actual.append({"volume_mm3": mass, "bounds_mm": bounds, "boundary_points_verified": len(points)})
             assert not expected, (name, expected)
             results.append({"case": name, "solids": actual})
     finally:
