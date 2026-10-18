@@ -187,3 +187,11 @@ edge/face input rather than reusing a matching name from another body.
 When a preview consumes selected source edges or faces, their original geometry
 remains highlighted over the result. Face highlights reuse the source triangles,
 preserving holes; existing result highlights retain their normal rendering.
+
+Linux CI exposed a document-lock release race during parallel process creation.
+Closing one descriptor does not release an open-description lock while another
+copy remains alive, as documented by [flock](https://man7.org/linux/man-pages/man2/flock.2.html).
+The guard now explicitly unlocks before closing. A deterministic duplicate-handle
+check fails before the fix and passes after it, while preserving exclusion and
+confirming that a late duplicate close cannot release a newer writer's lock.
+The parallel CLI checks retain their original timeouts and crash-recovery checks.
