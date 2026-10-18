@@ -62,6 +62,9 @@ filter, and returns the full scene while regeneration runs. Cancel restores the
 previous selection; commit selects the edited feature. Committing an edit keeps
 an existing manual rollback bar; inserting at that bar advances it one feature.
 Even accepting an unchanged feature rebuilds the surrounding history.
+Cached preview sketches enter the controls only when no newer draft is scheduled
+or building. Until then the draft retains its locally solved geometry and
+selection, including identities remapped by a structural edit.
 
 Feature selection has one active manifest input. Its values and missing references
 belong to the feature, while viewport selection is only that input's current

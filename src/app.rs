@@ -75,6 +75,7 @@ struct WorkState {
 }
 impl WorkState {
     fn busy(&self) -> bool { self.build.is_some() || self.exports > 0 }
+    fn preview_is_current(&self, scheduled: bool) -> bool { self.build.is_none() && !scheduled }
     fn finish_build(&mut self, serial: u64) -> bool {
         if self.build != Some(serial) { return false; }
         self.build = None;
@@ -2227,6 +2228,7 @@ impl CadApp {
             self.inspector_rect = Rect::NOTHING;
             return;
         }
+        let preview_current = self.work.preview_is_current(self.pending_rebuild.is_some());
         self.inspector_rect = editor_overlay(ctx, rgb(self.settings.appearance.purple), |ui| {
                 if let Some(mut edit) = self.editor.take() {
                     edit.sync();
@@ -2349,7 +2351,7 @@ impl CadApp {
                                     changed |= self.sketch_ui.inspector(
                                         ui,
                                         sketch,
-                                        self.scene.sketches.get(&edit.feature.id),
+                                        if preview_current && !changed { self.scene.sketches.get(&edit.feature.id) } else { None },
                                         self.last_error.as_deref(),
                                         &self.document.variables,
                                         self.document.format,
@@ -2621,6 +2623,7 @@ impl CadApp {
                             }
                     }
                 } else if self.is_sketching() {
+                    let preview_current = self.work.preview_is_current(self.pending_rebuild.is_some());
                     let mut changed = false;
                     let mut live = false;
                     if let Some(edit) = &mut self.editor {
@@ -2638,7 +2641,7 @@ impl CadApp {
                                 &response,
                                 &self.camera,
                                 sketch,
-                                self.scene.sketches.get(&edit.feature.id),
+                                if preview_current { self.scene.sketches.get(&edit.feature.id) } else { None },
                                 plane,
                                 &self.document.variables,
                                 self.document.format,
@@ -3779,6 +3782,56 @@ mod save_tests {
             sketch: document.features[index].sketch(), changed: false,
             input_field: None, undo: vec![], redo: vec![],
         }
+    }
+    #[test]
+    fn stale_async_rectangle_preview_cannot_drop_the_remapped_selected_side() {
+        fn frame(ctx: &egui::Context, editor: &mut SketchUi, sketch: &mut Sketch, camera: &Camera,
+            cached: &crate::sketch::ResolvedSketch, current: bool, events: Vec<egui::Event>) {
+            let _ = ctx.run(egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(1000.,700.))), events,
+                ..Default::default()
+            }, |ctx| {
+                editor.shortcuts(ctx);
+                let resolved=current.then_some(cached);
+                egui::Area::new(egui::Id::new("properties")).fixed_pos(egui::Pos2::ZERO).show(ctx, |ui| {
+                    ui.set_width(200.);
+                    editor.inspector(ui,sketch,resolved,None,&BTreeMap::new(),2);
+                });
+                egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| {
+                    let rect=ui.available_rect_before_wrap();
+                    let response=ui.allocate_rect(rect,Sense::click_and_drag());
+                    editor.canvas(ui,rect,&response,camera,sketch,resolved,Plane::named("Top",0.),&BTreeMap::new(),2,false);
+                });
+            });
+        }
+        let ctx=egui::Context::default(); let mut editor=SketchUi::default();
+        let mut sketch=Sketch::default();sketch.add_rect([-20.,-10.],[20.,10.]);
+        let cached=crate::sketch::resolve(&sketch,Plane::named("Top",0.),&Numbers::new(&BTreeMap::new()).unwrap()).unwrap();
+        let mut camera=Camera::default();camera.align(&Plane::named("Top",0.));
+        let mut work=WorkState::default();
+        let point=camera.project([0.,10.,0.],Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(1000.,700.)));
+        frame(&ctx,&mut editor,&mut sketch,&camera,&cached,true,vec![]);
+        frame(&ctx,&mut editor,&mut sketch,&camera,&cached,true,vec![egui::Event::PointerMoved(point)]);
+        for pressed in [true,false] { frame(&ctx,&mut editor,&mut sketch,&camera,&cached,true,vec![
+            egui::Event::PointerMoved(point),egui::Event::PointerButton {pos:point,button:egui::PointerButton::Primary,pressed,modifiers:egui::Modifiers::NONE}
+        ]); }
+        let q=|pressed|egui::Event::Key {key:egui::Key::Q,physical_key:Some(egui::Key::Q),pressed,repeat:false,modifiers:egui::Modifiers::NONE};
+        frame(&ctx,&mut editor,&mut sketch,&camera,&cached,true,vec![q(true)]);
+        assert_eq!(sketch.entities.len(),4);
+        assert!(sketch.entities[2].construction);
+        // The worker's rectangle Scene can remain visible during debounce and
+        // regeneration. Neither inspector nor canvas may ingest that stale data.
+        frame(&ctx,&mut editor,&mut sketch,&camera,&cached,work.preview_is_current(true),vec![q(false)]);
+        work.build=Some(1);
+        frame(&ctx,&mut editor,&mut sketch,&camera,&cached,work.preview_is_current(false),vec![]);
+        frame(&ctx,&mut editor,&mut sketch,&camera,&cached,work.preview_is_current(false),vec![q(true)]);
+        assert!(sketch.entities.iter().all(|e| !e.construction),"Second Q must toggle the same remapped side");
+        assert!(work.finish_build(1));
+        assert!(!work.preview_is_current(true),"A scheduled newer draft still owns the preview");
+        work.exports=1;
+        assert!(work.preview_is_current(false),"An unrelated export does not make geometry stale");
+        let solved=crate::sketch::resolve(&sketch,Plane::named("Top",0.),&Numbers::new(&BTreeMap::new()).unwrap()).unwrap();
+        assert_eq!(crate::sketch::regions(&solved).unwrap().len(),1);
     }
     #[test]
     fn export_completion_cannot_accept_an_unvalidated_edit_preview() {
