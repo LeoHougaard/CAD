@@ -3,6 +3,7 @@ use crate::{
     model::{Document, Feature, Plane, Sketch},
     plugins::{Field, Manifest, Numbers, Registry},
     render::{self, Camera, Renderer},
+    selection::{Filter, Selection, Target},
     sketch_ui::{SketchUi, Tool},
 };
 use eframe::egui::{self, Color32, Rect, RichText, Sense, Stroke, Vec2};
@@ -17,7 +18,8 @@ use std::{
 const ACCENT: Color32 = Color32::from_rgb(76, 191, 206);
 const MUTED: Color32 = Color32::from_rgb(143, 155, 173);
 const RED: Color32 = Color32::from_rgb(243, 125, 133);
-const PANEL: Color32 = Color32::from_rgb(24, 30, 39);
+const PANEL: Color32 = Color32::from_rgb(12, 12, 15);
+const PURPLE: Color32 = Color32::from_rgb(178, 112, 250);
 
 fn save_checked(
     document: &Document,
@@ -138,9 +140,19 @@ pub struct CadApp {
     notice: String,
     editor: Option<Editor>,
     selected_feature: Option<usize>,
-    selected_part: Option<String>,
-    selected_face: Option<(String, String, usize, Option<Plane>)>,
-    selected_edges: Vec<(String, String)>,
+    selection: Selection,
+    selection_filter: Filter,
+    selection_box: Option<egui::Pos2>,
+    context_position: Option<egui::Pos2>,
+    select_other: Option<(egui::Pos2, Vec<Target>, usize)>,
+    shortcut_menu: Option<egui::Pos2>,
+    shortcut_search: String,
+    shortcut_focus: bool,
+    pending_accept: Option<bool>,
+    selected_plane: Option<String>,
+    choosing_plane: bool,
+    show_sketches: bool,
+    show_planes: bool,
     sketch_ui: SketchUi,
     camera: Camera,
     mouse_orbiting: bool,
@@ -149,6 +161,7 @@ pub struct CadApp {
     shaded_edges: bool,
     renderer: Arc<Mutex<Renderer>>,
     hidden: BTreeSet<String>,
+    hidden_sketches: BTreeSet<String>,
     pending_rebuild: Option<Instant>,
     fit_when_ready: bool,
     align_when_ready: bool,
@@ -182,14 +195,14 @@ impl CadApp {
         ctx.set_theme(egui::Theme::Dark);
         let mut style = (*ctx.style()).clone();
         style.visuals.panel_fill = PANEL;
-        style.visuals.window_fill = Color32::from_rgb(29, 36, 47);
-        style.visuals.extreme_bg_color = Color32::from_rgb(15, 21, 29);
-        style.visuals.faint_bg_color = Color32::from_rgb(31, 39, 51);
-        style.visuals.selection.bg_fill = Color32::from_rgb(37, 88, 101);
+        style.visuals.window_fill = Color32::from_rgb(19, 18, 23);
+        style.visuals.extreme_bg_color = Color32::from_rgb(5, 5, 7);
+        style.visuals.faint_bg_color = Color32::from_rgb(23, 22, 28);
+        style.visuals.selection.bg_fill = Color32::from_rgb(18, 70, 72);
         style.visuals.selection.stroke = Stroke::new(1.0f32, ACCENT);
-        style.visuals.widgets.active.bg_fill = Color32::from_rgb(43, 105, 116);
-        style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(45, 57, 73);
-        style.visuals.widgets.inactive.bg_fill = Color32::from_rgb(34, 43, 56);
+        style.visuals.widgets.active.bg_fill = Color32::from_rgb(24, 82, 86);
+        style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(47, 35, 61);
+        style.visuals.widgets.inactive.bg_fill = Color32::from_rgb(28, 27, 33);
         style.visuals.override_text_color = Some(Color32::from_rgb(215, 224, 234));
         style.visuals.window_shadow = egui::epaint::Shadow::NONE;
         style.spacing.item_spacing = Vec2::new(6., 4.);
@@ -223,9 +236,19 @@ impl CadApp {
             notice: String::new(),
             editor: None,
             selected_feature: None,
-            selected_part: None,
-            selected_face: None,
-            selected_edges: vec![],
+            selection: Selection::default(),
+            selection_filter: Filter::All,
+            selection_box: None,
+            context_position: None,
+            select_other: None,
+            shortcut_menu: None,
+            shortcut_search: String::new(),
+            shortcut_focus: false,
+            pending_accept: None,
+            selected_plane: None,
+            choosing_plane: false,
+            show_sketches: false,
+            show_planes: true,
             sketch_ui: SketchUi::default(),
             camera: Camera::default(),
             mouse_orbiting: false,
@@ -234,6 +257,7 @@ impl CadApp {
             shaded_edges: true,
             renderer,
             hidden: BTreeSet::new(),
+            hidden_sketches: BTreeSet::new(),
             pending_rebuild: None,
             fit_when_ready: true,
             align_when_ready: false,
@@ -328,6 +352,612 @@ impl CadApp {
         self.last_error = None;
         self.rebuild();
     }
+    fn origin_planes_visible(&self) -> bool {
+        self.show_planes
+            && (self.choosing_plane
+                || self.scene.meshes.is_empty()
+                || self.selected_plane.is_some())
+    }
+    fn origin_plane_hits(&self, pos: egui::Pos2, rect: Rect) -> Vec<String> {
+        if !self.origin_planes_visible() {
+            return vec![];
+        }
+        let size = self.camera.span as f64 * 0.22;
+        let (origin, ray) = self.camera.ray(pos, rect);
+        let mut hits = vec![];
+        for name in ["Top", "Front", "Right"] {
+            let plane = Plane::named(name, 0.);
+            if let Some(p) = self.camera.plane_point(pos, rect, &plane)
+                && p[0].abs() <= size
+                && p[1].abs() <= size
+            {
+                let world = glam::Vec3::from_array(plane.at(p).map(|v| v as f32));
+                let distance = (world - origin).dot(ray);
+                if distance > 0. {
+                    hits.push((distance, name.to_owned()));
+                }
+            }
+        }
+        hits.sort_by(|a, b| a.0.total_cmp(&b.0));
+        hits.into_iter().map(|(_, name)| name).collect()
+    }
+    fn paint_origin_planes(&self, ui: &egui::Ui, rect: Rect, pointer: Option<egui::Pos2>) {
+        if !self.origin_planes_visible() {
+            return;
+        }
+        let size = self.camera.span as f64 * 0.22;
+        let hover = pointer.and_then(|p| self.origin_plane_hits(p, rect).into_iter().next());
+        for name in ["Top", "Front", "Right"] {
+            let selected = self.selected_plane.as_deref() == Some(name);
+            if !self.choosing_plane && !self.scene.meshes.is_empty() && !selected {
+                continue;
+            }
+            let plane = Plane::named(name, 0.);
+            let points: Vec<_> = [[-size, -size], [size, -size], [size, size], [-size, size]]
+                .into_iter()
+                .map(|p| self.camera.project(plane.at(p), rect))
+                .collect();
+            let color = if selected {
+                ACCENT
+            } else if hover.as_deref() == Some(name) {
+                PURPLE
+            } else {
+                MUTED
+            };
+            ui.painter().add(egui::Shape::convex_polygon(
+                points,
+                color.gamma_multiply(0.06),
+                Stroke::new(1.0f32, color),
+            ));
+            let label = self
+                .camera
+                .project(plane.at([size * 0.75, size * 0.75]), rect);
+            ui.painter().text(
+                label,
+                egui::Align2::CENTER_CENTER,
+                name,
+                egui::FontId::proportional(12.),
+                color,
+            );
+        }
+    }
+    fn choose_plane(&mut self, name: &str) {
+        self.selected_plane = Some(name.into());
+        if let Some(edit) = &mut self.editor
+            && edit.sketch.is_some()
+        {
+            let before = edit.feature.params.clone();
+            edit.feature.params["plane"] = json!(name);
+            edit.feature.params["support"] = json!("");
+            if edit.feature.params != before {
+                edit.undo.push(before);
+                edit.redo.clear();
+                edit.changed = true;
+            }
+            self.choosing_plane = false;
+            self.align_when_ready = true;
+            self.rebuild();
+        }
+    }
+    fn selected_face(&self) -> Option<&crate::engine::FaceView> {
+        let scene = self.source_scene.as_ref().unwrap_or(&self.scene);
+        self.selection.faces().last().and_then(|(part, key)| {
+            scene
+                .meshes
+                .iter()
+                .find(|m| m.part == part)?
+                .faces
+                .iter()
+                .find(|f| f.key == key)
+        })
+    }
+    fn active_selection_filter(&self) -> Filter {
+        if self.selection_filter != Filter::All {
+            return self.selection_filter;
+        }
+        self.editor
+            .as_ref()
+            .and_then(|e| self.registry.plugins.get(&e.feature.plugin))
+            .and_then(|p| {
+                [
+                    ("regions", Filter::Regions),
+                    ("edges", Filter::Edges),
+                    ("faces", Filter::Faces),
+                    ("body", Filter::Parts),
+                ]
+                .into_iter()
+                .find_map(|(kind, filter)| {
+                    p.manifest
+                        .fields
+                        .iter()
+                        .any(|f| f.kind == kind)
+                        .then_some(filter)
+                })
+            })
+            .unwrap_or(self.selection_filter)
+    }
+    fn face_ids(&self, scene: &Scene, targets: &[Target]) -> Vec<usize> {
+        scene
+            .meshes
+            .iter()
+            .flat_map(|m| {
+                m.faces
+                    .iter()
+                    .filter(|f| {
+                        targets.iter().any(|t| match t {
+                            Target::Part(part) => part == &m.part,
+                            Target::Face { part, key } => part == &m.part && key == &f.key,
+                            _ => false,
+                        })
+                    })
+                    .map(|f| f.global_id)
+            })
+            .collect()
+    }
+    fn region_sketches<'a>(
+        &'a self,
+        scene: &'a Scene,
+    ) -> Vec<(&'a str, &'a crate::sketch::ResolvedSketch)> {
+        let input = self
+            .editor
+            .as_ref()
+            .and_then(|e| e.feature.params.get("sketch"))
+            .and_then(Value::as_str);
+        if self
+            .editor
+            .as_ref()
+            .and_then(|e| self.registry.plugins.get(&e.feature.plugin))
+            .is_some_and(|p| p.manifest.fields.iter().any(|f| f.kind == "regions"))
+        {
+            return scene
+                .sketches
+                .iter()
+                .filter(|(id, _)| input == Some(id.as_str()))
+                .map(|(id, sk)| (id.as_str(), sk))
+                .collect();
+        }
+        scene
+            .sketches
+            .iter()
+            .filter(|(id, _)| {
+                (!self.hidden_sketches.contains(*id) || input == Some(id.as_str()))
+                    && (self.show_sketches
+                        || input == Some(id.as_str())
+                        || self
+                            .selected_feature
+                            .and_then(|i| self.document.features.get(i))
+                            .is_some_and(|f| &f.id == *id)
+                        || self
+                            .selection
+                            .items()
+                            .iter()
+                            .any(|t| matches!(t,Target::Feature(key) if key==*id)))
+            })
+            .map(|(id, sk)| (id.as_str(), sk))
+            .collect()
+    }
+    fn selection_candidates(
+        &self,
+        scene: &Scene,
+        pos: egui::Pos2,
+        rect: Rect,
+        filter: Filter,
+        through: bool,
+    ) -> Vec<Target> {
+        let faces = render::picks(scene, &self.camera, pos, rect, &self.hidden);
+        let depth = faces.first().map(|f| f.distance);
+        let mut result = vec![];
+        if matches!(filter, Filter::All | Filter::Edges) {
+            for e in render::pick_edges(scene, &self.camera, pos, rect, &self.hidden) {
+                if through
+                    || depth.is_none_or(|d| e.distance <= d + self.camera.span / rect.height() * 5.)
+                {
+                    result.push(Target::Edge {
+                        part: e.part,
+                        key: e.key,
+                    });
+                }
+            }
+        }
+        if matches!(filter, Filter::All | Filter::Regions) {
+            let (origin, direction) = self.camera.ray(pos, rect);
+            let mut regions = vec![];
+            for (id, sketch) in self.region_sketches(scene) {
+                let Some(point) = self.camera.plane_point(pos, rect, &sketch.plane) else {
+                    continue;
+                };
+                let world = glam::Vec3::from_array(sketch.plane.at(point).map(|v| v as f32));
+                let distance = (world - origin).dot(direction);
+                let editing = self.editor.as_ref().is_some_and(|e| {
+                    e.feature.params.get("sketch").and_then(Value::as_str) == Some(id)
+                });
+                if distance < 0.
+                    || (!through
+                        && !editing
+                        && depth
+                            .is_some_and(|d| distance > d + self.camera.span / rect.height() * 2.))
+                {
+                    continue;
+                }
+                if let Some(items) = scene.regions.get(id) {
+                    for region in items.iter().filter(|r| r.contains(point)) {
+                        regions.push((
+                            distance,
+                            Target::Region {
+                                sketch: id.to_owned(),
+                                key: region.key.clone(),
+                            },
+                        ));
+                    }
+                }
+            }
+            regions.sort_by(|a, b| a.0.total_cmp(&b.0));
+            result.extend(regions.into_iter().map(|(_, t)| t));
+        }
+        if matches!(filter, Filter::All | Filter::Faces | Filter::Parts) {
+            for face in faces.into_iter().take(if through { usize::MAX } else { 1 }) {
+                let t = if filter == Filter::Parts {
+                    Target::Part(face.part)
+                } else {
+                    Target::Face {
+                        part: face.part,
+                        key: face.face,
+                    }
+                };
+                if !result.contains(&t) {
+                    result.push(t);
+                }
+            }
+        }
+        if matches!(filter, Filter::All) && (through || depth.is_none()) {
+            result.extend(
+                self.origin_plane_hits(pos, rect)
+                    .into_iter()
+                    .map(Target::Plane),
+            );
+        }
+        result
+    }
+    fn toggle_target(&mut self, target: Target, ctx: &egui::Context) {
+        ctx.request_repaint();
+        self.selection.toggle(target);
+        self.selected_plane = self.selection.items().iter().rev().find_map(|t| {
+            if let Target::Plane(name) = t {
+                Some(name.clone())
+            } else {
+                None
+            }
+        });
+        self.sync_selection_to_editor(ctx);
+    }
+    fn clear_selection(&mut self, ctx: &egui::Context) {
+        ctx.request_repaint();
+        if self.editor.is_some() {
+            let filter = self.active_selection_filter();
+            self.selection.retain(|t| match filter {
+                Filter::Regions => !matches!(t, Target::Region { .. }),
+                Filter::Edges => !matches!(t, Target::Edge { .. }),
+                Filter::Faces => !matches!(t, Target::Face { .. }),
+                Filter::Parts => !matches!(t, Target::Part(_)),
+                Filter::All => false,
+            });
+        } else {
+            self.selection.clear();
+        }
+        self.selected_feature = None;
+        self.sketch_ui.clear_selection();
+        self.selected_plane = None;
+        self.select_other = None;
+        self.sync_selection_to_editor(ctx);
+    }
+    fn sync_selection_to_editor(&mut self, ctx: &egui::Context) {
+        let active_filter = self.active_selection_filter();
+        let Some(edit) = &mut self.editor else { return };
+        let Some(plugin) = self.registry.plugins.get(&edit.feature.plugin) else {
+            return;
+        };
+        let before = edit.feature.params.clone();
+        for field in &plugin.manifest.fields {
+            match field.kind.as_str() {
+                "edges" => {
+                    edit.feature.params[&field.key] = json!(
+                        self.selection
+                            .edges()
+                            .map(|(_, key)| key)
+                            .collect::<Vec<_>>()
+                    )
+                }
+                "faces" => {
+                    edit.feature.params[&field.key] = json!(
+                        self.selection
+                            .faces()
+                            .map(|(_, key)| key)
+                            .collect::<Vec<_>>()
+                    )
+                }
+                "body" if active_filter == Filter::Parts => {
+                    edit.feature.params[&field.key] = json!(self.selection.part().unwrap_or(""))
+                }
+                "regions" if active_filter == Filter::Regions || active_filter == Filter::All => {
+                    let sketch = edit
+                        .feature
+                        .params
+                        .get("sketch")
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    edit.feature.params[&field.key] = json!(
+                        self.selection
+                            .items()
+                            .iter()
+                            .filter_map(|t| match t {
+                                Target::Region { sketch: id, key } if id == sketch => Some(key),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
+                    );
+                }
+                _ => (),
+            }
+        }
+        if matches!(active_filter, Filter::Edges | Filter::Faces) {
+            let owners: BTreeSet<_> = if active_filter == Filter::Edges {
+                self.selection.edges().map(|(part, _)| part).collect()
+            } else {
+                self.selection.faces().map(|(part, _)| part).collect()
+            };
+            if owners.len() == 1 {
+                for field in &plugin.manifest.fields {
+                    if field.kind == "body" {
+                        edit.feature.params[&field.key] = json!(owners.first().unwrap());
+                    }
+                }
+            }
+        }
+        if before != edit.feature.params {
+            edit.undo.push(before);
+            edit.redo.clear();
+            edit.changed = true;
+            self.schedule(ctx);
+        }
+    }
+    fn sync_selection_from_editor(&mut self) {
+        let Some(edit) = &self.editor else { return };
+        let Some(plugin) = self.registry.plugins.get(&edit.feature.plugin) else {
+            return;
+        };
+        let scene = self.source_scene.as_ref().unwrap_or(&self.scene);
+        for field in &plugin.manifest.fields {
+            match field.kind.as_str() {
+                "body"
+                    if !plugin
+                        .manifest
+                        .fields
+                        .iter()
+                        .any(|f| matches!(f.kind.as_str(), "regions" | "edges" | "faces")) =>
+                {
+                    self.selection.retain(|t| !matches!(t, Target::Part(_)));
+                    if let Some(part) = edit
+                        .feature
+                        .params
+                        .get(&field.key)
+                        .and_then(Value::as_str)
+                        .filter(|s| !s.is_empty())
+                    {
+                        self.selection.add(Target::Part(part.into()));
+                    }
+                }
+                "regions" => {
+                    self.selection
+                        .retain(|t| !matches!(t, Target::Region { .. }));
+                    let sketch = edit
+                        .feature
+                        .params
+                        .get("sketch")
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    let explicit = edit
+                        .feature
+                        .params
+                        .get(&field.key)
+                        .and_then(Value::as_array);
+                    if let Some(regions) = scene.regions.get(sketch) {
+                        for r in regions {
+                            if explicit.map_or(r.legacy_selected, |a| {
+                                a.iter().any(|v| v.as_str() == Some(&r.key))
+                            }) {
+                                self.selection.add(Target::Region {
+                                    sketch: sketch.into(),
+                                    key: r.key.clone(),
+                                });
+                            }
+                        }
+                    }
+                }
+                "edges" | "faces" => {
+                    let edges = field.kind == "edges";
+                    self.selection.retain(|t| {
+                        if edges {
+                            !matches!(t, Target::Edge { .. })
+                        } else {
+                            !matches!(t, Target::Face { .. })
+                        }
+                    });
+                    if let Some(keys) = edit
+                        .feature
+                        .params
+                        .get(&field.key)
+                        .and_then(Value::as_array)
+                    {
+                        for key in keys.iter().filter_map(Value::as_str) {
+                            for mesh in &scene.meshes {
+                                let found = if edges {
+                                    mesh.edges.iter().any(|e| e.key == key)
+                                } else {
+                                    mesh.faces.iter().any(|f| f.key == key)
+                                };
+                                if found {
+                                    self.selection.add(if edges {
+                                        Target::Edge {
+                                            part: mesh.part.clone(),
+                                            key: key.into(),
+                                        }
+                                    } else {
+                                        Target::Face {
+                                            part: mesh.part.clone(),
+                                            key: key.into(),
+                                        }
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => (),
+            }
+        }
+    }
+    fn box_regions(
+        &self,
+        scene: &Scene,
+        viewport: Rect,
+        area: Rect,
+        crossing: bool,
+    ) -> Vec<Target> {
+        let mut out = vec![];
+        for (id, sketch) in self.region_sketches(scene) {
+            if let Some(regions) = scene.regions.get(id) {
+                for region in regions {
+                    let points: Vec<_> = region
+                        .outer
+                        .iter()
+                        .map(|p| self.camera.project(sketch.plane.at(*p), viewport))
+                        .collect();
+                    let hit = if crossing {
+                        region.triangles.iter().any(|tri| {
+                            render::triangle_crosses_rect(
+                                tri.map(|p| self.camera.project(sketch.plane.at(p), viewport)),
+                                area,
+                            )
+                        })
+                    } else {
+                        !points.is_empty() && points.iter().all(|p| area.contains(*p))
+                    };
+                    if hit {
+                        out.push(Target::Region {
+                            sketch: id.into(),
+                            key: region.key.clone(),
+                        });
+                    }
+                }
+            }
+        }
+        out
+    }
+    fn paint_regions(&self, ui: &egui::Ui, scene: &Scene, rect: Rect, hover: Option<&Target>) {
+        for (id, sketch) in self.region_sketches(scene) {
+            if let Some(regions) = scene.regions.get(id) {
+                for region in regions {
+                    let target = Target::Region {
+                        sketch: id.into(),
+                        key: region.key.clone(),
+                    };
+                    let selected = self.selection.contains(&target)
+                        || self.selection.contains(&Target::Feature(id.into()));
+                    let hovered = hover == Some(&target);
+                    if !selected && !hovered {
+                        continue;
+                    }
+                    let color = if selected { ACCENT } else { PURPLE };
+                    let mut fill = egui::epaint::Mesh::default();
+                    for tri in &region.triangles {
+                        let offset = fill.vertices.len() as u32;
+                        for p in tri {
+                            fill.colored_vertex(
+                                self.camera.project(sketch.plane.at(*p), rect),
+                                color.gamma_multiply(if selected { 0.24 } else { 0.15 }),
+                            );
+                        }
+                        fill.add_triangle(offset, offset + 1, offset + 2);
+                    }
+                    ui.painter().add(egui::Shape::mesh(fill));
+                    // Boundary strokes retain holes, concavity and exact region identity.
+                    for contour in std::iter::once(&region.outer).chain(region.holes.iter()) {
+                        let mut points: Vec<_> = contour
+                            .iter()
+                            .map(|p| self.camera.project(sketch.plane.at(*p), rect))
+                            .collect();
+                        if let Some(first) = points.first().copied() {
+                            points.push(first);
+                        }
+                        ui.painter().add(egui::Shape::line(
+                            points,
+                            Stroke::new(if selected { 3.0f32 } else { 2.0f32 }, color),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    fn selection_controls(&mut self, ctx: &egui::Context, rect: Rect) {
+        egui::Area::new(egui::Id::new("selection_filter")).fixed_pos(rect.min+egui::vec2(8.,8.)).show(ctx,|ui|{
+            ui.menu_button(format!("Select: {}",self.active_selection_filter().label()),|ui|{
+                for filter in Filter::ALL {if ui.selectable_value(&mut self.selection_filter,filter,filter.label()).clicked(){ui.close();}}
+            }).response.on_hover_text("Click adds or removes. Space clears. Drag right to enclose, left to cross. Ctrl-drag removes.");
+        });
+    }
+    fn select_other_popup(&mut self, ctx: &egui::Context) {
+        let Some((pos, items, index)) = self.select_other.clone() else {
+            return;
+        };
+        let mut chosen = None;
+        let mut close = false;
+        egui::Area::new(egui::Id::new("select_other"))
+            .fixed_pos(pos)
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.strong("Select other");
+                        if ui.small_button("x").clicked() {
+                            close = true;
+                        }
+                    });
+                    egui::ScrollArea::vertical()
+                        .max_height(280.)
+                        .show(ui, |ui| {
+                            for (i, target) in items.iter().enumerate() {
+                                let label = match target {
+                                    Target::Face { key, .. } => format!("Face {key}"),
+                                    Target::Edge { key, .. } => format!("Edge {key}"),
+                                    Target::Region { sketch, .. } => format!("Region of {sketch}"),
+                                    Target::Part(p) => format!("Part {p}"),
+                                    Target::Feature(f) => f.clone(),
+                                    Target::Plane(name) => format!("{name} plane"),
+                                };
+                                let response = ui.selectable_label(i == index, label);
+                                if response.hovered()
+                                    && let Some((_, _, current)) = &mut self.select_other
+                                {
+                                    *current = i;
+                                }
+                                if response.clicked() {
+                                    chosen = Some(target.clone());
+                                }
+                            }
+                        });
+                });
+            });
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
+            chosen = items.get(index).cloned();
+        }
+        if let Some(target) = chosen {
+            self.toggle_target(target, ctx);
+            close = true;
+        }
+        if close {
+            self.select_other = None;
+        }
+    }
     fn begin(&mut self, id: &str) {
         self.notice.clear();
         self.sketch_ui = SketchUi::default();
@@ -352,7 +982,15 @@ impl CadApp {
             match field.kind.as_str() {
                 "sketch" if primary_sketch => {
                     primary_sketch = false;
-                    if let Some(s) = self
+                    if let Some(id) = self.selection.items().iter().rev().find_map(|t| {
+                        if let Target::Region { sketch, .. } = t {
+                            Some(sketch)
+                        } else {
+                            None
+                        }
+                    }) {
+                        f.params[&field.key] = json!(id);
+                    } else if let Some(s) = self
                         .selected_feature
                         .filter(|i| *i < index)
                         .and_then(|i| self.document.features.get(i))
@@ -377,41 +1015,60 @@ impl CadApp {
                         f.params[&field.key] = json!(s.id);
                     }
                 }
+                "regions" => {
+                    let sketch = f.params.get("sketch").and_then(Value::as_str).unwrap_or("");
+                    let keys: Vec<_> = self
+                        .selection
+                        .items()
+                        .iter()
+                        .filter_map(|t| match t {
+                            Target::Region { sketch: id, key } if id == sketch => Some(key),
+                            _ => None,
+                        })
+                        .collect();
+                    if !keys.is_empty() {
+                        f.params[&field.key] = json!(keys);
+                    }
+                }
                 "body" => {
-                    if let Some(part) = &self.selected_part {
+                    if let Some(part) = self.selection.part() {
                         f.params[&field.key] = json!(part);
                     }
                 }
                 "edges" => {
-                    f.params[&field.key] = json!(
-                        self.selected_edges
-                            .iter()
-                            .map(|(_, k)| k)
-                            .collect::<Vec<_>>()
-                    );
+                    f.params[&field.key] =
+                        json!(self.selection.edges().map(|(_, k)| k).collect::<Vec<_>>());
                 }
                 "faces" => {
-                    if let Some((_, key, _, _)) = &self.selected_face {
-                        f.params[&field.key] = json!([key]);
-                    }
+                    f.params[&field.key] = json!(
+                        self.selection
+                            .faces()
+                            .map(|(_, key)| key)
+                            .collect::<Vec<_>>()
+                    );
                 }
                 _ => (),
             }
         }
         if manifest.editor == "sketch" {
             if self
-                .selected_face
-                .as_ref()
-                .is_some_and(|(_, _, _, plane)| plane.is_none())
+                .selected_face()
+                .is_some_and(|face| face.plane.is_none())
             {
                 self.last_error = Some("Choose an origin plane or supported planar face.".into());
                 return;
             }
-            if let Some((_, key, _, Some(_))) = &self.selected_face {
-                f.params["support"] = json!(key);
+            if let Some(face) = self.selected_face().filter(|face| face.plane.is_some()) {
+                f.params["support"] = json!(face.key);
+            } else if let Some(plane) = &self.selected_plane {
+                f.params["plane"] = json!(plane);
             }
-            self.align_when_ready = true;
-            self.sketch_ui.set_tool(Tool::Rectangle);
+            self.choosing_plane = self.selected_face().is_none() && self.selected_plane.is_none();
+            if self.choosing_plane {
+                self.show_planes = true;
+            }
+            self.align_when_ready = !self.choosing_plane;
+            self.sketch_ui.set_tool(Tool::Select);
         } else {
             self.sketch_ui.cancel_gesture();
         }
@@ -430,9 +1087,13 @@ impl CadApp {
             undo: vec![],
             redo: vec![],
         });
+        self.selection_filter = Filter::All;
+        self.selection.clear();
+        self.sync_selection_from_editor();
         self.rebuild();
     }
     fn edit_feature(&mut self, index: usize) {
+        self.choosing_plane = false;
         self.notice.clear();
         self.sketch_ui = SketchUi::default();
         if self.editor.is_some() {
@@ -455,9 +1116,14 @@ impl CadApp {
         });
         self.sketch_ui.cancel_gesture();
         self.align_when_ready = align;
+        self.selection_filter = Filter::All;
+        self.selection.clear();
+        self.sync_selection_from_editor();
         self.rebuild();
     }
     fn finish_editor(&mut self, apply: bool) {
+        self.choosing_plane = false;
+        self.pending_accept = None;
         self.source_scene = None;
         if let Some(mut edit) = self.editor.take() {
             if apply {
@@ -470,6 +1136,10 @@ impl CadApp {
                     self.document.features[edit.index] = edit.feature;
                 }
                 self.selected_feature = Some(edit.index);
+                self.selection.clear();
+                self.selection.add(Target::Feature(
+                    self.document.features[edit.index].id.clone(),
+                ));
                 self.document.rollback = None;
                 self.remember(before);
             } else {
@@ -532,10 +1202,14 @@ impl CadApp {
         self.editor = None;
         self.source_scene = None;
         self.selected_feature = None;
-        self.selected_face = None;
-        self.selected_part = None;
-        self.selected_edges.clear();
+        self.selection.clear();
+        self.select_other = None;
+        self.selection_box = None;
+        self.selected_plane = None;
+        self.pending_accept = None;
         self.hidden.clear();
+        self.hidden_sketches.clear();
+        self.choosing_plane = false;
         self.fit_when_ready = true;
         self.rebuild();
     }
@@ -661,16 +1335,29 @@ impl CadApp {
                         Ok(scene) => {
                             self.last_error = scene.error.clone();
                             self.scene = scene;
-                            self.selected_face =
-                                self.selected_face.take().and_then(|(part, key, _, _)| {
-                                    self.scene
-                                        .meshes
-                                        .iter()
-                                        .filter(|m| m.part == part)
-                                        .flat_map(|m| &m.faces)
-                                        .find(|f| f.key == key)
-                                        .map(|f| (part, key, f.global_id, f.plane.clone()))
-                                });
+                            let visible_scene = self.source_scene.as_ref().unwrap_or(&self.scene);
+                            self.selection.retain(|item| match item {
+                                Target::Part(part) => {
+                                    visible_scene.meshes.iter().any(|m| &m.part == part)
+                                }
+                                Target::Face { part, key } => {
+                                    visible_scene.meshes.iter().any(|m| {
+                                        &m.part == part && m.faces.iter().any(|f| &f.key == key)
+                                    })
+                                }
+                                Target::Edge { part, key } => {
+                                    visible_scene.meshes.iter().any(|m| {
+                                        &m.part == part && m.edges.iter().any(|e| &e.key == key)
+                                    })
+                                }
+                                Target::Feature(id) => {
+                                    self.document.features.iter().any(|f| &f.id == id)
+                                }
+                                Target::Plane(_) => true,
+                                Target::Region { sketch, .. } => {
+                                    visible_scene.sketches.contains_key(sketch)
+                                }
+                            });
                             self.render_revision += 1;
                         }
                         Err(e) => {
@@ -688,50 +1375,283 @@ impl CadApp {
             }
         }
     }
+    fn start_feature(&mut self, id: &str) {
+        if self.is_sketching() {
+            if self.busy || self.pending_rebuild.is_some() || self.last_error.is_some() {
+                return;
+            }
+            self.finish_editor(true);
+        }
+        if self.editor.is_none() {
+            self.begin(id);
+        }
+    }
     fn shortcuts(&mut self, ctx: &egui::Context) {
-        if ctx.wants_keyboard_input() {
+        use crate::shortcuts::{Command, Context, View};
+        if self.files.is_some()
+            || self.variables_open
+            || self.plugins_open
+            || self.close_pending
+            || self.pending_load.is_some()
+        {
             return;
         }
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab)) {
-            self.tree_open = !self.tree_open;
+        if self.shortcut_menu.is_some() {
+            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.shortcut_menu = None;
+                ctx.memory_mut(|m| m.surrender_focus(egui::Id::new("tool_search")));
+            }
+            return;
         }
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::S)) {
-            self.save();
+        if ctx.wants_keyboard_input() {
+            if self.editor.as_ref().is_some_and(|e| e.sketch.is_none())
+                && ctx.input(|i| i.key_pressed(egui::Key::Enter))
+            {
+                self.pending_accept = Some(ctx.input(|i| i.modifiers.shift));
+                ctx.request_repaint();
+            }
+            return;
         }
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::O)) {
-            self.open_dialog(FileAction::Open);
-        }
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::R)) {
-            self.reload();
-        }
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z)) {
-            self.undo(false);
-        }
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Y)) {
-            self.undo(true);
-        }
-        if ctx.input(|i| i.key_pressed(egui::Key::F)) {
-            self.fit();
-        }
-        for (key, direction) in [
-            (egui::Key::Num1, glam::Vec3::NEG_Y),
-            (egui::Key::Num2, glam::Vec3::Y),
-            (egui::Key::Num3, glam::Vec3::NEG_X),
-            (egui::Key::Num4, glam::Vec3::X),
-            (egui::Key::Num5, glam::Vec3::Z),
-            (egui::Key::Num6, glam::Vec3::NEG_Z),
-            (egui::Key::Num7, glam::Vec3::new(1., -1., 1.)),
-        ] {
-            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, key)) {
-                self.camera.pivot =
-                    render::model_center(&self.scene, &self.hidden).unwrap_or(self.camera.center);
-                self.camera.set_view(direction);
+        // Local documents add save/open/reload without stealing an Onshape tool key.
+        for (key, action) in [(egui::Key::S, 0), (egui::Key::O, 1), (egui::Key::R, 2)] {
+            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, key)) {
+                match action {
+                    0 => self.save(),
+                    1 => self.open_dialog(FileAction::Open),
+                    _ => self.reload(),
+                }
             }
         }
-        if self.is_sketching() {
+        let sketching = self.is_sketching();
+        if sketching {
             self.sketch_ui.shortcuts(ctx);
-        } else if self.editor.is_none() && ctx.input(|i| i.key_pressed(egui::Key::E)) {
-            self.begin("extrude");
+        }
+        let context = if sketching {
+            Context::Sketch
+        } else {
+            Context::PartStudio
+        };
+        let events = ctx.input(|i| i.events.clone());
+        for event in events {
+            let egui::Event::Key {
+                key,
+                modifiers,
+                pressed: true,
+                repeat: false,
+                ..
+            } = event
+            else {
+                continue;
+            };
+            let Some(command) = crate::shortcuts::command_for(key, modifiers, context) else {
+                continue;
+            };
+            if matches!(
+                command,
+                Command::SketchTool(_) | Command::Relationship(_) | Command::Construction
+            ) {
+                continue;
+            }
+            match command {
+                Command::ClearSelection if !sketching => self.clear_selection(ctx),
+                Command::Cancel => {
+                    if self.select_other.take().is_none() && !sketching {
+                        self.finish_editor(false);
+                    }
+                    self.shortcut_menu = None;
+                }
+                Command::Accept | Command::AcceptAndRepeat if self.select_other.is_none() => {
+                    if self.editor.is_some()
+                        && !self.busy
+                        && self.pending_rebuild.is_none()
+                        && self.last_error.is_none()
+                    {
+                        let id = self.editor.as_ref().unwrap().feature.plugin.clone();
+                        self.finish_editor(true);
+                        if command == Command::AcceptAndRepeat {
+                            self.begin(&id);
+                        }
+                    }
+                }
+                Command::Undo => self.undo(false),
+                Command::Redo => self.undo(true),
+                Command::Fit => self.fit(),
+                Command::View(view) => {
+                    let direction = match view {
+                        View::Front => glam::Vec3::NEG_Y,
+                        View::Back => glam::Vec3::Y,
+                        View::Left => glam::Vec3::NEG_X,
+                        View::Right => glam::Vec3::X,
+                        View::Top => glam::Vec3::Z,
+                        View::Bottom => glam::Vec3::NEG_Z,
+                        View::Isometric => glam::Vec3::new(1., -1., 1.),
+                    };
+                    self.camera.pivot = render::model_center(&self.scene, &self.hidden)
+                        .unwrap_or(self.camera.center);
+                    self.camera.set_view(direction);
+                }
+                Command::Normal => {
+                    let hover = ctx
+                        .input(|i| i.pointer.hover_pos())
+                        .filter(|p| self.viewport_rect.contains(*p));
+                    let plane = self
+                        .editor
+                        .as_ref()
+                        .and_then(|e| self.scene.sketches.get(&e.feature.id))
+                        .map(|s| s.plane.clone())
+                        .or_else(|| {
+                            hover
+                                .and_then(|p| {
+                                    render::pick(
+                                        &self.scene,
+                                        &self.camera,
+                                        p,
+                                        self.viewport_rect,
+                                        &self.hidden,
+                                    )
+                                })
+                                .and_then(|f| f.plane)
+                        })
+                        .or_else(|| self.selected_face().and_then(|f| f.plane.clone()))
+                        .or_else(|| {
+                            self.selected_plane
+                                .as_ref()
+                                .map(|name| Plane::named(name, 0.))
+                        })
+                        .or_else(|| {
+                            self.selected_feature
+                                .and_then(|i| self.document.features.get(i))
+                                .and_then(|f| self.scene.sketches.get(&f.id))
+                                .map(|s| s.plane.clone())
+                        });
+                    let plane = plane.or_else(|| {
+                        hover
+                            .and_then(|pos| {
+                                self.origin_plane_hits(pos, self.viewport_rect)
+                                    .into_iter()
+                                    .next()
+                            })
+                            .map(|name| Plane::named(&name, 0.))
+                    });
+                    if let Some(plane) = plane {
+                        let mut aligned = self.camera.clone();
+                        aligned.align(&plane);
+                        let same = (self.camera.rotation * glam::Vec3::Z)
+                            .dot(aligned.rotation * glam::Vec3::Z)
+                            > 0.9999;
+                        self.camera.rotate_to(if same {
+                            aligned.rotation * glam::Quat::from_rotation_y(std::f32::consts::PI)
+                        } else {
+                            aligned.rotation
+                        });
+                    }
+                }
+                Command::ZoomIn => self.camera.span = (self.camera.span / 1.25).max(0.02),
+                Command::ZoomOut => self.camera.span = (self.camera.span * 1.25).min(1e6),
+                Command::Rotate {
+                    horizontal,
+                    vertical,
+                    degrees,
+                } => self.camera.rotate_to(
+                    self.camera.rotation
+                        * glam::Quat::from_scaled_axis(
+                            glam::Vec3::new(-(vertical as f32), -(horizontal as f32), 0.)
+                                * (degrees as f32).to_radians(),
+                        ),
+                ),
+                Command::Pan {
+                    horizontal,
+                    vertical,
+                } => self.camera.pan(
+                    egui::vec2(horizontal as f32, -(vertical as f32))
+                        * self.viewport_rect.height()
+                        * 0.05,
+                    self.viewport_rect,
+                ),
+                Command::NewSketch => self.start_feature("sketch"),
+                Command::Extrude => self.start_feature("extrude"),
+                Command::Revolve => self.start_feature("revolve"),
+                Command::Fillet => self.start_feature("fillet"),
+                Command::Help => self.help_open = !self.help_open,
+                Command::ShortcutToolbar | Command::SearchTools => {
+                    self.shortcut_menu = ctx
+                        .input(|i| i.pointer.hover_pos())
+                        .or(Some(self.viewport_rect.center()));
+                    self.shortcut_search.clear();
+                    self.shortcut_focus = true;
+                }
+                Command::ToggleSketches => self.show_sketches = !self.show_sketches,
+                Command::TogglePlanes => self.show_planes = !self.show_planes,
+                Command::HideConstruction => {
+                    self.show_sketches = false;
+                    self.show_planes = false;
+                    self.hidden_sketches
+                        .extend(self.scene.sketches.keys().cloned());
+                }
+                Command::HideSelectedOrHovered => {
+                    let mut changed = false;
+                    for target in self.selection.items() {
+                        match target {
+                            Target::Part(part)
+                            | Target::Face { part, .. }
+                            | Target::Edge { part, .. } => {
+                                changed |= self.hidden.insert(part.clone());
+                            }
+                            Target::Feature(id) | Target::Region { sketch: id, .. }
+                                if self.scene.sketches.contains_key(id) =>
+                            {
+                                self.hidden_sketches.insert(id.clone());
+                            }
+                            _ => (),
+                        }
+                    }
+                    if self.selection.items().is_empty()
+                        && let Some(pos) = ctx
+                            .input(|i| i.pointer.hover_pos())
+                            .filter(|p| self.viewport_rect.contains(*p))
+                        && let Some(hit) = render::pick(
+                            &self.scene,
+                            &self.camera,
+                            pos,
+                            self.viewport_rect,
+                            &self.hidden,
+                        )
+                    {
+                        changed |= self.hidden.insert(hit.part);
+                    }
+                    if changed {
+                        self.render_revision += 1;
+                    }
+                }
+                Command::ShowHidden => {
+                    self.hidden.clear();
+                    self.hidden_sketches.clear();
+                    self.render_revision += 1;
+                }
+                Command::Delete if !sketching && self.editor.is_none() => {
+                    let ids: Vec<_> = self
+                        .selection
+                        .items()
+                        .iter()
+                        .filter_map(|t| {
+                            if let Target::Feature(id) = t {
+                                Some(id.clone())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    if !ids.is_empty() {
+                        let before = self.document.clone();
+                        self.document.features.retain(|f| !ids.contains(&f.id));
+                        self.document.rollback = None;
+                        self.selection.clear();
+                        self.selected_feature = None;
+                        self.remember(before);
+                    }
+                }
+                _ => (),
+            }
         }
     }
     fn is_sketching(&self) -> bool {
@@ -901,7 +1821,7 @@ impl CadApp {
                 ui.horizontal_wrapped(|ui| {
                     if ui
                         .small_button(if self.tree_open { "<" } else { ">" })
-                        .on_hover_text("Toggle feature tree (Tab)")
+                        .on_hover_text("Toggle feature tree")
                         .clicked()
                     {
                         self.tree_open = !self.tree_open;
@@ -997,13 +1917,17 @@ impl CadApp {
                     .default_open(self.document.features.is_empty())
                     .show(ui, |ui| {
                         for name in ["Top", "Front", "Right"] {
-                            if ui.selectable_label(false, name).clicked() {
-                                self.selected_face = None;
-                                self.camera.align(&Plane::named(name, 0.));
-                                if let Some(e) = &mut self.editor {
-                                    e.feature.params["plane"] = json!(name);
-                                    e.feature.params["support"] = json!("");
-                                    self.rebuild();
+                            if ui
+                                .selectable_label(
+                                    self.selected_plane.as_deref() == Some(name),
+                                    name,
+                                )
+                                .clicked()
+                            {
+                                if self.is_sketching() {
+                                    self.choose_plane(name);
+                                } else {
+                                    self.toggle_target(Target::Plane(name.into()), ctx);
                                 }
                             }
                         }
@@ -1041,7 +1965,7 @@ impl CadApp {
                                 egui::Button::new(
                                     RichText::new(format!("{prefix}{}", f.name)).color(color),
                                 )
-                                .selected(self.selected_feature == Some(index))
+                                .selected(self.selection.contains(&Target::Feature(f.id.clone())))
                                 .frame(false)
                                 .min_size(Vec2::new(ui.available_width(), 24.))
                                 .truncate()
@@ -1055,8 +1979,20 @@ impl CadApp {
                                     .on_hover_text(format!("{} · {:.2} ms", f.id, s.millis));
                             }
                             if response.clicked() {
-                                self.selected_feature = Some(index);
-                                self.selected_face = None;
+                                if ui.input(|i| i.modifiers.shift) {
+                                    let anchor = self.selected_feature.unwrap_or(index);
+                                    for f in &self.document.features
+                                        [anchor.min(index)..=anchor.max(index)]
+                                    {
+                                        self.selection.add(Target::Feature(f.id.clone()));
+                                    }
+                                } else {
+                                    self.selection.toggle(Target::Feature(f.id.clone()));
+                                }
+                                self.selected_feature = self
+                                    .selection
+                                    .contains(&Target::Feature(f.id.clone()))
+                                    .then_some(index);
                             }
                             if response.double_clicked() {
                                 open_edit = Some(index);
@@ -1212,7 +2148,8 @@ impl CadApp {
                                     .add(
                                         egui::Button::new(&mesh.name)
                                             .selected(
-                                                self.selected_part.as_ref() == Some(&mesh.part),
+                                                self.selection
+                                                    .contains(&Target::Part(mesh.part.clone())),
                                             )
                                             .frame(false)
                                             .truncate(),
@@ -1223,8 +2160,7 @@ impl CadApp {
                                     ))
                                     .clicked()
                                 {
-                                    self.selected_part = Some(mesh.part.clone());
-                                    self.selected_face = None;
+                                    self.selection.toggle(Target::Part(mesh.part.clone()));
                                 }
                             });
                         }
@@ -1298,6 +2234,7 @@ impl CadApp {
                                         ui.label(RichText::new(&field.label).small().color(MUTED));
                                     }
                                     let old_plane = edit.feature.params.get("plane").cloned();
+                                    let old_sketch = edit.feature.params.get("sketch").cloned();
                                     changed |= parameter_ui(
                                         ui,
                                         field,
@@ -1312,6 +2249,13 @@ impl CadApp {
                                     {
                                         edit.feature.params["support"] = json!("");
                                         self.align_when_ready = true;
+                                        self.choosing_plane = false;
+                                    }
+                                    if field.kind == "sketch"
+                                        && old_sketch != edit.feature.params.get("sketch").cloned()
+                                        && m.fields.iter().any(|f| f.kind == "regions")
+                                    {
+                                        edit.feature.params["regions"] = Value::Null;
                                     }
                                     ui.add_space(4.);
                                 }
@@ -1325,13 +2269,11 @@ impl CadApp {
                                         self.last_error.as_deref(),
                                     );
                                 }
-                                if edit.feature.plugin_hash
-                                    != self
-                                        .registry
-                                        .plugins
-                                        .get(&edit.feature.plugin)
-                                        .map(|p| p.hash.as_str())
-                                        .unwrap_or("")
+                                if !self
+                                    .registry
+                                    .plugins
+                                    .get(&edit.feature.plugin)
+                                    .is_some_and(|p| p.matches(&edit.feature))
                                 {
                                     ui.colored_label(RED, "Plugin version changed.");
                                     if ui.button("Update plugin").clicked()
@@ -1374,6 +2316,7 @@ impl CadApp {
                     }
                     self.editor = Some(edit);
                     if changed {
+                        self.sync_selection_from_editor();
                         self.schedule(ctx);
                     }
                     if apply {
@@ -1388,7 +2331,7 @@ impl CadApp {
 
     fn viewport(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(Color32::from_rgb(17, 23, 32)))
+            .frame(egui::Frame::new().fill(Color32::from_rgb(7, 7, 10)))
             .show(ctx, |ui| {
                 let (rect, response) =
                     ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
@@ -1396,8 +2339,17 @@ impl CadApp {
                 let sketch_id = self
                     .editor
                     .as_ref()
-                    .filter(|e| e.sketch.is_some())
-                    .map(|e| e.feature.id.clone())
+                    .and_then(|e| {
+                        if e.sketch.is_some() {
+                            Some(e.feature.id.clone())
+                        } else {
+                            e.feature
+                                .params
+                                .get("sketch")
+                                .and_then(Value::as_str)
+                                .map(str::to_owned)
+                        }
+                    })
                     .or_else(|| {
                         self.selected_feature
                             .and_then(|i| self.document.features.get(i))
@@ -1426,10 +2378,13 @@ impl CadApp {
 
                 let pointer = response.hover_pos();
                 let controls = crate::navigation::bounds(rect);
-                let canvas_hover = pointer.is_some_and(|p| !controls.contains(p));
+                let select_control =
+                    Rect::from_min_size(rect.min + egui::vec2(8., 8.), egui::vec2(170., 28.));
+                let canvas_hover =
+                    pointer.is_some_and(|p| !controls.contains(p) && !select_control.contains(p));
                 let orbiting = canvas_hover
                     && response.hovered()
-                    && !self.is_sketching()
+                    && (!self.is_sketching() || self.choosing_plane)
                     && ui.input(|i| {
                         i.pointer.button_down(egui::PointerButton::Secondary)
                             && !i.modifiers.shift
@@ -1452,7 +2407,7 @@ impl CadApp {
                     let middle = ui.input(|i| i.pointer.button_down(egui::PointerButton::Middle));
                     if middle
                         || (right
-                            && (self.is_sketching()
+                            && ((self.is_sketching() && !self.choosing_plane)
                                 || ui.input(|i| i.modifiers.shift || i.modifiers.ctrl)))
                     {
                         self.camera.pan(delta, rect);
@@ -1479,11 +2434,19 @@ impl CadApp {
                     }
                 }
                 let projector = self.camera.projector(rect);
-                let selected = if self.is_sketching() {
-                    0
-                } else {
-                    self.selected_face.as_ref().map(|x| x.2).unwrap_or(0)
-                };
+                let pick_scene = self.source_scene.as_ref().unwrap_or(&self.scene).clone();
+                let filter = self.active_selection_filter();
+                let candidates = pointer
+                    .filter(|_| canvas_hover && !self.is_sketching())
+                    .map(|p| self.selection_candidates(&pick_scene, p, rect, filter, false))
+                    .unwrap_or_default();
+                let mut hover = candidates.first().cloned();
+                if let Some((_, targets, index)) = &self.select_other {
+                    hover = targets.get(*index).cloned();
+                }
+                let selected = self.face_ids(&self.scene, self.selection.items());
+                let hovered =
+                    self.face_ids(&self.scene, &hover.clone().into_iter().collect::<Vec<_>>());
                 ui.painter().add(render::paint_callback(
                     rect,
                     self.renderer.clone(),
@@ -1493,6 +2456,22 @@ impl CadApp {
                     render::View {
                         matrix: self.camera.matrix(rect),
                         selected,
+                        hovered,
+                        selected_edges: self
+                            .selection
+                            .edges()
+                            .map(|(p, k)| (p.to_owned(), k.to_owned()))
+                            .collect(),
+                        hovered_edges: hover
+                            .as_ref()
+                            .and_then(|t| {
+                                if let Target::Edge { part, key } = t {
+                                    Some(vec![(part.clone(), key.clone())])
+                                } else {
+                                    None
+                                }
+                            })
+                            .unwrap_or_default(),
                         shaded_edges: self.shaded_edges,
                     },
                 ));
@@ -1502,14 +2481,35 @@ impl CadApp {
                     ui.painter()
                         .circle_stroke(pivot, 4., Stroke::new(1.2_f32, ACCENT));
                 }
-                if self.editor.is_none()
-                    && let Some(sk) = sketch_id
-                        .as_ref()
-                        .and_then(|id| self.scene.sketches.get(id))
-                {
-                    crate::sketch_ui::paint_readonly(ui, sk, &projector, rect);
+                if !self.is_sketching() {
+                    for (_, sk) in self.region_sketches(&pick_scene) {
+                        crate::sketch_ui::paint_readonly(ui, sk, &projector, rect);
+                    }
                 }
-                if self.is_sketching() {
+                self.paint_origin_planes(ui, rect, pointer);
+                if self.choosing_plane {
+                    if response.clicked()
+                        && canvas_hover
+                        && let Some(pos) = pointer
+                    {
+                        if let Some(hit) =
+                            render::pick(&pick_scene, &self.camera, pos, rect, &self.hidden)
+                        {
+                            if hit.plane.is_some()
+                                && let Some(edit) = &mut self.editor
+                            {
+                                edit.feature.params["support"] = json!(hit.face);
+                                self.choosing_plane = false;
+                                self.align_when_ready = true;
+                                self.rebuild();
+                            }
+                        } else if let Some(name) =
+                            self.origin_plane_hits(pos, rect).first().cloned()
+                        {
+                            self.choose_plane(&name);
+                        }
+                    }
+                } else if self.is_sketching() {
                     let mut changed = false;
                     let mut live = false;
                     if let Some(edit) = &mut self.editor {
@@ -1553,125 +2553,129 @@ impl CadApp {
                             self.schedule(ctx);
                         }
                     }
-                } else if response.clicked() && canvas_hover {
-                    if self.editor.is_none() {
-                        self.selected_feature = None;
+                } else {
+                    if response.clicked() && canvas_hover {
+                        if let Some(target) = candidates.first().cloned() {
+                            self.toggle_target(target, ctx);
+                        } else {
+                            self.clear_selection(ctx);
+                        }
                     }
-                    let pos = pointer.unwrap();
-                    let pick_scene = self.source_scene.as_ref().unwrap_or(&self.scene);
-                    let hit = render::pick(pick_scene, &self.camera, pos, rect, &self.hidden);
-                    let edge_mode = self.editor.as_ref().is_some_and(|e| {
-                        self.registry
-                            .plugins
-                            .get(&e.feature.plugin)
-                            .is_some_and(|p| p.manifest.fields.iter().any(|f| f.kind == "edges"))
-                    }) || ui.input(|i| i.modifiers.shift);
-                    if edge_mode {
-                        let mut nearest = None;
-                        let mut distance = 7.;
-                        for mesh in &pick_scene.meshes {
-                            if self.hidden.contains(&mesh.part) {
-                                continue;
-                            }
-                            for edge in &mesh.edges {
-                                if edge.seam || edge.key.contains("untracked:") {
-                                    continue;
+                    if response.drag_started_by(egui::PointerButton::Primary) && canvas_hover {
+                        self.selection_box = ui.input(|i| i.pointer.press_origin());
+                    }
+                    if let Some(start) = self.selection_box {
+                        if let Some(end) = ui.input(|i| i.pointer.interact_pos()) {
+                            let area = Rect::from_two_pos(start, end);
+                            let crossing = end.x < start.x;
+                            ui.painter().rect_filled(
+                                area,
+                                0.,
+                                if crossing {
+                                    PURPLE.gamma_multiply(0.12)
+                                } else {
+                                    ACCENT.gamma_multiply(0.12)
+                                },
+                            );
+                            ui.painter().rect_stroke(
+                                area,
+                                0.,
+                                Stroke::new(1.0f32, if crossing { PURPLE } else { ACCENT }),
+                                egui::StrokeKind::Inside,
+                            );
+                            if response.drag_stopped_by(egui::PointerButton::Primary) {
+                                let mut targets = render::box_targets(
+                                    &pick_scene,
+                                    &self.camera,
+                                    rect,
+                                    area,
+                                    crossing,
+                                    filter,
+                                    &self.hidden,
+                                );
+                                if matches!(filter, Filter::Regions) {
+                                    targets = self.box_regions(&pick_scene, rect, area, crossing);
                                 }
-                                for p in edge.points.windows(2) {
-                                    let a = p[0].map(|x| x as f64);
-                                    let b = p[1].map(|x| x as f64);
-                                    let d = render::point_segment_distance(
-                                        pos,
-                                        projector.project(a, rect),
-                                        projector.project(b, rect),
-                                    );
-                                    let (ray_o, ray_d) = self.camera.ray(pos, rect);
-                                    let pa = glam::Vec3::from_array(p[0]);
-                                    let pb = glam::Vec3::from_array(p[1]);
-                                    let sa = projector.project(a, rect);
-                                    let sb = projector.project(b, rect);
-                                    let v = sb - sa;
-                                    let t =
-                                        ((pos - sa).dot(v) / v.length_sq().max(1e-8)).clamp(0., 1.);
-                                    let edge_depth = (pa.lerp(pb, t) - ray_o).dot(ray_d);
-                                    let visible = hit.as_ref().is_none_or(|h| {
-                                        edge_depth
-                                            <= h.distance + self.camera.span / rect.height() * 5.
-                                    });
-                                    if d < distance && visible {
-                                        distance = d;
-                                        nearest = Some((edge.part.clone(), edge.key.clone()));
+                                for target in targets {
+                                    if ui.input(|i| i.modifiers.ctrl) {
+                                        self.selection.remove(&target);
+                                    } else {
+                                        self.selection.add(target);
                                     }
                                 }
+                                self.sync_selection_to_editor(ctx);
+                                ctx.request_repaint();
+                                self.selection_box = None;
                             }
                         }
-                        if let Some(key) = nearest {
-                            if !ui.input(|i| i.modifiers.ctrl) {
-                                self.selected_edges.clear();
-                            }
-                            if self.selected_edges.contains(&key) {
-                                self.selected_edges.retain(|k| k != &key);
-                            } else {
-                                self.selected_edges.push(key.clone());
-                            }
-                            self.selected_part = Some(key.0);
-                            if let Some(edit) = &mut self.editor {
-                                edit.feature.params["edges"] = json!(
-                                    self.selected_edges
-                                        .iter()
-                                        .map(|(_, k)| k)
-                                        .collect::<Vec<_>>()
-                                );
-                                self.schedule(ctx);
-                            }
-                        }
-                    } else if let Some(hit) = hit {
-                        self.selected_part = Some(hit.part.clone());
-                        self.selected_face =
-                            Some((hit.part, hit.face.clone(), hit.global_face, hit.plane));
-                        if let Some(edit) = &mut self.editor
-                            && self
-                                .registry
-                                .plugins
-                                .get(&edit.feature.plugin)
-                                .is_some_and(|p| {
-                                    p.manifest.fields.iter().any(|f| f.kind == "faces")
-                                })
-                        {
-                            let mut keys = edit.feature.params["faces"]
-                                .as_array()
-                                .cloned()
-                                .unwrap_or_default();
-                            if !ui.input(|i| i.modifiers.ctrl) {
-                                keys.clear();
-                            }
-                            if !keys.contains(&json!(hit.face)) {
-                                keys.push(json!(hit.face));
-                            }
-                            edit.feature.params["faces"] = json!(keys);
-                            self.schedule(ctx);
-                        }
-                    } else {
-                        self.selected_face = None;
-                        self.selected_part = None;
-                        self.selected_edges.clear();
-                    }
-                }
-                for mesh in &self.source_scene.as_ref().unwrap_or(&self.scene).meshes {
-                    for edge in &mesh.edges {
-                        if self
-                            .selected_edges
-                            .contains(&(edge.part.clone(), edge.key.clone()))
-                        {
-                            ui.painter().add(egui::Shape::line(
-                                edge.points
-                                    .iter()
-                                    .map(|p| projector.project(p.map(|x| x as f64), rect))
-                                    .collect(),
-                                Stroke::new(2.5f32, Color32::from_rgb(255, 211, 112)),
-                            ));
+                        if !ui.input(|i| i.pointer.primary_down()) {
+                            self.selection_box = None;
                         }
                     }
+                    let reverse_other = ui
+                        .input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::Backtick));
+                    if canvas_hover
+                        && (reverse_other
+                            || ui.input_mut(|i| {
+                                i.consume_key(egui::Modifiers::NONE, egui::Key::Backtick)
+                            }))
+                    {
+                        if let Some((_, items, index)) = &mut self.select_other {
+                            if !items.is_empty() {
+                                *index = (*index + if reverse_other { items.len() - 1 } else { 1 })
+                                    % items.len();
+                            }
+                        } else if let Some(p) = pointer {
+                            let all = self.selection_candidates(&pick_scene, p, rect, filter, true);
+                            if !all.is_empty() {
+                                self.select_other = Some((p, all, 0));
+                            }
+                        }
+                    }
+                    if response.secondary_clicked() {
+                        self.context_position = pointer;
+                    }
+                    response.context_menu(|ui| {
+                        if ui.button("Select other").clicked() {
+                            if let Some(p) = self.context_position {
+                                let all =
+                                    self.selection_candidates(&pick_scene, p, rect, filter, true);
+                                self.select_other = Some((p, all, 0));
+                            }
+                            ui.close();
+                        }
+                        if ui.button("Clear selection").clicked() {
+                            self.clear_selection(ctx);
+                            ui.close();
+                        }
+                        ui.separator();
+                        for option in Filter::ALL {
+                            if ui
+                                .selectable_value(
+                                    &mut self.selection_filter,
+                                    option,
+                                    option.label(),
+                                )
+                                .clicked()
+                            {
+                                ui.close();
+                            }
+                        }
+                    });
+                    self.paint_regions(ui, &pick_scene, rect, hover.as_ref());
+                    if !self.selection.items().is_empty()
+                        && let Some(pos) = pointer
+                    {
+                        ui.painter().text(
+                            pos + egui::vec2(15., 18.),
+                            egui::Align2::LEFT_TOP,
+                            format!("{} selected", self.selection.items().len()),
+                            egui::FontId::proportional(12.),
+                            ACCENT,
+                        );
+                    }
+                    self.selection_controls(ctx, rect);
+                    self.select_other_popup(ctx);
                 }
                 crate::navigation::axes(ui, rect, &self.camera);
                 let model_pivot =
@@ -1690,6 +2694,75 @@ impl CadApp {
     }
 
     fn dialogs(&mut self, ctx: &egui::Context) {
+        if let Some(pos) = self.shortcut_menu {
+            let mut open = true;
+            let mut feature = None;
+            let mut sketch_tool = None;
+            egui::Window::new("Tools")
+                .default_pos(pos)
+                .default_width(220.)
+                .resizable(false)
+                .collapsible(false)
+                .open(&mut open)
+                .show(ctx, |ui| {
+                    let search = ui.add(
+                        egui::TextEdit::singleline(&mut self.shortcut_search)
+                            .id(egui::Id::new("tool_search"))
+                            .hint_text("Search tools"),
+                    );
+                    if self.shortcut_focus {
+                        search.request_focus();
+                        self.shortcut_focus = false;
+                    }
+                    let mut choose_first = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    if self.is_sketching() {
+                        for (name, tool) in [
+                            ("Line · L", Tool::Line),
+                            ("Corner rectangle · G", Tool::Rectangle),
+                            ("Center rectangle · R", Tool::CenterRectangle),
+                            ("Circle · C", Tool::Circle),
+                            ("Dimension · D", Tool::Dimension),
+                            ("Select", Tool::Select),
+                        ] {
+                            if name
+                                .to_lowercase()
+                                .contains(&self.shortcut_search.to_lowercase())
+                                && (ui.button(name).clicked() || choose_first)
+                            {
+                                sketch_tool = Some(tool);
+                                choose_first = false;
+                            }
+                        }
+                    }
+                    for p in self
+                        .registry
+                        .plugins
+                        .values()
+                        .filter(|p| p.manifest.category == "feature")
+                    {
+                        if p.manifest
+                            .name
+                            .to_lowercase()
+                            .contains(&self.shortcut_search.to_lowercase())
+                            && (ui.button(&p.manifest.name).clicked() || choose_first)
+                        {
+                            feature = Some(p.manifest.id.clone());
+                            choose_first = false;
+                        }
+                    }
+                });
+            if let Some(tool) = sketch_tool {
+                self.sketch_ui.set_tool(tool);
+                open = false;
+            }
+            if let Some(id) = feature {
+                self.start_feature(&id);
+                open = false;
+            }
+            if !open {
+                self.shortcut_menu = None;
+            }
+        }
         if let Some(mut dialog) = self.files.take() {
             let mut open = true;
             let mut accept = false;
@@ -2001,13 +3074,13 @@ impl CadApp {
         }
         if self.help_open {
             egui::Window::new("Help").open(&mut self.help_open).default_width(520.).show(ctx, |ui| {
-                ui.label("Sketch: choose a plane, draw lines, rectangles or circles. Press D, select geometry, place the dimension, enter a value. Double-click a dimension to edit. Ctrl-click selects pairs for dimensions and constraints.");
+                ui.label("Sketch: choose a plane, draw lines, rectangles or circles. Press D, select geometry, place the dimension, enter a value. Double-click a dimension to edit. Click additional geometry to select pairs for dimensions and constraints. Space clears selection.");
                 ui.separator();
                 ui.label("Finish the sketch, then Extrude. Select a supported planar face for the next sketch. Use Remove for cuts.");
                 ui.label("Double-click history to edit. Right-click to rename, reorder, suppress or delete. Rollback previews earlier history.");
                 ui.separator();
-                ui.label("Right drag: orbit. Middle drag or Shift + right drag: pan. Scroll: zoom. F: fit. E: extrude. Ctrl+Z / Ctrl+Y: undo / redo. Ctrl+S: save.");
-                ui.label("Shift-click solid edges for fillet or chamfer. Ctrl-click adds selections. Shell removes selected faces. Pattern and mirror create separate parts.");
+                ui.label("Right drag: orbit. Middle drag or Shift + right drag: pan. Scroll: zoom. F: fit. Shift+E: extrude. Shift+W: revolve. Shift+S: sketch. Ctrl+Z / Ctrl+Y: undo / redo. Ctrl+S: save.");
+                ui.label("Click to add or remove selections. Use the selection filter for faces, edges, parts or sketch regions. The ` key opens Select other. Shell removes selected faces. Pattern and mirror create separate parts.");
                 ui.separator();
                 ui.label("Save as .cadpart. STEP exports boundary geometry; STL exports a mesh in millimeters.");
                 ui.label(RichText::new("Arcs, splines, trim, assemblies and FeatureScript are not implemented.").small().color(MUTED));
@@ -2087,7 +3160,7 @@ impl eframe::App for CadApp {
                 ctx.request_repaint_after(deadline - now);
             }
         }
-        let sketching = self.is_sketching();
+        let sketching = self.is_sketching() && !self.choosing_plane;
         let blocked = self.files.is_some()
             || self.variables_open
             || self.plugins_open
@@ -2107,6 +3180,20 @@ impl eframe::App for CadApp {
         self.inspector(ctx);
         self.viewport(ctx);
         self.dialogs(ctx);
+        if let Some(repeat) = self.pending_accept {
+            if !self.busy && self.pending_rebuild.is_none() {
+                self.pending_accept = None;
+                if self.last_error.is_none() && self.editor.is_some() {
+                    let id = self.editor.as_ref().unwrap().feature.plugin.clone();
+                    self.finish_editor(true);
+                    if repeat {
+                        self.begin(&id);
+                    }
+                }
+            } else {
+                ctx.request_repaint_after(Duration::from_millis(20));
+            }
+        }
     }
     fn on_exit(&mut self, gl: Option<&eframe::glow::Context>) {
         if let Some(gl) = gl
@@ -2126,12 +3213,79 @@ fn parameter_ui(
     registry: &Registry,
     scene: &Scene,
 ) -> bool {
+    let sketch_reference = params
+        .get("sketch")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_owned();
     let value = params
         .as_object_mut()
         .unwrap()
         .entry(field.key.clone())
         .or_insert_with(|| field.default.clone());
     match field.kind.as_str() {
+        "regions" => {
+            let before = value.clone();
+            let regions = scene.regions.get(&sketch_reference);
+            let mut explicit = value.as_array().map(|a| {
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            });
+            if ui
+                .selectable_label(explicit.is_none(), "Whole sketch")
+                .clicked()
+            {
+                explicit = None;
+            }
+            if let Some(regions) = regions {
+                for (index, region) in regions.iter().enumerate() {
+                    let mut selected = explicit
+                        .as_ref()
+                        .map_or(region.legacy_selected, |keys| keys.contains(&region.key));
+                    if ui
+                        .checkbox(&mut selected, format!("Region {}", index + 1))
+                        .on_hover_text(&region.key)
+                        .changed()
+                    {
+                        let keys = explicit.get_or_insert_with(|| {
+                            regions
+                                .iter()
+                                .filter(|r| r.legacy_selected)
+                                .map(|r| r.key.clone())
+                                .collect()
+                        });
+                        keys.retain(|k| k != &region.key);
+                        if selected {
+                            keys.push(region.key.clone());
+                        }
+                    }
+                }
+                if let Some(keys) = &mut explicit {
+                    let missing: Vec<_> = keys
+                        .iter()
+                        .filter(|k| !regions.iter().any(|r| &r.key == *k))
+                        .cloned()
+                        .collect();
+                    for key in missing {
+                        ui.horizontal(|ui| {
+                            ui.colored_label(RED, "Missing region").on_hover_text(&key);
+                            if ui.small_button("Remove").clicked() {
+                                keys.retain(|k| k != &key);
+                            }
+                        });
+                    }
+                }
+                if ui.small_button("Clear").clicked() {
+                    explicit = Some(vec![]);
+                }
+            } else {
+                ui.colored_label(MUTED, "No closed regions");
+            }
+            *value = explicit.map_or(Value::Null, |keys| json!(keys));
+            *value != before
+        }
         "bool" => {
             let mut b = value.as_bool().unwrap_or(false);
             let changed = ui.checkbox(&mut b, &field.label).changed();

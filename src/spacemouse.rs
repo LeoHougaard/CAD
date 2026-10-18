@@ -28,11 +28,8 @@ impl Default for Options {
 #[derive(Default)]
 struct State {
     rotating: bool,
-    translation: [i16; 3],
-    rotation: [i16; 3],
-    translation_at: Option<Instant>,
-    rotation_at: Option<Instant>,
-    frame_at: Option<Instant>,
+    translation_motion: Motion,
+    rotation_motion: Motion,
     buttons: u32,
     pressed: u32,
     reports: u64,
@@ -40,14 +37,76 @@ struct State {
     error: Option<String>,
     ctx: Option<egui::Context>,
 }
+
+// Raw HID reports are velocities, not mouse deltas. Integrate at their own
+// timestamps so uneven USB/report and redraw intervals do not change speed.
+// A short continuous-time filter removes sensor steps without a report queue,
+// polling thread, or a frame-rate-dependent moving average.
+const RESPONSE_SECONDS: f32 = 0.012;
+const REPORT_TIMEOUT: Duration = Duration::from_millis(150);
+const REST_EPSILON: f32 = 0.0001;
+
+#[derive(Default)]
+struct Motion {
+    target: Vec3,
+    velocity: Vec3,
+    integral: Vec3,
+    at: Option<Instant>,
+    report_at: Option<Instant>,
+}
+impl Motion {
+    #[cfg(any(windows, test))]
+    fn report(&mut self, axes: [i16; 3], now: Instant) {
+        self.advance(now);
+        self.target = Vec3::from_array(axes.map(axis));
+        self.report_at = Some(now);
+    }
+    fn integrate(&mut self, target: Vec3, seconds: f32) {
+        if seconds <= 0. {
+            return;
+        }
+        let decay = (-seconds / RESPONSE_SECONDS).exp();
+        let difference = self.velocity - target;
+        // Exact integral of v(t) = target + (v(0) - target) exp(-t / tau).
+        self.integral += target * seconds + difference * (RESPONSE_SECONDS * (1. - decay));
+        self.velocity = target + difference * decay;
+        if target == Vec3::ZERO && self.velocity.abs().max_element() < REST_EPSILON {
+            self.velocity = Vec3::ZERO;
+        }
+    }
+    fn advance(&mut self, now: Instant) {
+        let Some(previous) = self.at.replace(now) else {
+            return;
+        };
+        let expires = self.report_at.map(|at| at + REPORT_TIMEOUT);
+        let fresh_end = expires.map_or(previous, |at| now.min(at).max(previous));
+        self.integrate(
+            self.target,
+            fresh_end.duration_since(previous).as_secs_f32(),
+        );
+        self.integrate(
+            Vec3::ZERO,
+            now.saturating_duration_since(fresh_end).as_secs_f32(),
+        );
+        if expires.is_none_or(|at| now >= at) {
+            self.target = Vec3::ZERO;
+        }
+    }
+    fn take(&mut self, now: Instant) -> Vec3 {
+        self.advance(now);
+        std::mem::take(&mut self.integral)
+    }
+    fn active(&self) -> bool {
+        self.target != Vec3::ZERO || self.velocity != Vec3::ZERO
+    }
+}
 impl State {
     fn clear(&mut self) {
         self.rotating = false;
-        self.translation = [0; 3];
-        self.rotation = [0; 3];
         self.pressed = 0;
         self.buttons = 0;
-        self.frame_at = None;
+        self.translation_motion = Motion::default();
+        self.rotation_motion = Motion::default();
     }
     #[cfg(any(windows, test))]
     fn report(&mut self, report: &[u8], now: Instant) -> bool {
@@ -62,17 +121,14 @@ impl State {
         match report.first() {
             Some(1) => {
                 let Some(v) = vector(1) else { return false };
-                self.translation = v;
-                self.translation_at = Some(now);
+                self.translation_motion.report(v, now);
                 if let Some(r) = vector(7) {
-                    self.rotation = r;
-                    self.rotation_at = Some(now);
+                    self.rotation_motion.report(r, now);
                 }
             }
             Some(2) => {
                 let Some(v) = vector(1) else { return false };
-                self.rotation = v;
-                self.rotation_at = Some(now);
+                self.rotation_motion.report(v, now);
             }
             Some(3) => {
                 let Some(bytes) = report.get(1..5) else {
@@ -93,6 +149,7 @@ pub struct SpaceMouse {
     state: Arc<Mutex<State>>,
     pub options: Options,
 }
+#[cfg(any(windows, test))]
 fn axis(value: i16) -> f32 {
     let n = value as f32;
     n.signum() * ((n.abs() - 8.) / 342.).clamp(0., 1.)
@@ -145,24 +202,9 @@ impl SpaceMouse {
             s.clear();
             return false;
         }
-        let dt = s
-            .frame_at
-            .map(|t| now.duration_since(t).as_secs_f32().min(0.035))
-            .unwrap_or(1. / 60.);
-        s.frame_at = Some(now);
-        let fresh = |t: Option<Instant>| {
-            t.is_some_and(|t| now.duration_since(t) < Duration::from_millis(150))
-        };
-        let t = if fresh(s.translation_at) {
-            Vec3::from_array(s.translation.map(axis))
-        } else {
-            Vec3::ZERO
-        };
-        let r = if fresh(s.rotation_at) && !sketching {
-            Vec3::from_array(s.rotation.map(axis))
-        } else {
-            Vec3::ZERO
-        };
+        let t = s.translation_motion.take(now);
+        let rotation = s.rotation_motion.take(now);
+        let r = if sketching { Vec3::ZERO } else { rotation };
         let fit = s.pressed & 2 != 0;
         s.pressed = 0;
         if r != Vec3::ZERO && !s.rotating {
@@ -170,19 +212,31 @@ impl SpaceMouse {
         }
         s.rotating = r != Vec3::ZERO;
         if t.length_squared() + r.length_squared() > 0. {
-            apply_motion(camera, t, r, dt, &self.options);
-            ctx.request_repaint_after(Duration::from_millis(16));
+            // These are already time integrals, including filter transitions.
+            apply_motion(camera, t, r, 1., &self.options);
+        }
+        if s.translation_motion.active() || (!sketching && s.rotation_motion.active()) {
+            // Let vsync pace active navigation. Adding a 16ms timer after every
+            // redraw can miss a refresh and produce an alternating frame cadence.
+            ctx.request_repaint();
         }
         fit
     }
 }
 fn apply_motion(camera: &mut Camera, t: Vec3, r: Vec3, dt: f32, options: &Options) {
     let step = dt * options.speed;
-    camera.center += camera.rotation * Vec3::new(-t.x, t.z, 0.) * camera.span * step * 0.75;
     let zoom_sign = if options.reverse_zoom { -1. } else { 1. };
     // Object mode: raw +X moves right, -Z moves up, +Y moves toward the viewer.
     // This is the HID mapping used by FreeSpacenav's move-object convention.
-    camera.span = (camera.span * (-t.y * step * zoom_sign * 1.8).exp()).clamp(0.02, 1e6);
+    let zoom = -t.y * step * zoom_sign * 1.8;
+    let average_span = if zoom.abs() < 0.00001 {
+        1. + zoom * 0.5
+    } else {
+        zoom.exp_m1() / zoom
+    };
+    camera.center +=
+        camera.rotation * Vec3::new(-t.x, t.z, 0.) * camera.span * average_span * step * 0.75;
+    camera.span = (camera.span * zoom.exp()).clamp(0.02, 1e6);
     let rotation_sign = if options.reverse_rotation { -1. } else { 1. };
     let rotation = Vec3::new(-r.x, r.z, -r.y) * step * rotation_sign * 1.8;
     camera.rotate_to(camera.rotation * Quat::from_scaled_axis(rotation));
@@ -429,17 +483,155 @@ mod tests {
             .chain(axes.iter().flat_map(|a| a.to_le_bytes()))
             .collect()
     }
+    fn integrated_trace(frame_ms: u64, report_ms: u64) -> Vec3 {
+        let start = Instant::now();
+        let mut motion = Motion::default();
+        let mut total = Vec3::ZERO;
+        // Two level changes, a reversal, and a release, with independent USB
+        // and frame schedules. Include a final frame after the filter settles.
+        for ms in 0..=1200 {
+            let now = start + Duration::from_millis(ms);
+            if ms.is_multiple_of(report_ms) && ms <= 900 {
+                let axes = match ms {
+                    0..300 => [180, -70, 30],
+                    300..600 => [300, 80, -150],
+                    600..900 => [-180, 20, 100],
+                    _ => [0; 3],
+                };
+                motion.report(axes, now);
+            }
+            if ms.is_multiple_of(frame_ms) || ms == 1200 {
+                total += motion.take(now);
+            }
+        }
+        assert!(!motion.active());
+        total
+    }
+    #[test]
+    fn filtered_motion_is_independent_of_redraw_and_report_cadence() {
+        let baseline = integrated_trace(1, 10);
+        for frames in [7, 16, 33, 50] {
+            for reports in [5, 10, 20, 25, 50] {
+                let actual = integrated_trace(frames, reports);
+                assert!(
+                    actual.distance(baseline) < 0.00001,
+                    "{frames}ms frames / {reports}ms reports: {actual:?} vs {baseline:?}"
+                );
+            }
+        }
+    }
+    #[test]
+    fn filtering_reduces_sensor_steps_with_a_short_response_and_release() {
+        let start = Instant::now();
+        let mut motion = Motion::default();
+        motion.report([350, 0, 0], start);
+        motion.take(start + Duration::from_millis(12));
+        // One time constant: responsive, but not a sudden full-speed jump.
+        assert!((motion.velocity.x - (1. - (-1_f32).exp())).abs() < 0.00001);
+        motion.take(start + Duration::from_millis(36));
+        assert!(motion.velocity.x > 0.95);
+        motion.report([0; 3], start + Duration::from_millis(40));
+        motion.take(start + Duration::from_millis(40));
+        let tail = motion.take(start + Duration::from_millis(160));
+        assert!(tail.x > 0. && tail.x < RESPONSE_SECONDS);
+        assert!(!motion.active());
+        assert_eq!(motion.take(start + Duration::from_secs(30)), Vec3::ZERO);
+    }
+    #[test]
+    fn alternating_sensor_noise_is_smoothed_without_queuing_old_reports() {
+        let start = Instant::now();
+        let mut motion = Motion::default();
+        motion.report([200, 0, 0], start);
+        motion.take(start + Duration::from_millis(100));
+        let mut low = f32::MAX;
+        let mut high = f32::MIN;
+        for sample in 0..40 {
+            let now = start + Duration::from_millis(100 + sample * 8);
+            motion.report(
+                [if sample.is_multiple_of(2) { 180 } else { 220 }, 0, 0],
+                now,
+            );
+            motion.take(now);
+            if sample > 10 {
+                low = low.min(motion.velocity.x);
+                high = high.max(motion.velocity.x);
+            }
+        }
+        assert!(high - low < (axis(220) - axis(180)) * 0.5);
+        // The latest value replaces the target; there is no queued sample tail.
+        assert_eq!(motion.target.x, axis(220));
+    }
+    #[test]
+    fn lost_reports_expire_and_focus_reset_discards_pending_motion() {
+        let start = Instant::now();
+        let mut motion = Motion::default();
+        motion.report([350, 0, 0], start);
+        let distance = motion.take(start + Duration::from_secs(1));
+        // A lost release report cannot leave the camera moving indefinitely.
+        assert!((distance.x - REPORT_TIMEOUT.as_secs_f32()).abs() < 0.00001);
+        assert!(!motion.active());
+        let mut state = State::default();
+        state.report(&report(1, &[350, 50, -30, 150, 0, 10]), start);
+        state.clear();
+        let resumed = start + Duration::from_secs(2);
+        assert_eq!(state.translation_motion.take(resumed), Vec3::ZERO);
+        assert_eq!(state.rotation_motion.take(resumed), Vec3::ZERO);
+        assert!(!state.translation_motion.active());
+        assert!(!state.rotation_motion.active());
+        state.report(&report(1, &[350, 0, 0]), resumed);
+        assert_eq!(state.translation_motion.take(resumed), Vec3::ZERO);
+        assert!(
+            state
+                .translation_motion
+                .take(resumed + Duration::from_millis(16))
+                .x
+                > 0.
+        );
+    }
+    #[test]
+    fn split_axis_reports_keep_the_other_axes_moving_smoothly() {
+        let start = Instant::now();
+        let mut state = State::default();
+        state.report(&report(1, &[350, 0, 0]), start);
+        state.report(&report(2, &[0, 350, 0]), start + Duration::from_millis(8));
+        let now = start + Duration::from_millis(24);
+        let t = state.translation_motion.take(now);
+        let r = state.rotation_motion.take(now);
+        assert!(t.x > r.y && r.y > 0.);
+        assert_eq!(t.y, 0.);
+        assert_eq!(r.x, 0.);
+        state.report(&report(1, &[0; 3]), now);
+        state.report(&report(2, &[0; 3]), now);
+        state
+            .translation_motion
+            .take(now + Duration::from_millis(120));
+        state.rotation_motion.take(now + Duration::from_millis(120));
+        assert!(!state.translation_motion.active());
+        assert!(!state.rotation_motion.active());
+    }
     #[test]
     fn split_combined_and_signed_hid_reports_decode_without_losing_axes() {
         let mut s = State::default();
         let now = Instant::now();
         assert!(s.report(&report(1, &[350, -123, 16]), now));
         assert!(s.report(&report(2, &[-35, 200, -350]), now));
-        assert_eq!(s.translation, [350, -123, 16]);
-        assert_eq!(s.rotation, [-35, 200, -350]);
-        assert!(s.report(&report(1, &[1, 2, 3, 4, 5, 6]), now));
-        assert_eq!(s.translation, [1, 2, 3]);
-        assert_eq!(s.rotation, [4, 5, 6]);
+        assert_eq!(
+            s.translation_motion.target,
+            Vec3::from_array([350, -123, 16].map(axis))
+        );
+        assert_eq!(
+            s.rotation_motion.target,
+            Vec3::from_array([-35, 200, -350].map(axis))
+        );
+        assert!(s.report(&report(1, &[35, 70, 105, 140, 175, 210]), now));
+        assert_eq!(
+            s.translation_motion.target,
+            Vec3::from_array([35, 70, 105].map(axis))
+        );
+        assert_eq!(
+            s.rotation_motion.target,
+            Vec3::from_array([140, 175, 210].map(axis))
+        );
         for bytes in [
             vec![],
             vec![1],
@@ -464,7 +656,7 @@ mod tests {
         assert_eq!(axis(350), 1.);
         assert_eq!(axis(-350), -1.);
         s.clear();
-        assert_eq!(s.translation, [0; 3]);
+        assert!(!s.translation_motion.active());
         assert_eq!(s.buttons, 0);
     }
     #[test]
@@ -493,5 +685,25 @@ mod tests {
             apply_motion(&mut b, Vec3::Y, Vec3::ZERO, 0.016, &Options::default());
         }
         assert!((a.span - b.span).abs() < 1e-4);
+        let mut a = Camera::default();
+        let mut b = a.clone();
+        apply_motion(
+            &mut a,
+            Vec3::new(0.5, 0.8, -0.3),
+            Vec3::ZERO,
+            0.1,
+            &Options::default(),
+        );
+        for _ in 0..10 {
+            apply_motion(
+                &mut b,
+                Vec3::new(0.5, 0.8, -0.3),
+                Vec3::ZERO,
+                0.01,
+                &Options::default(),
+            );
+        }
+        assert!((a.span - b.span).abs() < 1e-4);
+        assert!(a.center.distance(b.center) < 1e-4);
     }
 }

@@ -141,6 +141,8 @@ pub struct FeatureStatus {
 pub struct Scene {
     pub meshes: Vec<MeshView>,
     pub sketches: BTreeMap<String, ResolvedSketch>,
+    /// Computed by the geometry worker, never by pointer-hover rendering.
+    pub regions: BTreeMap<String, Vec<sketch::ResolvedRegion>>,
     pub statuses: Vec<FeatureStatus>,
     pub millis: f64,
     pub reused_features: usize,
@@ -458,7 +460,49 @@ impl Geometry {
                 if op == "extrude" {
                     profile.plane = profile.plane.shifted(start);
                 }
-                let faces = sketch::faces(&mut self.topo, &profile)?;
+                let mut region_sides = vec![];
+                let faces = if op == "extrude" {
+                    let selected = match p.get("regions") {
+                        None | Some(Value::Null) => None,
+                        Some(Value::Array(values)) => {
+                            if values.is_empty() {
+                                return Err("Choose at least one sketch region".into());
+                            }
+                            Some(
+                                values
+                                    .iter()
+                                    .map(|v| {
+                                        v.as_str().map(str::to_owned).ok_or_else(|| {
+                                            "Sketch region selections must be identities".to_owned()
+                                        })
+                                    })
+                                    .collect::<Result<Vec<_>>>()?,
+                            )
+                        }
+                        _ => return Err("Sketch region selections must be an array or null".into()),
+                    };
+                    if let Some(selected) = selected {
+                        let profile =
+                            sketch::profile_for_regions(&mut self.topo, &profile, &selected)?;
+                        region_sides = profile.sides;
+                        profile.faces
+                    } else {
+                        // Preserve exact legacy topology, output order, and references
+                        // for saved whole-sketch features. New subdivided profiles use
+                        // the arrangement only when that legacy path is unavailable.
+                        match sketch::faces(&mut self.topo, &profile) {
+                            Ok(faces) => faces,
+                            Err(_) => {
+                                let profile =
+                                    sketch::profile_for_regions(&mut self.topo, &profile, &[])?;
+                                region_sides = profile.sides;
+                                profile.faces
+                            }
+                        }
+                    }
+                } else {
+                    sketch::faces(&mut self.topo, &profile)?
+                };
                 for (i, face) in faces.into_iter().enumerate() {
                     let solid = if op == "extrude" {
                         ops::extrude::extrude(
@@ -505,6 +549,24 @@ impl Geometry {
                 }
                 if op == "extrude" {
                     self.register_extrude_anchors(f, &sk, start, start + direction * depth);
+                    for (key, a, b) in region_sides {
+                        let origin = sk.plane.at(a);
+                        let mut u = sub(sk.plane.at(b), origin);
+                        let length = dot(u, u).sqrt();
+                        if length < 1e-8 {
+                            continue;
+                        }
+                        u = u.map(|x| x / length);
+                        self.anchors.push((
+                            format!("{}:region-side:{key}", f.id),
+                            Plane {
+                                origin,
+                                u,
+                                v: sk.plane.normal,
+                                normal: cross(u, sk.plane.normal),
+                            },
+                        ));
+                    }
                 }
             }
             "box" | "cylinder" => {
@@ -777,6 +839,15 @@ impl Geometry {
     pub fn scene(&self) -> Result<Scene> {
         let mut scene = Scene {
             sketches: self.sketches.clone(),
+            regions: self
+                .sketches
+                .iter()
+                .filter_map(|(id, sk)| {
+                    sketch::regions(sk)
+                        .ok()
+                        .map(|regions| (id.clone(), regions))
+                })
+                .collect(),
             ..Default::default()
         };
         let mut global_id = 1;

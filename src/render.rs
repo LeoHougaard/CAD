@@ -5,7 +5,7 @@ use eframe::{
 };
 use glam::{Mat3, Mat4, Quat, Vec3};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     sync::{Arc, Mutex},
 };
 
@@ -269,14 +269,25 @@ pub fn pick(
     rect: egui::Rect,
     hidden: &BTreeSet<String>,
 ) -> Option<Pick> {
+    picks(scene, camera, pos, rect, hidden).into_iter().next()
+}
+
+/// One hit per face, front to back, including obscured faces for Select other.
+pub fn picks(
+    scene: &Scene,
+    camera: &Camera,
+    pos: egui::Pos2,
+    rect: egui::Rect,
+    hidden: &BTreeSet<String>,
+) -> Vec<Pick> {
     let (o, d) = camera.ray(pos, rect);
-    let mut result = None;
-    let mut best = f32::INFINITY;
+    let mut result = vec![];
     for mesh in &scene.meshes {
         if hidden.contains(&mesh.part) {
             continue;
         }
         for face in &mesh.faces {
+            let mut best = f32::INFINITY;
             for tri in mesh.indices[face.start..face.end].as_chunks::<3>().0 {
                 let a = Vec3::from_array(mesh.positions[tri[0] as usize]);
                 let b = Vec3::from_array(mesh.positions[tri[1] as usize]);
@@ -285,19 +296,203 @@ pub fn pick(
                     && t < best
                 {
                     best = t;
-                    result = Some(Pick {
-                        point: o + d * t,
+                }
+            }
+            if best.is_finite() {
+                result.push(Pick {
+                    point: o + d * best,
+                    part: mesh.part.clone(),
+                    face: face.key.clone(),
+                    global_face: face.global_id,
+                    plane: face.plane.clone(),
+                    distance: best,
+                });
+            }
+        }
+    }
+    result.sort_by(|a, b| a.distance.total_cmp(&b.distance));
+    result
+}
+
+pub struct EdgePick {
+    pub part: String,
+    pub key: String,
+    pub distance: f32,
+    pub pixels: f32,
+}
+pub fn pick_edges(
+    scene: &Scene,
+    camera: &Camera,
+    pos: egui::Pos2,
+    rect: egui::Rect,
+    hidden: &BTreeSet<String>,
+) -> Vec<EdgePick> {
+    let projector = camera.projector(rect);
+    let (origin, ray) = camera.ray(pos, rect);
+    let mut result = vec![];
+    for mesh in scene.meshes.iter().filter(|m| !hidden.contains(&m.part)) {
+        for edge in mesh
+            .edges
+            .iter()
+            .filter(|e| !e.seam && !e.key.contains("untracked:"))
+        {
+            let mut best: Option<(f32, f32)> = None;
+            for segment in edge.points.windows(2) {
+                let a = projector.project(segment[0].map(f64::from), rect);
+                let b = projector.project(segment[1].map(f64::from), rect);
+                let pixels = point_segment_distance(pos, a, b);
+                if pixels > 7. {
+                    continue;
+                }
+                let v = b - a;
+                let t = ((pos - a).dot(v) / v.length_sq().max(1e-8)).clamp(0., 1.);
+                let point = Vec3::from_array(segment[0]).lerp(Vec3::from_array(segment[1]), t);
+                let depth = (point - origin).dot(ray);
+                if depth >= 0. && best.is_none_or(|(p, d)| pixels < p || (pixels == p && depth < d))
+                {
+                    best = Some((pixels, depth));
+                }
+            }
+            if let Some((pixels, distance)) = best {
+                result.push(EdgePick {
+                    part: edge.part.clone(),
+                    key: edge.key.clone(),
+                    distance,
+                    pixels,
+                });
+            }
+        }
+    }
+    result.sort_by(|a, b| {
+        a.pixels
+            .total_cmp(&b.pixels)
+            .then(a.distance.total_cmp(&b.distance))
+    });
+    result
+}
+
+fn segment_crosses_rect(a: egui::Pos2, b: egui::Pos2, rect: egui::Rect) -> bool {
+    if rect.contains(a) || rect.contains(b) {
+        return true;
+    }
+    let delta = b - a;
+    let mut low = 0.0f32;
+    let mut high = 1.0f32;
+    for (start, d, min, max) in [
+        (a.x, delta.x, rect.left(), rect.right()),
+        (a.y, delta.y, rect.top(), rect.bottom()),
+    ] {
+        if d.abs() < 1e-8 {
+            if start < min || start > max {
+                return false;
+            }
+        } else {
+            let p = (min - start) / d;
+            let q = (max - start) / d;
+            low = low.max(p.min(q));
+            high = high.min(p.max(q));
+            if low > high {
+                return false;
+            }
+        }
+    }
+    true
+}
+pub(crate) fn triangle_crosses_rect(points: [egui::Pos2; 3], rect: egui::Rect) -> bool {
+    if (0..3).any(|i| segment_crosses_rect(points[i], points[(i + 1) % 3], rect)) {
+        return true;
+    }
+    let p = rect.center();
+    let signs = std::array::from_fn::<_, 3, _>(|i| {
+        let a = points[i];
+        let b = points[(i + 1) % 3];
+        (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x)
+    });
+    signs.iter().all(|s| *s >= 0.) || signs.iter().all(|s| *s <= 0.)
+}
+/// Left-to-right encloses; right-to-left crosses. Ctrl removes hits in the caller.
+pub fn box_targets(
+    scene: &Scene,
+    camera: &Camera,
+    viewport: egui::Rect,
+    area: egui::Rect,
+    crossing: bool,
+    filter: crate::selection::Filter,
+    hidden: &BTreeSet<String>,
+) -> Vec<crate::selection::Target> {
+    use crate::selection::{Filter, Target};
+    let projector = camera.projector(viewport);
+    let mut out = vec![];
+    for mesh in scene.meshes.iter().filter(|m| !hidden.contains(&m.part)) {
+        let projected: Vec<_> = mesh
+            .positions
+            .iter()
+            .map(|p| projector.project(p.map(f64::from), viewport))
+            .collect();
+        if filter == Filter::Parts {
+            let hit = if crossing {
+                mesh.indices
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
+                    .any(|t| triangle_crosses_rect(t.map(|i| projected[i as usize]), area))
+            } else {
+                !projected.is_empty() && projected.iter().all(|p| area.contains(*p))
+            };
+            if hit {
+                out.push(Target::Part(mesh.part.clone()));
+            }
+        } else if matches!(filter, Filter::All | Filter::Faces) {
+            for face in &mesh.faces {
+                let indices = &mesh.indices[face.start..face.end];
+                let hit = if crossing {
+                    indices
+                        .as_chunks::<3>()
+                        .0
+                        .iter()
+                        .any(|t| triangle_crosses_rect(t.map(|i| projected[i as usize]), area))
+                } else {
+                    !indices.is_empty()
+                        && indices
+                            .iter()
+                            .all(|i| area.contains(projected[*i as usize]))
+                };
+                if hit {
+                    out.push(Target::Face {
                         part: mesh.part.clone(),
-                        face: face.key.clone(),
-                        global_face: face.global_id,
-                        plane: face.plane.clone(),
-                        distance: t,
+                        key: face.key.clone(),
+                    });
+                }
+            }
+        }
+        if filter == Filter::Edges {
+            for e in mesh
+                .edges
+                .iter()
+                .filter(|e| !e.seam && !e.key.contains("untracked:"))
+            {
+                let points: Vec<_> = e
+                    .points
+                    .iter()
+                    .map(|p| projector.project(p.map(f64::from), viewport))
+                    .collect();
+                let hit = if crossing {
+                    points
+                        .windows(2)
+                        .any(|p| segment_crosses_rect(p[0], p[1], area))
+                } else {
+                    !points.is_empty() && points.iter().all(|p| area.contains(*p))
+                };
+                if hit {
+                    out.push(Target::Edge {
+                        part: mesh.part.clone(),
+                        key: e.key.clone(),
                     });
                 }
             }
         }
     }
-    result
+    out
 }
 fn ray_triangle(o: Vec3, d: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Option<f32> {
     let e1 = b - a;
@@ -331,10 +526,13 @@ struct Vertex {
     color: [f32; 3],
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Default)]
 pub struct View {
     pub matrix: Mat4,
-    pub selected: usize,
+    pub selected: Vec<usize>,
+    pub hovered: Vec<usize>,
+    pub selected_edges: Vec<(String, String)>,
+    pub hovered_edges: Vec<(String, String)>,
     pub shaded_edges: bool,
 }
 
@@ -347,8 +545,26 @@ pub struct Renderer {
     tri_count: i32,
     line_count: i32,
     revision: u64,
+    face_ranges: BTreeMap<usize, (i32, i32)>,
+    edge_ranges: BTreeMap<(String, String), (i32, i32)>,
 }
 impl Renderer {
+    unsafe fn draw_ranges(gl: &glow::Context, mode: u32, ranges: impl Iterator<Item = (i32, i32)>) {
+        let mut pending = None;
+        for (start, count) in ranges {
+            match pending {
+                Some((first, len)) if first + len == start => pending = Some((first, len + count)),
+                Some((first, len)) => {
+                    unsafe { gl.draw_arrays(mode, first, len) };
+                    pending = Some((start, count));
+                }
+                None => pending = Some((start, count)),
+            }
+        }
+        if let Some((first, len)) = pending {
+            unsafe { gl.draw_arrays(mode, first, len) };
+        }
+    }
     pub fn new(gl: &glow::Context) -> Result<Self, String> {
         unsafe {
             let program = gl.create_program()?;
@@ -378,16 +594,17 @@ void main(){gl_Position=mvp*vec4(position,1.0);v_normal=normal;v_face=face;v_col
 in vec3 v_normal;
 flat in float v_face;
 in vec3 v_color;
-uniform float selected;
+uniform int highlight;
 uniform bool lines;
 out vec4 color;
 void main(){
- if(lines){color=vec4(v_color,1.0);return;}
+ vec3 base=v_color;
+ if(highlight==1)base=vec3(0.12,0.91,0.88);
+ if(highlight==2)base=vec3(0.69,0.43,0.98);
+ if(lines){color=vec4(base,1.0);return;}
  vec3 n=normalize(v_normal);
  float shade=0.48+0.39*abs(dot(n,normalize(vec3(0.35,-0.5,0.9))))+0.13*abs(n.z);
- vec3 base=v_color;
- if(abs(v_face-selected)<0.2)base=vec3(0.26,0.77,0.88);
- color=vec4(base*shade,1.0);
+ color=vec4(base*(highlight==0?shade:0.55+0.45*shade),1.0);
 }
 "#,
             );
@@ -414,6 +631,8 @@ void main(){
                 tri_count: 0,
                 line_count: 0,
                 revision: u64::MAX,
+                face_ranges: BTreeMap::new(),
+                edge_ranges: BTreeMap::new(),
             })
         }
     }
@@ -435,6 +654,8 @@ void main(){
     fn upload(&mut self, gl: &glow::Context, scene: &Scene, hidden: &BTreeSet<String>) {
         let mut triangles = vec![];
         let mut lines = vec![];
+        self.face_ranges.clear();
+        self.edge_ranges.clear();
         let palette = [
             [0.68, 0.74, 0.81],
             [0.65, 0.73, 0.65],
@@ -447,6 +668,10 @@ void main(){
             }
             let color = palette[index % palette.len()];
             for face in &mesh.faces {
+                self.face_ranges.insert(
+                    face.global_id,
+                    (triangles.len() as i32, (face.end - face.start) as i32),
+                );
                 for (triangle_index, tri) in mesh.indices[face.start..face.end]
                     .as_chunks::<3>()
                     .0
@@ -464,6 +689,13 @@ void main(){
                 }
             }
             for edge in mesh.edges.iter().filter(|e| !e.seam) {
+                self.edge_ranges.insert(
+                    (edge.part.clone(), edge.key.clone()),
+                    (
+                        lines.len() as i32,
+                        edge.points.len().saturating_sub(1) as i32 * 2,
+                    ),
+                );
                 for points in edge.points.windows(2) {
                     for pos in points {
                         lines.push(Vertex {
@@ -518,21 +750,40 @@ void main(){
                 false,
                 &view.matrix.to_cols_array(),
             );
-            gl.uniform_1_f32(
-                gl.get_uniform_location(self.program, "selected").as_ref(),
-                view.selected as f32,
-            );
+            let highlight = gl.get_uniform_location(self.program, "highlight");
+            gl.uniform_1_i32(highlight.as_ref(), 0);
             gl.uniform_1_i32(gl.get_uniform_location(self.program, "lines").as_ref(), 0);
             gl.enable(glow::POLYGON_OFFSET_FILL);
             gl.polygon_offset(1., 1.);
             gl.bind_vertex_array(Some(self.vao));
             gl.draw_arrays(glow::TRIANGLES, 0, self.tri_count);
+            for (ids, color) in [(&view.hovered, 2), (&view.selected, 1)] {
+                gl.uniform_1_i32(highlight.as_ref(), color);
+                Self::draw_ranges(
+                    gl,
+                    glow::TRIANGLES,
+                    ids.iter()
+                        .filter_map(|id| self.face_ranges.get(id).copied()),
+                );
+            }
             gl.disable(glow::POLYGON_OFFSET_FILL);
             gl.uniform_1_i32(gl.get_uniform_location(self.program, "lines").as_ref(), 1);
             gl.bind_vertex_array(Some(self.line_vao));
+            gl.uniform_1_i32(highlight.as_ref(), 0);
             if view.shaded_edges {
                 gl.draw_arrays(glow::LINES, 0, self.line_count);
             }
+            gl.line_width(2.5);
+            for (keys, color) in [(&view.hovered_edges, 2), (&view.selected_edges, 1)] {
+                gl.uniform_1_i32(highlight.as_ref(), color);
+                Self::draw_ranges(
+                    gl,
+                    glow::LINES,
+                    keys.iter()
+                        .filter_map(|key| self.edge_ranges.get(key).copied()),
+                );
+            }
+            gl.line_width(1.);
             gl.bind_vertex_array(None);
             gl.disable(glow::DEPTH_TEST);
             gl.enable(glow::BLEND);
@@ -561,7 +812,7 @@ pub fn paint_callback(
         rect,
         callback: Arc::new(eframe::egui_glow::CallbackFn::new(move |_info, painter| {
             if let Ok(mut render) = renderer.lock() {
-                render.paint(painter.gl(), &scene, &hidden, revision, view);
+                render.paint(painter.gl(), &scene, &hidden, revision, view.clone());
             }
         })),
     }
@@ -576,6 +827,70 @@ pub fn point_segment_distance(p: egui::Pos2, a: egui::Pos2, b: egui::Pos2) -> f3
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn face_hits_are_depth_ordered_and_hidden_parts_are_not_pickable() {
+        let mut runtime = crate::engine::Runtime::new(crate::plugins::Registry::builtin().unwrap());
+        let scene = runtime.evaluate(&crate::model::demo()).unwrap().scene;
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000., 800.));
+        let mut camera = Camera::default();
+        camera.align(&Plane::named("Top", 0.));
+        camera.fit_with_rect(&scene, rect);
+        let pos = camera.project([0., 0., 8.], rect);
+        let hits = picks(&scene, &camera, pos, rect, &BTreeSet::new());
+        assert!(hits.len() >= 2);
+        assert!(hits.windows(2).all(|h| h[0].distance <= h[1].distance));
+        assert!((hits[0].point.z - 8.).abs() < 1e-3);
+        let hidden = BTreeSet::from([hits[0].part.clone()]);
+        assert!(picks(&scene, &camera, pos, rect, &hidden).is_empty());
+        let area = egui::Rect::from_two_pos(
+            camera.project([-41., -26., 0.], rect),
+            camera.project([41., 26., 0.], rect),
+        );
+        let parts = box_targets(
+            &scene,
+            &camera,
+            rect,
+            area,
+            false,
+            crate::selection::Filter::Parts,
+            &BTreeSet::new(),
+        );
+        assert_eq!(parts.len(), 1);
+        assert!(
+            box_targets(
+                &scene,
+                &camera,
+                rect,
+                area,
+                true,
+                crate::selection::Filter::Parts,
+                &hidden
+            )
+            .is_empty()
+        );
+    }
+    #[test]
+    fn crossing_box_finds_segments_and_triangles_without_vertices_inside() {
+        let area = egui::Rect::from_min_max(egui::pos2(-1., -1.), egui::pos2(1., 1.));
+        assert!(segment_crosses_rect(
+            egui::pos2(-5., 0.),
+            egui::pos2(5., 0.),
+            area
+        ));
+        assert!(!segment_crosses_rect(
+            egui::pos2(-5., 4.),
+            egui::pos2(5., 4.),
+            area
+        ));
+        assert!(triangle_crosses_rect(
+            [
+                egui::pos2(-8., -5.),
+                egui::pos2(8., -5.),
+                egui::pos2(0., 8.)
+            ],
+            area
+        ));
+    }
     #[test]
     fn choosing_a_pivot_does_not_jump_and_orbit_keeps_it_fixed_after_pan_and_zoom() {
         let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200., 800.));

@@ -34,6 +34,26 @@ pub struct Plugin {
     pub hash: String,
     ast: AST,
 }
+impl Plugin {
+    /// The bundled 1.1 Extrude adds an optional region input without changing
+    /// legacy whole-sketch semantics. Only these exact bundled packages match.
+    pub fn matches(&self, feature: &Feature) -> bool {
+        (self.hash == feature.plugin_hash && self.manifest.version == feature.plugin_version)
+            || (feature.plugin == "extrude"
+                && feature.plugin_version == "1.0.0"
+                && feature.plugin_hash == "b3447843f1693770"
+                && self.manifest.id == "extrude"
+                && self.manifest.version == "1.1.0"
+                && self.hash
+                    == source_hash(
+                        &[
+                            include_str!("../plugins/extrude.json"),
+                            include_str!("../plugins/extrude.rhai"),
+                        ]
+                        .concat(),
+                    ))
+    }
+}
 pub struct Registry {
     pub engine: Engine,
     pub plugins: BTreeMap<String, Plugin>,
@@ -213,7 +233,7 @@ impl Registry {
             .plugins
             .get(&feature.plugin)
             .ok_or_else(|| format!("Missing plugin {}", feature.plugin))?;
-        if p.hash != feature.plugin_hash || p.manifest.version != feature.plugin_version {
+        if !p.matches(feature) {
             return Err("Plugin code changed. Restore the pinned package or explicitly adopt the new version in the feature editor.".into());
         }
         let mut params = feature.params.clone();

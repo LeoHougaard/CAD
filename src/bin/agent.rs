@@ -184,6 +184,19 @@ fn field_value(field: &Field, value: &Value) -> cad::model::Result<()> {
         "edges" | "faces" => value
             .as_array()
             .is_some_and(|a| a.iter().all(Value::is_string)),
+        "regions" => {
+            value.is_null()
+                || value.as_array().is_some_and(|a| {
+                    a.len() <= 4096
+                        && a.iter()
+                            .all(|v| v.as_str().is_some_and(|s| !s.is_empty() && s.len() <= 8192))
+                        && a.iter()
+                            .filter_map(Value::as_str)
+                            .collect::<std::collections::BTreeSet<_>>()
+                            .len()
+                            == a.len()
+                })
+        }
         "sketches" => value.as_array().is_some_and(|a| {
             (2..=32).contains(&a.len())
                 && a.iter()
@@ -541,7 +554,7 @@ fn validate(document: &Document, registry: &Registry) -> cad::model::Result<()> 
             .plugins
             .get(&feature.plugin)
             .ok_or_else(|| format!("Missing plugin {}", feature.plugin))?;
-        if plugin.hash != feature.plugin_hash || plugin.manifest.version != feature.plugin_version {
+        if !plugin.matches(feature) {
             return Err(format!(
                 "Pinned plugin does not match feature {}",
                 feature.id
@@ -614,7 +627,8 @@ fn summary(evaluation: &Evaluation) -> Value {
             "edges":m.edges.iter().filter(|e| !e.seam).map(|e| &e.key).collect::<Vec<_>>()
         })).collect::<Vec<_>>(),
         "sketches":scene.sketches.iter().map(|(id,s)| json!({"id":id,"degrees_of_freedom":s.dof,"plane":s.plane,
-            "entities":s.entities.iter().map(|e| json!({"id":e.id,"kind":e.kind,"values":e.values,"construction":e.construction,"fixed":e.fixed})).collect::<Vec<_>>()
+            "entities":s.entities.iter().map(|e| json!({"id":e.id,"kind":e.kind,"values":e.values,"construction":e.construction,"fixed":e.fixed})).collect::<Vec<_>>(),
+            "regions":scene.regions.get(id).into_iter().flatten().map(|r|json!({"key":r.key,"outer":r.outer,"holes":r.holes,"whole_sketch":r.legacy_selected})).collect::<Vec<_>>()
         })).collect::<Vec<_>>()
     })
 }

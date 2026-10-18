@@ -111,8 +111,8 @@ fn invalid_profiles_and_bad_dimensions_fail_without_a_solid() {
             }
             2 => {
                 let mut s = Sketch::default();
-                s.add_rect([0., 0.], [10., 10.]);
-                s.add_rect([5., 5.], [15., 15.]);
+                s.add_circle([0., 0.], 5.);
+                s.add_circle([0., 0.], 5.);
                 d.features[0].set_sketch(&s);
             }
             3 => d.features[1].params["depth"] = json!("1/0"),

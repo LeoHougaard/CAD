@@ -5,6 +5,10 @@ pub mod engine;
 pub mod file_lock;
 pub mod model;
 #[cfg(feature = "desktop")]
+pub mod selection;
+#[cfg(feature = "desktop")]
+pub mod shortcuts;
+#[cfg(feature = "desktop")]
 pub mod navigation;
 pub mod plugins;
 #[cfg(feature = "desktop")]

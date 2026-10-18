@@ -67,13 +67,18 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          for folder in (Path('target/test-output'), Path('output/sweep-loft')):
+          for folder in (Path('target/test-output'), Path('target/test-output/regions'), Path('output/sweep-loft')):
               for path in folder.glob('*'):
                   if path.suffix in {'.step', '.json'}:
                       path.unlink()
           PY
 
       - name: Release workspace tests
+        # Keep opt-level=3, but avoid whole-program LTO for every test harness.
+        # The shipping applications below retain the normal release profile.
+        env:
+          CARGO_PROFILE_RELEASE_LTO: "false"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
         run: cargo test --release --workspace --locked
 
       - name: Build release applications
@@ -100,3 +105,7 @@ jobs:
       - name: Verify sweep and loft STEP exports with Open CASCADE
         if: runner.os == 'Linux'
         run: .tools/ci-python/bin/python tools/verify_ci_step.py
+
+      - name: Verify selected sketch region STEP exports with Open CASCADE
+        if: runner.os == 'Linux'
+        run: .tools/ci-python/bin/python tools/verify_regions_step.py

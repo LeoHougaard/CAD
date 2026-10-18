@@ -3,33 +3,40 @@ use crate::{
     model::{Plane, Sketch, SketchConstraint, fmt},
     plugins::Numbers,
     render::{Camera, Projector, point_segment_distance},
+    shortcuts::{self, Command, Context, SketchTool},
     sketch::ResolvedSketch,
 };
 use eframe::egui::{self, Color32, Pos2, Rect, Stroke, Vec2};
 use std::collections::BTreeMap;
 
-const BLUE: Color32 = Color32::from_rgb(100, 170, 250);
+const BLUE: Color32 = Color32::from_rgb(72, 166, 190);
 const WHITE: Color32 = Color32::from_rgb(221, 230, 240);
-const ORANGE: Color32 = Color32::from_rgb(255, 198, 102);
+const SELECTED: Color32 = Color32::from_rgb(49, 231, 219);
+const HOVER: Color32 = Color32::from_rgb(191, 137, 255);
+const ORANGE: Color32 = HOVER;
 const RED: Color32 = Color32::from_rgb(247, 119, 132);
 const MUTED: Color32 = Color32::from_rgb(144, 159, 180);
-#[derive(Clone, Copy, PartialEq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Tool {
     #[default]
     Select,
     Line,
     Rectangle,
+    CenterRectangle,
     Circle,
     Dimension,
+    Relationship(&'static str),
 }
 impl Tool {
     pub fn name(self) -> &'static str {
         match self {
             Self::Select => "Select",
-            Self::Line => "Line",
-            Self::Rectangle => "Rectangle",
-            Self::Circle => "Circle",
+            Self::Line => "Line (L)",
+            Self::Rectangle => "Rectangle (G)",
+            Self::CenterRectangle => "Center rectangle (R)",
+            Self::Circle => "Circle (C)",
             Self::Dimension => "Dimension (D)",
+            Self::Relationship(name) => name,
         }
     }
 }
@@ -48,6 +55,12 @@ struct DimensionEdit {
     error: Option<String>,
 }
 enum Drag {
+    Box {
+        start: Pos2,
+        current: Pos2,
+        original: Vec<Selection>,
+        subtract: bool,
+    },
     Geometry {
         entity: u64,
         sub: Sub,
@@ -84,6 +97,9 @@ pub struct SketchUi {
     drag: Option<Drag>,
     last_good: Option<ResolvedSketch>,
     labels: Vec<(usize, Rect)>,
+    pending_relationship: Option<&'static str>,
+    pending_construction: bool,
+    construction: bool,
     pub hint: String,
 }
 impl Default for SketchUi {
@@ -100,6 +116,9 @@ impl Default for SketchUi {
             drag: None,
             last_good: None,
             labels: vec![],
+            pending_relationship: None,
+            pending_construction: false,
+            construction: false,
             hint: String::new(),
         }
     }
@@ -111,11 +130,35 @@ impl SketchUi {
         self.picks.clear();
         self.dimension = None;
         self.drag = None;
+        self.pending_relationship = None;
+        self.pending_construction = false;
         self.tool = Tool::Select;
     }
     pub fn set_tool(&mut self, tool: Tool) {
         self.cancel_gesture();
         self.tool = tool;
+        self.selected_dimension = None;
+        if tool == Tool::Dimension {
+            if self.selected.len() > 2 {
+                self.hint = "Select one curve or two entities".into();
+                self.selected.clear();
+            }
+            self.picks = self.selected.clone();
+            self.selected = self.picks.clone();
+        } else if !matches!(tool, Tool::Select | Tool::Relationship(_)) {
+            self.selected.clear();
+        }
+    }
+    fn toggle_tool(&mut self, tool: Tool) {
+        self.set_tool(if self.tool == tool {
+            Tool::Select
+        } else {
+            tool
+        });
+    }
+    pub fn clear_selection(&mut self) {
+        self.selected.clear();
+        self.picks.clear();
         self.selected_dimension = None;
     }
     pub fn toolbar(&mut self, ui: &mut egui::Ui) {
@@ -123,6 +166,7 @@ impl SketchUi {
             Tool::Select,
             Tool::Line,
             Tool::Rectangle,
+            Tool::CenterRectangle,
             Tool::Circle,
             Tool::Dimension,
         ] {
@@ -130,7 +174,7 @@ impl SketchUi {
                 .selectable_label(self.tool == tool, tool.name())
                 .clicked()
             {
-                self.set_tool(tool);
+                self.toggle_tool(tool);
             }
         }
         ui.separator();
@@ -144,18 +188,56 @@ impl SketchUi {
         if ctx.wants_keyboard_input() {
             return;
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && self.dimension.take().is_none() {
-            self.cancel_gesture();
-        }
-        for (key, tool) in [
-            (egui::Key::D, Tool::Dimension),
-            (egui::Key::L, Tool::Line),
-            (egui::Key::R, Tool::Rectangle),
-            (egui::Key::C, Tool::Circle),
-            (egui::Key::V, Tool::Select),
-        ] {
-            if ctx.input(|i| i.key_pressed(key)) {
-                self.set_tool(tool);
+        let commands: Vec<_> = ctx.input(|i| {
+            i.events
+                .iter()
+                .filter_map(|event| {
+                    if let egui::Event::Key {
+                        key,
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                        ..
+                    } = event
+                    {
+                        shortcuts::command_for(*key, *modifiers, Context::Sketch)
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        });
+        for command in commands {
+            match command {
+                Command::Cancel => {
+                    if self.dimension.take().is_none() {
+                        self.cancel_gesture();
+                    }
+                }
+                Command::ClearSelection => self.clear_selection(),
+                Command::SketchTool(tool) => self.toggle_tool(match tool {
+                    SketchTool::Line => Tool::Line,
+                    SketchTool::CornerRectangle => Tool::Rectangle,
+                    SketchTool::CenterRectangle => Tool::CenterRectangle,
+                    SketchTool::Circle => Tool::Circle,
+                    SketchTool::Dimension => Tool::Dimension,
+                }),
+                Command::Relationship(name) => {
+                    if self.tool == Tool::Relationship(name) {
+                        self.cancel_gesture();
+                    } else {
+                        self.set_tool(Tool::Relationship(name));
+                        self.pending_relationship = (!self.selected.is_empty()).then_some(name);
+                    }
+                }
+                Command::Construction => {
+                    if self.selected.is_empty() {
+                        self.construction = !self.construction;
+                    } else {
+                        self.pending_construction = true;
+                    }
+                }
+                _ => (),
             }
         }
     }
@@ -197,13 +279,15 @@ impl SketchUi {
                     .add_enabled(!self.selected.is_empty(), egui::Button::new(name).small())
                     .clicked()
                 {
-                    match self.relationship(name, sketch) {
-                        Ok(c) => {
+                    match self.relationships(name, sketch) {
+                        Ok(constraints) => {
                             self.hint.clear();
                             seed_from_resolved(sketch, self.last_good.as_ref());
-                            if !sketch.constraints.iter().any(|x| x == &c) {
-                                sketch.constraints.push(c);
-                                changed = true;
+                            for c in constraints {
+                                if !sketch.constraints.iter().any(|x| x == &c) {
+                                    sketch.constraints.push(c);
+                                    changed = true;
+                                }
                             }
                         }
                         Err(e) => self.hint = e,
@@ -279,9 +363,49 @@ impl SketchUi {
         }
         changed
     }
-    fn relationship(&self, name: &str, sketch: &Sketch) -> Result<SketchConstraint, String> {
-        let a = *self.selected.first().ok_or("Select sketch geometry")?;
-        let b = self.selected.get(1).copied();
+    fn relationships(&self, name: &str, sketch: &Sketch) -> Result<Vec<SketchConstraint>, String> {
+        if self.selected.len() > 2
+            && matches!(name, "Horizontal" | "Vertical")
+            && self.selected.iter().any(|s| matches!(s.sub, Sub::Point(_)))
+        {
+            return Err("Select two points, or select lines".into());
+        }
+        if self.selected.len() > 2
+            && !matches!(
+                name,
+                "Fix" | "Horizontal" | "Vertical" | "Equal" | "Parallel" | "Concentric"
+            )
+        {
+            return Err("Select exactly two suitable entities".into());
+        }
+        let mut groups = Vec::new();
+        if name == "Fix"
+            || matches!(name, "Horizontal" | "Vertical")
+                && self.selected.iter().all(|s| matches!(s.sub, Sub::Edge(_)))
+        {
+            groups.extend(self.selected.iter().map(|s| vec![*s]));
+        } else if matches!(name, "Equal" | "Parallel" | "Concentric") && self.selected.len() > 2 {
+            groups.extend(
+                self.selected[1..]
+                    .iter()
+                    .map(|s| vec![self.selected[0], *s]),
+            );
+        } else {
+            groups.push(self.selected.clone());
+        }
+        groups
+            .into_iter()
+            .map(|group| self.relationship(name, sketch, &group))
+            .collect()
+    }
+    fn relationship(
+        &self,
+        name: &str,
+        sketch: &Sketch,
+        selected: &[Selection],
+    ) -> Result<SketchConstraint, String> {
+        let a = *selected.first().ok_or("Select sketch geometry")?;
+        let b = selected.get(1).copied();
         let mut c = SketchConstraint {
             kind: name.into(),
             a: a.entity,
@@ -391,7 +515,7 @@ impl SketchUi {
             }
             _ => {
                 if b.is_none() {
-                    return Err("Select two suitable entities with Ctrl-click".into());
+                    return Err("Select two suitable entities".into());
                 }
             }
         }
@@ -442,11 +566,41 @@ impl SketchUi {
                 &projector,
                 rect,
                 p,
-                self.inference,
+                self.inference && !ui.input(|i| i.modifiers.shift),
                 self.first.as_ref(),
             )
         });
         let mut edit = Edit::default();
+        if let Some(name) = self.pending_relationship.take() {
+            match self.relationships(name, sketch) {
+                Ok(constraints) => {
+                    seed_from_resolved(sketch, Some(&sk));
+                    let before = sketch.constraints.len();
+                    for c in constraints {
+                        add_relation(sketch, c);
+                    }
+                    if sketch.constraints.len() != before {
+                        edit.change(true);
+                    }
+                    self.hint.clear();
+                    self.clear_selection();
+                }
+                Err(error) => self.hint = error,
+            }
+        }
+        if std::mem::take(&mut self.pending_construction) {
+            let construction = !sketch
+                .entities
+                .iter()
+                .filter(|e| self.selected.iter().any(|s| s.entity == e.id))
+                .all(|e| e.construction);
+            for e in &mut sketch.entities {
+                if self.selected.iter().any(|s| s.entity == e.id) {
+                    e.construction = construction;
+                }
+            }
+            edit.change(true);
+        }
         self.labels.clear();
         paint_geometry(ui, &sk, &projector, rect, &self.selected, hit, conflict);
         for (index, c) in sketch.constraints.iter().enumerate() {
@@ -482,6 +636,13 @@ impl SketchUi {
         }
         if let (Some(first), Some(end)) = (&self.first, &snap) {
             let pts = match self.tool {
+                Tool::CenterRectangle => vec![
+                    [2. * first.p[0] - end.p[0], 2. * first.p[1] - end.p[1]],
+                    [end.p[0], 2. * first.p[1] - end.p[1]],
+                    end.p,
+                    [2. * first.p[0] - end.p[0], end.p[1]],
+                    [2. * first.p[0] - end.p[0], 2. * first.p[1] - end.p[1]],
+                ],
                 Tool::Rectangle => vec![
                     first.p,
                     [end.p[0], first.p[1]],
@@ -509,7 +670,10 @@ impl SketchUi {
         }
         if hover && let Some(snap) = &snap {
             let p = projector.project(plane.at(snap.p), rect);
-            if self.tool != Tool::Select && self.tool != Tool::Dimension {
+            if !matches!(
+                self.tool,
+                Tool::Select | Tool::Dimension | Tool::Relationship(_)
+            ) {
                 ui.painter().circle_stroke(
                     p,
                     4.,
@@ -528,8 +692,11 @@ impl SketchUi {
                 self.selected_dimension = Some(index);
                 self.selected.clear();
             } else if self.tool == Tool::Dimension {
-                if let Some(h) = hit.filter(|h| !self.picks.contains(h)) {
-                    if self.picks.len() < 2 {
+                if let Some(h) = hit {
+                    if self.picks.contains(&h) {
+                        self.picks.retain(|s| s != &h);
+                        self.selected = self.picks.clone();
+                    } else if self.picks.len() < 2 {
                         self.picks.push(h);
                         self.selected = self.picks.clone();
                     }
@@ -560,15 +727,17 @@ impl SketchUi {
                 }
             } else if self.tool == Tool::Select {
                 self.selected_dimension = None;
-                if !ui.input(|i| i.modifiers.ctrl) {
-                    self.selected.clear();
-                }
                 if let Some(h) = hit {
-                    if self.selected.contains(&h) {
-                        self.selected.retain(|s| s != &h);
-                    } else {
-                        self.selected.push(h);
-                    }
+                    toggle_selection(&mut self.selected, h);
+                } else {
+                    self.clear_selection();
+                }
+            } else if let Tool::Relationship(name) = self.tool {
+                if let Some(h) = hit {
+                    toggle_selection(&mut self.selected, h);
+                    self.pending_relationship = Some(name);
+                } else {
+                    self.clear_selection();
                 }
             } else if let Some(snap) = snap.clone() {
                 if let Some(first) = self.first.take() {
@@ -576,6 +745,10 @@ impl SketchUi {
                         seed_from_resolved(sketch, Some(&sk));
                         match self.tool {
                             Tool::Rectangle => sketch.add_rect(first.p, snap.p),
+                            Tool::CenterRectangle => sketch.add_rect(
+                                [2. * first.p[0] - snap.p[0], 2. * first.p[1] - snap.p[1]],
+                                snap.p,
+                            ),
                             Tool::Circle => sketch.add_circle(
                                 first.p,
                                 (first.p[0] - snap.p[0]).hypot(first.p[1] - snap.p[1]),
@@ -593,10 +766,21 @@ impl SketchUi {
                         } else {
                             0
                         };
-                        link(sketch, id, first_index, &first);
+                        if self.tool != Tool::CenterRectangle {
+                            link(sketch, id, first_index, &first);
+                        }
+                        if let Some(entity) = sketch.entities.last_mut() {
+                            entity.construction = self.construction;
+                        }
+                        if self.tool == Tool::CenterRectangle {
+                            add_center_rectangle_relations(sketch, id, &first);
+                        }
                         if self.tool == Tool::Line {
                             link(sketch, id, 1, &snap);
-                            if (first.p[0] - snap.p[0]).abs() < 1e-7 {
+                            if self.inference
+                                && !ui.input(|i| i.modifiers.shift)
+                                && (first.p[0] - snap.p[0]).abs() < 1e-7
+                            {
                                 add_relation(
                                     sketch,
                                     SketchConstraint {
@@ -605,7 +789,10 @@ impl SketchUi {
                                         ..Default::default()
                                     },
                                 );
-                            } else if (first.p[1] - snap.p[1]).abs() < 1e-7 {
+                            } else if self.inference
+                                && !ui.input(|i| i.modifiers.shift)
+                                && (first.p[1] - snap.p[1]).abs() < 1e-7
+                            {
                                 add_relation(
                                     sketch,
                                     SketchConstraint {
@@ -621,7 +808,7 @@ impl SketchUi {
                                 ..Default::default()
                             });
                         }
-                        self.selected = vec![Selection::edge(id, 0)];
+                        self.selected.clear();
                         edit.change(true);
                     }
                 } else {
@@ -655,7 +842,9 @@ impl SketchUi {
                         .any(|c| c.kind == "Fix" && c.a == h.entity)
                 {
                     seed_from_resolved(sketch, Some(&sk));
-                    self.selected = vec![h];
+                    if !self.selected.contains(&h) {
+                        self.selected.push(h);
+                    }
                     self.drag = Some(Drag::Geometry {
                         entity: h.entity,
                         sub: h.sub,
@@ -663,12 +852,36 @@ impl SketchUi {
                         original: sketch.clone(),
                         checkpoint: true,
                     });
+                } else if pressed_hit.is_none() {
+                    self.drag = Some(Drag::Box {
+                        start: press,
+                        current: press,
+                        original: self.selected.clone(),
+                        subtract: ui.input(|i| i.modifiers.ctrl),
+                    });
                 }
             }
             if response.dragged_by(egui::PointerButton::Primary)
                 && let (Some(p), Some(drag)) = (raw, &mut self.drag)
             {
                 match drag {
+                    Drag::Box {
+                        start,
+                        current,
+                        original,
+                        subtract,
+                    } => {
+                        *current = pointer.unwrap_or(*current);
+                        let hits = box_hits(&sk, &projector, rect, *start, *current);
+                        self.selected = original.clone();
+                        for hit in hits {
+                            if *subtract {
+                                self.selected.retain(|s| *s != hit);
+                            } else if !self.selected.contains(&hit) {
+                                self.selected.push(hit);
+                            }
+                        }
+                    }
                     Drag::Label { index, checkpoint } => {
                         if let Some(c) = sketch.constraints.get_mut(*index) {
                             dimensions::set_label_position(&sk, c, p);
@@ -700,13 +913,29 @@ impl SketchUi {
                     }
                 }
             }
+            if let Some(Drag::Box { start, current, .. }) = &self.drag {
+                let color = if current.x >= start.x {
+                    SELECTED
+                } else {
+                    HOVER
+                };
+                let bounds = Rect::from_two_pos(*start, *current);
+                ui.painter()
+                    .rect_filled(bounds, 0., color.gamma_multiply(0.12));
+                ui.painter().rect_stroke(
+                    bounds,
+                    0.,
+                    Stroke::new(1_f32, color),
+                    egui::StrokeKind::Inside,
+                );
+            }
             if response.drag_stopped() {
                 self.drag = None;
             }
         }
         if hover
             && !ui.ctx().wants_keyboard_input()
-            && ui.input(|i| i.key_pressed(egui::Key::Delete))
+            && ui.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
         {
             if let Some(i) = self.selected_dimension.take() {
                 if i < sketch.constraints.len() {
@@ -739,6 +968,7 @@ impl SketchUi {
         } else {
             match self.tool {
                 Tool::Select => "",
+                Tool::Relationship(name) => name,
                 Tool::Dimension => {
                     if self.picks.is_empty() {
                         "Select geometry"
@@ -753,7 +983,7 @@ impl SketchUi {
                         "Start point"
                     }
                 }
-                Tool::Rectangle => {
+                Tool::Rectangle | Tool::CenterRectangle => {
                     if self.first.is_some() {
                         "Opposite corner"
                     } else {
@@ -776,6 +1006,19 @@ impl SketchUi {
             egui::FontId::proportional(12.),
             MUTED,
         );
+        if hover
+            && !self.selected.is_empty()
+            && self.dimension.is_none()
+            && let Some(pointer) = pointer
+        {
+            ui.painter().text(
+                pointer + Vec2::new(15., 18.),
+                egui::Align2::LEFT_TOP,
+                self.selected.len().to_string(),
+                egui::FontId::proportional(12.),
+                SELECTED,
+            );
+        }
         edit
     }
     fn dimension_dialog(
@@ -887,6 +1130,127 @@ fn add_relation(sk: &mut Sketch, c: SketchConstraint) {
     {
         sk.constraints.push(c);
     }
+}
+
+fn toggle_selection(selected: &mut Vec<Selection>, hit: Selection) {
+    if selected.contains(&hit) {
+        selected.retain(|s| *s != hit);
+    } else {
+        selected.push(hit);
+    }
+}
+
+fn add_center_rectangle_relations(sketch: &mut Sketch, rectangle: u64, center: &Snap) {
+    let corners = rect_points(
+        &sketch
+            .entities
+            .iter()
+            .find(|e| e.id == rectangle)
+            .unwrap()
+            .values,
+    );
+    let mut diagonals = Vec::new();
+    for corner in [0, 2] {
+        sketch.add_line(center.p, corners[corner]);
+        let diagonal = sketch.next_id;
+        sketch.entities.last_mut().unwrap().construction = true;
+        add_relation(
+            sketch,
+            SketchConstraint {
+                kind: "Coincident".into(),
+                a: diagonal,
+                b: rectangle,
+                points: [1, corner],
+                ..Default::default()
+            },
+        );
+        diagonals.push(diagonal);
+    }
+    link(sketch, diagonals[0], 0, center);
+    for (kind, points) in [
+        ("Coincident", [0, 0]),
+        ("Parallel", [0, 0]),
+        ("Equal", [0, 0]),
+    ] {
+        add_relation(
+            sketch,
+            SketchConstraint {
+                kind: kind.into(),
+                a: diagonals[0],
+                b: diagonals[1],
+                points,
+                ..Default::default()
+            },
+        );
+    }
+}
+
+fn box_hits(
+    sk: &ResolvedSketch,
+    projector: &Projector,
+    viewport: Rect,
+    start: Pos2,
+    end: Pos2,
+) -> Vec<Selection> {
+    let bounds = Rect::from_two_pos(start, end);
+    let enclosed = end.x >= start.x;
+    let mut result = Vec::new();
+    for entity in &sk.entities {
+        let points = entity.points();
+        if entity.kind == "rectangle" {
+            for (index, pair) in points.windows(2).enumerate() {
+                let a = projector.project(sk.plane.at(pair[0]), viewport);
+                let b = projector.project(sk.plane.at(pair[1]), viewport);
+                if if enclosed {
+                    bounds.contains(a) && bounds.contains(b)
+                } else {
+                    segment_intersects_rect(a, b, bounds)
+                } {
+                    result.push(Selection::edge(entity.id, index));
+                }
+            }
+        } else {
+            let projected: Vec<_> = points
+                .iter()
+                .map(|p| projector.project(sk.plane.at(*p), viewport))
+                .collect();
+            let selected = if enclosed {
+                projected.iter().all(|p| bounds.contains(*p))
+            } else {
+                projected
+                    .windows(2)
+                    .any(|p| segment_intersects_rect(p[0], p[1], bounds))
+            };
+            if selected && !projected.is_empty() {
+                result.push(Selection::edge(entity.id, 0));
+            }
+        }
+    }
+    result
+}
+
+fn segment_intersects_rect(a: Pos2, b: Pos2, bounds: Rect) -> bool {
+    let mut enter = 0.0_f32;
+    let mut leave = 1.0_f32;
+    for (origin, delta, low, high) in [
+        (a.x, b.x - a.x, bounds.left(), bounds.right()),
+        (a.y, b.y - a.y, bounds.top(), bounds.bottom()),
+    ] {
+        if delta.abs() < f32::EPSILON {
+            if origin < low || origin > high {
+                return false;
+            }
+        } else {
+            let first = (low - origin) / delta;
+            let last = (high - origin) / delta;
+            enter = enter.max(first.min(last));
+            leave = leave.min(first.max(last));
+            if enter > leave {
+                return false;
+            }
+        }
+    }
+    true
 }
 fn link(sk: &mut Sketch, id: u64, index: usize, snap: &Snap) {
     if let Some(target) = snap.target {
@@ -1131,8 +1495,11 @@ fn paint_geometry(
         let points = e.points();
         for (i, p) in points.windows(2).enumerate() {
             let selection = Selection::edge(e.id, if e.kind == "rectangle" { i } else { 0 });
-            let color = if selected.contains(&selection) || hover == Some(selection) {
-                ORANGE
+            let is_selected = selected.contains(&selection);
+            let color = if is_selected {
+                SELECTED
+            } else if hover == Some(selection) {
+                HOVER
             } else {
                 base
             };
@@ -1140,6 +1507,9 @@ fn paint_geometry(
                 projector.project(sk.plane.at(p[0]), rect),
                 projector.project(sk.plane.at(p[1]), rect),
             ];
+            if is_selected {
+                painter.line_segment(segment, Stroke::new(6_f32, SELECTED.gamma_multiply(0.18)));
+            }
             if e.construction {
                 let d = segment[1] - segment[0];
                 let len = d.length();
@@ -1148,21 +1518,35 @@ fn paint_geometry(
                     for n in 0..(len / 9.).ceil().min(200.) as usize {
                         let a = segment[0] + unit * n as f32 * 9.;
                         let b = segment[0] + unit * (n as f32 * 9. + 4.).min(len);
-                        painter.line_segment([a, b], Stroke::new(1.0f32, color));
+                        painter.line_segment(
+                            [a, b],
+                            Stroke::new(if is_selected { 2.8_f32 } else { 1. }, color),
+                        );
                     }
                 }
             } else {
                 painter.line_segment(
                     segment,
-                    Stroke::new(if color == ORANGE { 2.2f32 } else { 1.5f32 }, color),
+                    Stroke::new(
+                        if is_selected {
+                            2.8_f32
+                        } else if color == HOVER {
+                            2.2
+                        } else {
+                            1.5
+                        },
+                        color,
+                    ),
                 );
             }
         }
     }
     for (s, p) in vertices(sk) {
         let pos = projector.project(sk.plane.at(p), rect);
-        let color = if selected.contains(&s) || hover == Some(s) {
-            ORANGE
+        let color = if selected.contains(&s) {
+            SELECTED
+        } else if hover == Some(s) {
+            HOVER
         } else if s.entity == 0 {
             WHITE
         } else if conflict {
@@ -1239,7 +1623,7 @@ pub fn paint_dimension(
     let position = dimensions::label_position(sk, c);
     let label = projector.project(sk.plane.at(position), rect);
     let color = override_color.unwrap_or(if selected {
-        ORANGE
+        SELECTED
     } else if c.reference {
         MUTED
     } else {
@@ -1384,6 +1768,7 @@ mod tests {
         sketch: Sketch,
         camera: Camera,
         time: f64,
+        modifiers: egui::Modifiers,
     }
     impl Harness {
         fn new() -> Self {
@@ -1395,14 +1780,23 @@ mod tests {
                 sketch: Sketch::default(),
                 camera,
                 time: 0.,
+                modifiers: egui::Modifiers::NONE,
             }
         }
         fn frame(&mut self, events: Vec<egui::Event>) {
             self.time += 0.05;
+            for event in &events {
+                if let egui::Event::Key { modifiers, .. }
+                | egui::Event::PointerButton { modifiers, .. } = event
+                {
+                    self.modifiers = *modifiers;
+                }
+            }
             let input = egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1000., 700.))),
                 time: Some(self.time),
                 events,
+                modifiers: self.modifiers,
                 ..Default::default()
             };
             let resolved = crate::sketch::resolve(
@@ -1451,21 +1845,196 @@ mod tests {
             }]);
         }
         fn key(&mut self, key: egui::Key) {
+            self.key_with_modifiers(key, egui::Modifiers::NONE);
+        }
+        fn drag_box(&mut self, start: Pos2, end: Pos2, modifiers: egui::Modifiers) {
+            self.frame(vec![
+                egui::Event::PointerMoved(start),
+                egui::Event::PointerButton {
+                    pos: start,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers,
+                },
+            ]);
+            self.frame(vec![egui::Event::PointerMoved(end)]);
+            self.frame(vec![egui::Event::PointerButton {
+                pos: end,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers,
+            }]);
+        }
+        fn key_with_modifiers(&mut self, key: egui::Key, modifiers: egui::Modifiers) {
             self.frame(vec![egui::Event::Key {
                 key,
                 physical_key: Some(key),
                 pressed: true,
                 repeat: false,
-                modifiers: egui::Modifiers::NONE,
+                modifiers,
             }]);
             self.frame(vec![egui::Event::Key {
                 key,
                 physical_key: Some(key),
                 pressed: false,
                 repeat: false,
-                modifiers: egui::Modifiers::NONE,
+                modifiers,
             }]);
         }
+    }
+    #[test]
+    fn clicks_toggle_additively_and_space_or_empty_click_clear_selection() {
+        let mut h = Harness::new();
+        h.sketch.add_rect([0., 0.], [40., 30.]);
+        h.frame(vec![]);
+        h.click(600., 350.);
+        h.click(500., 250.);
+        assert_eq!(h.editor.selected.len(), 2);
+        h.click(600., 350.);
+        assert_eq!(h.editor.selected, vec![Selection::edge(1, 3)]);
+        h.key(egui::Key::Space);
+        assert!(h.editor.selected.is_empty());
+        h.click(600., 350.);
+        h.click(100., 600.);
+        assert!(h.editor.selected.is_empty());
+    }
+    #[test]
+    fn dimension_uses_two_preselected_edges_and_repeated_key_exits_tool() {
+        let mut h = Harness::new();
+        h.sketch.add_line([0., 0.], [40., 0.]);
+        h.sketch.add_line([0., 20.], [40., 20.]);
+        h.frame(vec![]);
+        h.click(600., 350.);
+        h.click(600., 242.3);
+        assert_eq!(h.editor.selected.len(), 2);
+        h.key(egui::Key::D);
+        assert_eq!(h.editor.picks.len(), 2);
+        h.click(800., 300.);
+        assert_eq!(
+            h.editor.dimension.as_ref().unwrap().constraint.kind,
+            "LineDistance"
+        );
+        h.key(egui::Key::Escape);
+        h.key(egui::Key::D);
+        assert_eq!(h.editor.tool, Tool::Select);
+        h.key(egui::Key::L);
+        assert_eq!(h.editor.tool, Tool::Line);
+        h.key(egui::Key::L);
+        assert_eq!(h.editor.tool, Tool::Select);
+    }
+    #[test]
+    fn vertical_and_perpendicular_keys_apply_constraints_instead_of_starting_drawing() {
+        let mut h = Harness::new();
+        h.sketch.add_line([0., 0.], [0., 30.]);
+        h.sketch.add_line([0., 0.], [40., 0.]);
+        h.frame(vec![]);
+        h.click(500., 250.);
+        h.key(egui::Key::V);
+        assert!(h.sketch.constraints.iter().any(|c| c.kind == "Vertical"));
+        h.key(egui::Key::Escape);
+        h.click(500., 250.);
+        h.click(600., 350.);
+        h.key_with_modifiers(egui::Key::L, egui::Modifiers::SHIFT);
+        assert!(
+            h.sketch
+                .constraints
+                .iter()
+                .any(|c| c.kind == "Perpendicular")
+        );
+        assert_eq!(h.editor.tool, Tool::Relationship("Perpendicular"));
+    }
+    #[test]
+    fn center_rectangle_keeps_its_center_when_width_changes() {
+        let mut h = Harness::new();
+        h.key(egui::Key::R);
+        h.click(500., 350.);
+        h.click(600., 275.);
+        assert_eq!(h.sketch.entities.len(), 3);
+        assert!(h.sketch.entities[1..].iter().all(|e| e.construction));
+        h.sketch.constraints.push(SketchConstraint {
+            kind: "Width".into(),
+            a: 1,
+            value: "60".into(),
+            ..Default::default()
+        });
+        let solved = crate::sketch::resolve(
+            &h.sketch,
+            Plane::named("Top", 0.),
+            &Numbers::new(&BTreeMap::new()).unwrap(),
+        )
+        .unwrap();
+        let rectangle = &solved.entities[0];
+        assert!((rectangle.values[0] + rectangle.values[2] / 2.).abs() < 1e-7);
+        assert!((rectangle.values[1] + rectangle.values[3] / 2.).abs() < 1e-7);
+        let regions = crate::sketch::regions(&solved).unwrap();
+        assert_eq!(
+            regions.len(),
+            1,
+            "Construction diagonals must not subdivide the solid profile"
+        );
+        assert!(regions[0].contains([0., 0.]));
+        assert!(regions[0].holes.is_empty());
+    }
+    #[test]
+    fn box_selection_distinguishes_enclosed_and_crossing_geometry() {
+        let mut sketch = Sketch::default();
+        sketch.add_line([0., 0.], [40., 0.]);
+        let resolved = crate::sketch::resolve(
+            &sketch,
+            Plane::named("Top", 0.),
+            &Numbers::new(&BTreeMap::new()).unwrap(),
+        )
+        .unwrap();
+        let mut camera = Camera::default();
+        camera.align(&resolved.plane);
+        let viewport = Rect::from_min_size(Pos2::ZERO, Vec2::new(1000., 700.));
+        let projector = camera.projector(viewport);
+        assert!(
+            box_hits(
+                &resolved,
+                &projector,
+                viewport,
+                Pos2::new(550., 330.),
+                Pos2::new(650., 370.)
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            box_hits(
+                &resolved,
+                &projector,
+                viewport,
+                Pos2::new(650., 330.),
+                Pos2::new(550., 370.)
+            ),
+            vec![Selection::edge(1, 0)]
+        );
+        assert!(!segment_intersects_rect(
+            Pos2::new(0., 0.),
+            Pos2::new(10., 10.),
+            Rect::from_min_max(Pos2::new(1., 8.), Pos2::new(2., 9.))
+        ));
+    }
+    #[test]
+    fn box_drag_adds_and_ctrl_crossing_drag_subtracts_without_deleting_geometry() {
+        let mut h = Harness::new();
+        h.sketch.add_rect([0., 0.], [40., 30.]);
+        h.frame(vec![]);
+        h.drag_box(
+            Pos2::new(450., 175.),
+            Pos2::new(750., 375.),
+            egui::Modifiers::NONE,
+        );
+        assert_eq!(h.editor.selected.len(), 4);
+        h.drag_box(
+            Pos2::new(650., 330.),
+            Pos2::new(550., 370.),
+            egui::Modifiers::CTRL,
+        );
+        assert_eq!(h.editor.selected.len(), 3);
+        assert!(!h.editor.selected.contains(&Selection::edge(1, 0)));
+        assert_eq!(h.sketch.entities.len(), 1);
+        assert!(h.sketch.constraints.is_empty());
     }
     #[test]
     fn draw_press_d_place_type_and_enter_creates_a_driving_dimension() {

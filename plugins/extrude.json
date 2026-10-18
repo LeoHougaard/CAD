@@ -1,7 +1,7 @@
 {
   "id": "extrude",
   "name": "Extrude",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "category": "feature",
   "editor": "",
   "script": "extrude.rhai",
@@ -11,6 +11,12 @@
       "label": "Sketch",
       "kind": "sketch",
       "default": ""
+    },
+    {
+      "key": "regions",
+      "label": "Faces and sketch regions",
+      "kind": "regions",
+      "default": null
     },
     {
       "key": "mode",

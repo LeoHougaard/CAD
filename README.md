@@ -14,7 +14,7 @@ cargo run --release --bin cad -- --demo
 cargo run --release --bin cad -- examples/mounting-plate.cadpart
 ```
 
-Linux builds use the same Cargo commands and local feature packages. The Pixel test installation is `/home/leo/projects/rust-cad/dist`; launch it with `pixel-gpu /home/leo/projects/rust-cad/dist/cad`. Other Linux machines can launch `cad` directly with an OpenGL 3.3-capable driver. Linux x86-64 has not been tested yet.
+Linux builds use the same Cargo commands and local feature packages. The Pixel test installation is `/home/leo/projects/rust-cad/dist`; launch it with `pixel-gpu /home/leo/projects/rust-cad/dist/cad`. Other Linux machines can launch `cad` directly with an OpenGL 3.3-capable driver. Linux x86-64 builds and headless tests run in CI; native desktop interaction is tested on Pixel ARM64.
 
 ## Sketch and make a part
 
@@ -22,8 +22,8 @@ Linux builds use the same Cargo commands and local feature packages. The Pixel t
 2. Roughly draw a rectangle, circle, or closed chain of lines. There is no grid. Geometric inferences snap to the origin, endpoints, centers, and horizontal/vertical alignments.
 3. Press **D**, click an edge or circle, move the pointer, and click empty space to place the dimension. Enter a value and press Enter. Select two points for distances, or two lines for a distance or angle.
 4. Double-click a dimension label to edit it. Expressions accept units and variables, including `25.4`, `2 * inch`, `width / 2`, and `=#width / 2`. Define variables in the top bar.
-5. Ctrl-click points or edges and apply geometric constraints in the sketch panel. Blue geometry can move; white geometry is fully constrained; red indicates a constraint problem. Drag geometry to explore remaining freedom. Construction geometry is excluded from solid profiles.
-6. Finish the sketch, then Extrude or Revolve it. Extrude supports New, Add, Remove, and Intersect, plus symmetric and reversed directions.
+5. Click points or edges to add them to the selection, then apply geometric constraints. Click again to deselect; Space or empty space clears. Blue geometry can move; white geometry is fully constrained; turquoise marks selection, purple marks hover, and red indicates a constraint problem. Drag geometry to explore remaining freedom. Construction geometry is excluded from solid profiles.
+6. Finish the sketch, then Extrude or Revolve it. Shift+E finishes a valid sketch and opens Extrude. Extrude supports individual [sketch regions](docs/sketch-regions.md), New, Add, Remove, Intersect, and symmetric or reversed directions.
 7. Select a tracked planar face for an attached sketch. A reversed Remove extrusion makes a pocket or through hole.
 
 Dimensions and geometric relationships are stored constraints. Under-constrained geometry keeps its saved starting position and remains editable. Reference dimensions measure the solved geometry without driving it.
@@ -32,9 +32,11 @@ The upper-right navigation cube selects face, edge, and corner views. Its labels
 
 Right drag orbits freely around the point under the initial cursor, or the visible model's volume center when starting over empty space. A small ring shows the pivot during rotation. Alt + right drag keeps the vertical axis upright. Middle drag, Shift + right drag, or Ctrl + right drag pans. The wheel zooms toward the cursor, and **F** fits the view. Double-click a history row to edit it. Right-click it to rename, suppress, reorder, roll back, or delete. Ctrl+Z and Ctrl+Y undo and redo. Save editable documents as `.cadpart`. STEP and STL are available in the File menu.
 
-Tab collapses the feature tree. The properties panel appears only while editing, and less-used tools are under More. Fit uses the current viewport width and height, including narrow windows and open editors.
+The arrow collapses the feature tree. The properties panel appears only while editing, and less-used tools are under More. Fit uses the current viewport width and height, including narrow windows and open editors. [Keyboard defaults](docs/shortcuts.md) follow Onshape for implemented tools. Tab moves between fields. S opens the shortcut tools, and Alt+C opens tool search.
 
-SpaceMouse support on Windows uses foreground Raw Input in object mode, with six-axis navigation, a dead zone, and a Fit button. Rotation uses the visible model's volume center when it fits, or the surface near the view center in a close-up. The View menu shows device detection and speed/reversal controls. Sketch editing keeps the camera aligned while allowing pan and zoom. Physical SpaceMouse Pro input is confirmed; the corrected directions still need user feedback. Linux SpaceMouse input is not implemented yet.
+SpaceMouse support on Windows uses foreground Raw Input in object mode, with six-axis navigation, a dead zone, and a Fit button. Reports are integrated at their timestamps with a short exponential response, so motion does not depend on irregular redraw timing. Rotation uses the visible model's volume center when it fits, or the surface near the view center in a close-up. The View menu shows device detection and speed/reversal controls. Sketch editing keeps the camera aligned while allowing pan and zoom. The user confirmed the corrected axis mapping; the latest smoothing still needs physical feedback. Linux SpaceMouse input is not implemented yet.
+
+Selection uses ordinary additive clicks in the tree, viewport and sketch. Choose faces, edges, parts or sketch regions from the compact Select menu. The grave accent key opens Select other for obscured geometry; press it again to cycle, Shift+grave to reverse, and Enter to select. Drag right to enclose geometry or left to select across it. Ctrl-drag removes box hits. Selected solids keep depth-tested turquoise highlights, while the hovered candidate is purple. The background and panels are nearly black.
 
 ## Current scope
 
@@ -73,7 +75,7 @@ The tests cover solved sketch geometry and degrees of freedom, analytic volumes,
 
 [Tutorial verification](docs/tutorial-verification.md) records five source-based modeling cases and their adaptations. The largest tested housing has 29 history entries, 13 fully constrained sketches, and 75 faces. Six upstream size changes, rollback, suppression, reordering, save/reopen, and independent STEP checks are covered. Some source finishing operations remain blocked, including an ambiguous fillet edge reference and a perpendicular-cylinder boolean. These failures have saved reproductions; the application rejects them rather than accepting approximate solids.
 
-The release suite passed 152 checks on both Windows and native ARM64 Linux. Seventeen sweep/loft STEP fixtures also passed independent Open CASCADE volume and bounds checks. [Release verification](output/release-verification.json) records the build hashes, final native UI checks and remaining limits.
+The previous release suite passed 152 checks on both Windows and native ARM64 Linux. Seventeen sweep/loft STEP fixtures also passed independent Open CASCADE volume and bounds checks. [Release verification](output/release-verification.json) records that build's hashes, native UI checks and remaining limits.
 
 An earlier navigation build passed 120 release checks on both platforms, plus eight independent STEP imports. Pixel desktop checks covered orbit pivots before and after pan, face pivots, cube labels, zoomed circular holes, extrusion editing and undo. Its 42-feature, 6,336-triangle panel measured 275 ms median full rebuild and 296 ms median last-feature edit over 12 samples. The four-feature model used about 105 MiB resident memory and 91 MiB private memory; a 15-second idle sample recorded 0.00 CPU seconds. These process-memory figures exclude the shared graphics server. Results and selected screenshots are in `output/`.
 
