@@ -44,6 +44,10 @@ Selection uses ordinary additive clicks in the tree, viewport and sketch. Choose
 
 The initial solid tools include extrusion, revolve, Boolean union/subtract/intersect, sweep, ruled loft, fillet, chamfer, shell, linear part patterns, mirror, and translation. Fillet and chamfer accept selected edges or an explicit All edges choice. Pattern and mirror currently create separate parts. [Sweep and loft](docs/sweep-loft.md) documents their supported path/profile combinations and current limits.
 
+[Construction planes](docs/construction-planes.md) provide reusable offsets, parallel or angular midplanes, and planes angled about exact axes. Sketches reference plane features and follow upstream edits. Origins and construction planes use the same 100 × 100 mm display and selection bounds.
+
+[Numeric expressions](docs/numeric-expressions.md) support variables, powers, roots, units and degree trigonometry in dimensions and feature fields. New documents use format 2; older documents retain their original math semantics.
+
 Sketches support lines, rectangles, circles, center and three-point arcs, trim, dimensions, construction geometry, coincidence, horizontal/vertical, parallel/perpendicular, equality, concentricity, endpoint tangency, and fixing geometry. Dragging uses temporary solver targets; dimension edits persist the solved geometry. See [sketch workflows](docs/sketch-workflows.md). Splines, extend, offset, cross-sketch projection, advanced constraint diagnostics, and Onshape FeatureScript are not implemented yet.
 
 Persistent references cover generated extrusion planes and supported analytical revolve caps and rims. [Geometry inputs](docs/geometry-controls.md) describes planar-face profiles, explicit operation scopes and sketch/origin/solid axes. Curved faces and new blend faces are not stable sketch supports yet. Missing or ambiguous references report an error instead of choosing an arbitrary face. Complex blends and booleans can still fail. Earlier valid parts are preserved when a feature fails; exporting a failed model is blocked in the app.

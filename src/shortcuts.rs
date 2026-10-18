@@ -37,6 +37,7 @@ pub enum Command {
     Accept,
     AcceptAndRepeat,
     Delete,
+    Rename,
     Undo,
     Redo,
     Help,
@@ -167,6 +168,7 @@ pub fn command_for(key: Key, modifiers: Modifiers, context: Context) -> Option<C
     if modifiers.shift {
         return match key {
             Key::Enter => Some(AcceptAndRepeat),
+            Key::N => Some(Rename),
             Key::Slash => Some(Help),
             Key::E => Some(Extrude),
             Key::W => Some(Revolve),
@@ -264,6 +266,17 @@ pub fn command_for(key: Key, modifiers: Modifiers, context: Context) -> Option<C
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn rename_matches_onshape_without_replacing_normal_view() {
+        assert_eq!(
+            command_for(Key::N, Modifiers::SHIFT, Context::PartStudio),
+            Some(Command::Rename)
+        );
+        assert_eq!(
+            command_for(Key::N, Modifiers::NONE, Context::PartStudio),
+            Some(Command::Normal)
+        );
+    }
     #[test]
     fn native_shift_punctuation_uses_physical_view_and_help_keys_only() {
         assert_eq!(

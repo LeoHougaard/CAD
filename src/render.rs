@@ -22,6 +22,42 @@ pub struct Projector {
 
 pub const ORIGIN_PLANE_HALF_SIZE: f64 = 50.;
 
+#[derive(Clone, Copy)]
+pub struct DragMotion {
+    pub delta: egui::Vec2,
+    pub start: Option<egui::Pos2>,
+}
+
+/// Integrate only movement while this button is held, in native event order.
+/// Frame-wide pointer delta can include travel before a press or after release.
+pub fn navigation_drag(input: &egui::InputState, button: egui::PointerButton) -> Option<DragMotion> {
+    let first = input.events.iter().find_map(|event| match event {
+        egui::Event::PointerButton { button: b, pressed, .. } if *b == button => Some(*pressed),
+        _ => None,
+    });
+    let mut held = first.map_or_else(|| input.pointer.button_down(button), |pressed| !pressed);
+    let mut active = held;
+    let mut position = input.pointer.latest_pos().map(|p| p - input.pointer.delta());
+    let mut motion = DragMotion { delta: egui::Vec2::ZERO, start: None };
+    for event in &input.events {
+        match event {
+            egui::Event::PointerMoved(p) | egui::Event::PointerButton { pos: p, .. } => {
+                if held && let Some(previous) = position { motion.delta += *p - previous; }
+                position = Some(*p);
+                if let egui::Event::PointerButton { button: b, pressed, .. } = event
+                    && *b == button {
+                    held = *pressed;
+                    active |= held;
+                    if held { motion.start = Some(*p); }
+                }
+            }
+            egui::Event::PointerGone => position = None,
+            _ => (),
+        }
+    }
+    active.then_some(motion)
+}
+
 pub fn origin_plane_points(plane: &Plane) -> [[f64; 3]; 4] {
     let half = ORIGIN_PLANE_HALF_SIZE;
     [[-half, -half], [half, -half], [half, half], [-half, half]].map(|p| plane.at(p))
@@ -60,15 +96,14 @@ fn plane_label_axes(camera: &Camera, plane: &Plane) -> Option<(Vec3, Vec3)> {
     ))
 }
 
-pub fn paint_plane_label(ui: &egui::Ui, camera: &Camera, plane: &Plane, rect: egui::Rect, text: &str, color: egui::Color32) {
-    let Some((u, v)) = plane_label_axes(camera, plane) else { return; };
+pub fn plane_label_mesh(ui: &egui::Ui, camera: &Camera, plane: &Plane, rect: egui::Rect, text: &str, color: egui::Color32) -> Option<egui::epaint::Mesh> {
+    let (u, v) = plane_label_axes(camera, plane)?;
     let scale = camera.span / rect.height().max(1.);
     let anchor = Vec3::from_array(plane.at([25., 35.]).map(|v| v as f32));
-    let mesh = projected_text(ui, text, egui::FontId::proportional(12.), color, |p| {
+    Some(projected_text(ui, text, egui::FontId::proportional(12.), color, |p| {
         let point = anchor + (u * p.x - v * p.y) * scale;
         camera.project(point.to_array().map(f64::from), rect)
-    });
-    ui.painter().add(egui::Shape::mesh(mesh));
+    }))
 }
 
 /// Called once per preview rebuild; pointer movement never compares meshes.
@@ -181,6 +216,17 @@ impl Camera {
             for entity in &sketch.entities {
                 for p in entity.points() {
                     let world = sketch.plane.at(p);
+                    let p = inverse * Vec3::from_array(world.map(|v| v as f32));
+                    lo = lo.min(p);
+                    hi = hi.max(p);
+                }
+            }
+        }
+        // Construction frames only determine Fit when no solid/profile exists.
+        // Distant datum planes must not make a normal part unnecessarily small.
+        if !lo.is_finite() {
+            for plane in scene.planes.values() {
+                for world in origin_plane_points(plane) {
                     let p = inverse * Vec3::from_array(world.map(|v| v as f32));
                     lo = lo.min(p);
                     hi = hi.max(p);
@@ -957,6 +1003,50 @@ pub fn point_segment_distance(p: egui::Pos2, a: egui::Pos2, b: egui::Pos2) -> f3
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn navigation_drag_uses_button_event_order_and_keeps_the_release_frame() {
+        fn frame(ctx: &egui::Context, button: egui::PointerButton, events: Vec<egui::Event>) -> Option<DragMotion> {
+            let mut motion = None;
+            let _ = ctx.run(egui::RawInput { events, ..Default::default() }, |ctx| {
+                motion = ctx.input(|i| navigation_drag(i, button));
+            });
+            motion
+        }
+        for button in [egui::PointerButton::Primary, egui::PointerButton::Secondary, egui::PointerButton::Middle] {
+            let ctx = egui::Context::default();
+            let point = egui::pos2;
+            let moved = egui::Event::PointerMoved;
+            let pressed = |pos, pressed| egui::Event::PointerButton { pos, button, pressed, modifiers: egui::Modifiers::NONE };
+            assert!(frame(&ctx, button, vec![moved(point(10.,20.))]).is_none());
+            let drag = frame(&ctx, button, vec![moved(point(600.,700.)), pressed(point(600.,700.),true), moved(point(650.,675.))]).unwrap();
+            assert_eq!(drag.start, Some(point(600.,700.)));
+            assert_eq!(drag.delta, egui::vec2(50.,-25.), "Travel before pressing must not rotate or pan");
+            let release = frame(&ctx, button, vec![moved(point(660.,650.)), pressed(point(660.,650.),false), moved(point(900.,900.))]).unwrap();
+            assert_eq!(release.delta, egui::vec2(10.,-25.), "Keep the last drag segment; exclude travel after release");
+            assert!(frame(&ctx, button, vec![moved(point(20.,30.))]).is_none());
+            let click = frame(&ctx, button, vec![moved(point(800.,800.)), pressed(point(800.,800.),true), pressed(point(800.,800.),false)]).unwrap();
+            assert_eq!(click.delta, egui::Vec2::ZERO);
+        }
+    }
+    #[test]
+    fn fit_datum_only_scene_and_keep_distant_datums_out_of_part_fit() {
+        let mut scene = Scene::default();
+        scene.planes.insert("f1".into(), Plane::named("Top", 250.));
+        let mut camera = Camera::default();
+        camera.align(&Plane::named("Top", 0.));
+        camera.fit(&scene);
+        assert!((camera.center.z - 250.).abs() < 1e-4);
+        assert!((camera.span - 130.).abs() < 1e-4);
+        let registry = crate::plugins::Registry::builtin().unwrap();
+        let mut runtime = crate::engine::Runtime::new(registry);
+        let part = runtime.evaluate(&crate::model::demo()).unwrap().scene;
+        let mut distant = (*part).clone();
+        distant.planes.insert("datum".into(), Plane::named("Top", 10000.));
+        let mut expected = Camera::default(); expected.fit(&part);
+        let mut actual = Camera::default(); actual.fit(&distant);
+        assert_eq!(actual.center, expected.center);
+        assert_eq!(actual.span, expected.span);
+    }
     #[test]
     fn origin_planes_are_one_hundred_millimeters_at_every_zoom() {
         let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200., 800.));

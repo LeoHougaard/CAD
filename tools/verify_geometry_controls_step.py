@@ -4,5 +4,5 @@ from verify_assembly_step import ROOT, verify
 if __name__ == "__main__":
     verify(ROOT / "target" / "test-output" / "geometry-controls", (
         "chamfer-plate-hole", "fillet-plate-hole", "face-extrude", "revolved-cylinder",
-        "trimmed-semicircle",
+        "trimmed-semicircle", "bounded-arc-revolve",
     ))

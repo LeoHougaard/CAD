@@ -16,6 +16,7 @@ use std::{
 };
 mod assembly_workspace;
 mod feature_inputs;
+mod planes;
 
 fn rgb(value: [u8; 3]) -> Color32 { Color32::from_rgb(value[0], value[1], value[2]) }
 
@@ -465,65 +466,6 @@ impl CadApp {
         self.last_error = None;
         self.rebuild();
     }
-    fn origin_planes_visible(&self) -> bool {
-        self.show_planes
-            && (self.choosing_plane
-                || self.scene.meshes.is_empty()
-                || self.selected_plane.is_some())
-    }
-    fn origin_plane_hits(&self, pos: egui::Pos2, rect: Rect) -> Vec<String> {
-        if !self.origin_planes_visible() {
-            return vec![];
-        }
-        let size = render::ORIGIN_PLANE_HALF_SIZE;
-        let (origin, ray) = self.camera.ray(pos, rect);
-        let mut hits = vec![];
-        for name in ["Top", "Front", "Right"] {
-            let plane = Plane::named(name, 0.);
-            if let Some(p) = self.camera.plane_point(pos, rect, &plane)
-                && p[0].abs() <= size
-                && p[1].abs() <= size
-            {
-                let world = glam::Vec3::from_array(plane.at(p).map(|v| v as f32));
-                let distance = (world - origin).dot(ray);
-                if distance > 0. {
-                    hits.push((distance, name.to_owned()));
-                }
-            }
-        }
-        hits.sort_by(|a, b| a.0.total_cmp(&b.0));
-        hits.into_iter().map(|(_, name)| name).collect()
-    }
-    fn paint_origin_planes(&self, ui: &egui::Ui, rect: Rect, pointer: Option<egui::Pos2>) {
-        if !self.origin_planes_visible() {
-            return;
-        }
-        let hover = pointer.and_then(|p| self.origin_plane_hits(p, rect).into_iter().next());
-        for name in ["Top", "Front", "Right"] {
-            let selected = self.selected_plane.as_deref() == Some(name);
-            if !self.choosing_plane && !self.scene.meshes.is_empty() && !selected {
-                continue;
-            }
-            let plane = Plane::named(name, 0.);
-            let points: Vec<_> = render::origin_plane_points(&plane)
-                .into_iter()
-                .map(|p| self.camera.project(p, rect))
-                .collect();
-            let color = if selected {
-                rgb(self.settings.appearance.turquoise)
-            } else if hover.as_deref() == Some(name) {
-                rgb(self.settings.appearance.purple)
-            } else {
-                MUTED
-            };
-            ui.painter().add(egui::Shape::convex_polygon(
-                points,
-                color.gamma_multiply(0.06),
-                Stroke::new(1.0f32, color),
-            ));
-            render::paint_plane_label(ui, &self.camera, &plane, rect, name, color);
-        }
-    }
     fn edited_faces(&mut self) -> Vec<usize> {
         let Some(edit) = &self.editor else { self.edit_highlight = None; return vec![]; };
         if self.edit_highlight.as_ref().is_none_or(|(revision, id, _)| {
@@ -550,37 +492,6 @@ impl CadApp {
                 }
             }
         }
-    }
-    fn choose_plane(&mut self, name: &str) {
-        self.selected_plane = Some(name.into());
-        if let Some(edit) = &mut self.editor
-            && edit.sketch.is_some()
-        {
-            let before = edit.feature.params.clone();
-            if let Some(params)=edit.feature.params.as_object_mut(){params.remove("context_plane");params.remove("context_ref");}
-            edit.feature.params["plane"] = json!(name);
-            edit.feature.params["support"] = json!("");
-            if edit.feature.params != before {
-                edit.undo.push(before);
-                edit.redo.clear();
-                edit.changed = true;
-            }
-            self.choosing_plane = false;
-            self.align_when_ready = true;
-            self.rebuild();
-        }
-    }
-    fn selected_face(&self) -> Option<&crate::engine::FaceView> {
-        let scene = self.source_scene.as_ref().unwrap_or(&self.scene);
-        self.selection.faces().last().and_then(|(part, key)| {
-            scene
-                .meshes
-                .iter()
-                .find(|m| m.part == part)?
-                .faces
-                .iter()
-                .find(|f| f.key == key)
-        })
     }
     fn active_selection_filter(&self) -> Filter {
         if self.selection_filter != Filter::All {
@@ -684,6 +595,11 @@ impl CadApp {
         through: bool,
     ) -> Vec<Target> {
         let faces = render::picks(scene, &self.camera, pos, rect, &self.hidden);
+        if self.plane_input_active() {
+            let mut targets: Vec<_> = self.plane_hits(pos, rect).into_iter().map(Target::Plane).collect();
+            targets.extend(faces.into_iter().filter(|f| f.plane.is_some()).map(|f| Target::Face {part:f.part,key:f.face}));
+            return targets;
+        }
         let depth = faces.first().map(|f| f.distance);
         let mut result = vec![];
         if matches!(filter, Filter::All | Filter::Edges) {
@@ -750,7 +666,7 @@ impl CadApp {
         }
         if matches!(filter, Filter::All) && (through || depth.is_none()) {
             result.extend(
-                self.origin_plane_hits(pos, rect)
+                self.plane_hits(pos, rect)
                     .into_iter()
                     .map(Target::Plane),
             );
@@ -1001,7 +917,7 @@ impl CadApp {
                 .find(|f| &f.id == id)
                 .map(|f| f.name.clone())
                 .unwrap_or_else(|| "Feature".into()),
-            Target::Plane(name) => format!("{name} plane"),
+            Target::Plane(name) => self.plane_name(name),
         }
     }
     fn begin(&mut self, id: &str) {
@@ -1102,19 +1018,19 @@ impl CadApp {
             }
         }
         if manifest.editor == "sketch" {
-            if self
-                .selected_face()
-                .is_some_and(|face| face.plane.is_none())
-            {
-                self.last_error = Some("Choose an origin plane or supported planar face.".into());
-                return;
+            let support = self.selected_sketch_support();
+            match &support {
+                Some(Target::Face { part, key }) => {
+                    if !self.scene.meshes.iter().any(|m| &m.part == part && m.faces.iter().any(|f| &f.key == key && f.plane.is_some())) {
+                        self.last_error = Some("Choose a plane or planar face.".into());
+                        return;
+                    }
+                    f.params["support"] = json!(key);
+                }
+                Some(Target::Plane(id)) => planes::attach(&mut f.params, id),
+                _ => (),
             }
-            if let Some(face) = self.selected_face().filter(|face| face.plane.is_some()) {
-                f.params["support"] = json!(face.key);
-            } else if let Some(plane) = &self.selected_plane {
-                f.params["plane"] = json!(plane);
-            }
-            self.choosing_plane = self.selected_face().is_none() && self.selected_plane.is_none();
+            self.choosing_plane = support.is_none();
             if self.choosing_plane {
                 self.show_planes = true;
             }
@@ -1122,6 +1038,7 @@ impl CadApp {
             self.sketch_ui.set_tool(Tool::Select);
         } else {
             self.sketch_ui.cancel_gesture();
+            if manifest.fields.iter().any(|f| f.kind == "plane_ref") { self.show_planes = true; }
         }
         let input_field = feature_inputs::seed(&mut f, self.selection.items(), &self.scene);
         let sketch = f.sketch();
@@ -1156,6 +1073,10 @@ impl CadApp {
             return;
         }
         let workspace = EditWorkspace::capture(self);
+        if self.scene.planes.contains_key(&feature.id) {
+            self.show_planes = true;
+            self.hidden_sketches.remove(&feature.id);
+        }
         self.choosing_plane = false;
         let sketch = feature.sketch();
         self.source_scene = None;
@@ -1187,7 +1108,9 @@ impl CadApp {
         if apply {
             edit.apply_to(&mut self.document);
         }
+        let new_plane = apply && edit.is_new && self.scene.planes.contains_key(&edit.feature.id);
         edit.workspace.restore(self);
+        if new_plane { self.show_planes = true; self.hidden_sketches.remove(&edit.feature.id); }
         if apply {
             self.selected_feature = Some(edit.index);
             self.selection.clear();
@@ -1360,7 +1283,7 @@ impl CadApp {
             let f = self.registry.create(id, &mut scratch)?;
             let plan = self
                 .registry
-                .evaluate(&f, &Numbers::new(&self.document.variables)?)?;
+                .evaluate(&f, &Numbers::for_document(&self.document)?)?;
             plan["format"]
                 .as_str()
                 .map(str::to_owned)
@@ -1592,26 +1515,21 @@ impl CadApp {
                                 })
                                 .and_then(|f| f.plane)
                         })
-                        .or_else(|| self.selected_face().and_then(|f| f.plane.clone()))
-                        .or_else(|| {
-                            self.selected_plane
-                                .as_ref()
-                                .map(|name| Plane::named(name, 0.))
-                        })
+                        .or_else(|| self.selected_support_plane())
                         .or_else(|| {
                             self.selected_feature
                                 .and_then(|i| self.document.features.get(i))
-                                .and_then(|f| self.scene.sketches.get(&f.id))
-                                .map(|s| s.plane.clone())
+                                .and_then(|f| self.scene.sketches.get(&f.id).map(|s| s.plane.clone())
+                                    .or_else(|| self.plane_frame(&f.id)))
                         });
                     let plane = plane.or_else(|| {
                         hover
                             .and_then(|pos| {
-                                self.origin_plane_hits(pos, self.viewport_rect)
+                                self.plane_hits(pos, self.viewport_rect)
                                     .into_iter()
                                     .next()
                             })
-                            .map(|name| Plane::named(&name, 0.))
+                            .and_then(|name| self.plane_frame(&name))
                     });
                     if let Some(plane) = plane {
                         let mut aligned = self.camera.clone();
@@ -1667,7 +1585,7 @@ impl CadApp {
                     self.show_sketches = false;
                     self.show_planes = false;
                     self.hidden_sketches
-                        .extend(self.scene.sketches.keys().cloned());
+                        .extend(self.scene.sketches.keys().chain(self.scene.planes.keys()).cloned());
                 }
                 Command::HideSelectedOrHovered => {
                     let mut changed = false;
@@ -1681,11 +1599,12 @@ impl CadApp {
                                 changed |= self.hidden.insert(part.clone());
                             }
                             Target::Feature(id) | Target::Region { sketch: id, .. }
-                                if self.scene.sketches.contains_key(id) =>
+                                if self.scene.sketches.contains_key(id) || self.scene.planes.contains_key(id) =>
                             {
                                 handled = true;
                                 self.hidden_sketches.insert(id.clone());
                             }
+                            Target::Plane(id) => { handled = true; self.hidden_sketches.insert(id.clone()); }
                             _ => (),
                         }
                     }
@@ -1694,7 +1613,9 @@ impl CadApp {
                             .input(|i| i.pointer.hover_pos())
                             .filter(|p| self.viewport_rect.contains(*p))
                     {
-                        if let Some(sketch) = self.hovered_sketch(pos) {
+                        if let Some(plane) = self.plane_hits(pos, self.viewport_rect).into_iter().next() {
+                            self.hidden_sketches.insert(plane);
+                        } else if let Some(sketch) = self.hovered_sketch(pos) {
                             self.hidden_sketches.insert(sketch);
                         } else if let Some(hit) = render::pick(
                             &self.scene,
@@ -1714,6 +1635,15 @@ impl CadApp {
                     self.hidden.clear();
                     self.hidden_sketches.clear();
                     self.render_revision += 1;
+                }
+                Command::Rename if self.editor.is_none() => {
+                    if let Some(index) = self.selected_feature.or_else(|| self.selection.items().iter().rev().find_map(|t| {
+                        if let Target::Feature(id) = t { self.document.features.iter().position(|f| &f.id == id) } else { None }
+                    })) && let Some(feature) = self.document.features.get(index) {
+                        self.rename_feature = Some(index);
+                        self.rename_text = feature.name.clone();
+                        ctx.memory_mut(|m| m.request_focus(egui::Id::new("rename_input")));
+                    }
                 }
                 Command::Delete if !sketching && self.editor.is_none() => {
                     let ids: Vec<_> = self
@@ -1997,6 +1927,7 @@ impl CadApp {
         if !self.tree_open {
             return;
         }
+        let mut selection_changed = false;
         egui::SidePanel::left("feature_tree")
             .default_width(188.)
             .width_range(150. ..=340.)
@@ -2026,6 +1957,8 @@ impl CadApp {
                                 )
                                 .clicked()
                             {
+                                self.show_planes = true;
+                                self.hidden_sketches.remove(name);
                                 if self.is_sketching() {
                                     self.choose_plane(name);
                                 } else {
@@ -2087,6 +2020,8 @@ impl CadApp {
                                     .on_hover_text(format!("{} · {:.2} ms", f.id, s.millis));
                             }
                             if response.clicked() {
+                                selection_changed = true;
+                                if self.scene.planes.contains_key(&f.id) { self.show_planes = true; self.hidden_sketches.remove(&f.id); }
                                 if ui.input(|i| i.modifiers.shift) {
                                     let anchor = self.selected_feature.unwrap_or(index);
                                     for f in &self.document.features
@@ -2116,6 +2051,14 @@ impl CadApp {
                                 moved = Some((from, index));
                             }
                             response.context_menu(|ui| {
+                                if self.scene.planes.contains_key(&f.id) || self.scene.sketches.contains_key(&f.id) {
+                                    let hidden = self.hidden_sketches.contains(&f.id);
+                                    if ui.button(if hidden { "Show" } else { "Hide" }).clicked() {
+                                        if hidden { self.hidden_sketches.remove(&f.id); if self.scene.planes.contains_key(&f.id) { self.show_planes = true; } }
+                                        else { self.hidden_sketches.insert(f.id.clone()); }
+                                        ui.close();
+                                    }
+                                }
                                 if ui.button("Edit").clicked() {
                                     open_edit = Some(index);
                                     ui.close();
@@ -2123,6 +2066,7 @@ impl CadApp {
                                 if ui.add_enabled(self.editor.is_none(), egui::Button::new("Rename")).clicked() {
                                     self.rename_feature = Some(index);
                                     self.rename_text = f.name.clone();
+                                    ctx.memory_mut(|m| m.request_focus(egui::Id::new("rename_input")));
                                     ui.close();
                                 }
                                 if ui
@@ -2269,11 +2213,13 @@ impl CadApp {
                                     .clicked()
                                 {
                                     self.selection.toggle(Target::Part(mesh.part.clone()));
+                                    selection_changed = true;
                                 }
                             });
                         }
                     });
             });
+        if selection_changed { self.sync_selection_to_editor(ctx); }
     }
 
     fn inspector(&mut self, ctx: &egui::Context) {
@@ -2348,11 +2294,13 @@ impl CadApp {
                                             input_changed = true;
                                         }
                                     } else if field.kind != "bool" {
-                                        ui.label(RichText::new(&field.label).small().color(MUTED));
+                                        ui.label(RichText::new(if field.kind == "support" { "Sketch support" } else { &field.label }).small().color(MUTED));
                                     }
                                     let old_plane = edit.feature.params.get("plane").cloned();
+                                    let old_support = edit.feature.params.get("support").cloned();
                                     let old_sketch = edit.feature.params.get("sketch").cloned();
-                                    let parameter = ui.scope(|ui| parameter_ui(
+                                    let detach_ready = !self.work.busy() && self.pending_rebuild.is_none() && self.last_error.is_none();
+                                    let parameter = ui.add_enabled_ui(field.kind != "support" || detach_ready, |ui| parameter_ui(
                                         ui, field, &mut edit.feature.params, &self.document,
                                         edit.index, &self.registry,
                                         self.source_scene.as_ref().unwrap_or(&self.scene),
@@ -2373,6 +2321,12 @@ impl CadApp {
                                         && (parameter.inner || (parameter.response.contains_pointer() && ui.input(|i| i.pointer.any_pressed()))) {
                                         edit.input_field = Some(field.key.clone());
                                         input_changed = true;
+                                    }
+                                    if field.kind == "support" && parameter.inner
+                                        && old_support.as_ref().and_then(Value::as_str).is_some_and(|s| !s.is_empty())
+                                        && edit.feature.params["support"] == ""
+                                        && let Some(sketch) = self.scene.sketches.get(&edit.feature.id) {
+                                        planes::detach(&mut edit.feature.params, &sketch.plane);
                                     }
                                     if field.key == "plane"
                                         && old_plane != edit.feature.params.get("plane").cloned()
@@ -2397,6 +2351,8 @@ impl CadApp {
                                         sketch,
                                         self.scene.sketches.get(&edit.feature.id),
                                         self.last_error.as_deref(),
+                                        &self.document.variables,
+                                        self.document.format,
                                     );
                                 }
                                 if !self
@@ -2521,16 +2477,21 @@ impl CadApp {
                 let canvas_hover =
                     pointer.is_some_and(|p| !controls.contains(p) && !select_control.contains(p)
                         && !(self.editor.is_some() && self.inspector_rect.contains(p)));
+                let (right_drag, middle_drag) = ui.input(|i| (
+                    render::navigation_drag(i, egui::PointerButton::Secondary),
+                    render::navigation_drag(i, egui::PointerButton::Middle),
+                ));
                 let orbiting = canvas_hover
                     && response.hovered()
                     && (!self.is_sketching() || self.choosing_plane || self.context_picking())
                     && ui.input(|i| {
-                        i.pointer.button_down(egui::PointerButton::Secondary)
+                        right_drag.is_some()
                             && !i.modifiers.shift
                             && !i.modifiers.ctrl
                     });
                 if orbiting && !self.mouse_orbiting {
-                    let origin = ui.input(|i| i.pointer.press_origin()).or(pointer);
+                    let origin = right_drag.and_then(|m| m.start)
+                        .or_else(|| ui.input(|i| i.pointer.press_origin())).or(pointer);
                     self.camera.pivot = origin
                         .and_then(|p| {
                             render::pick(&self.scene, &self.camera, p, rect, &self.hidden)
@@ -2539,11 +2500,11 @@ impl CadApp {
                         .or_else(|| render::model_center(&self.scene, &self.hidden))
                         .unwrap_or(self.camera.center);
                 }
-                self.mouse_orbiting = orbiting;
+                self.mouse_orbiting = orbiting && ui.input(|i| i.pointer.button_down(egui::PointerButton::Secondary));
                 if response.hovered() && canvas_hover {
-                    let delta = ui.input(|i| i.pointer.delta());
-                    let right = ui.input(|i| i.pointer.button_down(egui::PointerButton::Secondary));
-                    let middle = ui.input(|i| i.pointer.button_down(egui::PointerButton::Middle));
+                    let delta = middle_drag.or(right_drag).map_or(Vec2::ZERO, |m| m.delta);
+                    let right = right_drag.is_some();
+                    let middle = middle_drag.is_some();
                     if middle
                         || (right
                             && ((self.is_sketching() && !self.choosing_plane && !self.context_picking())
@@ -2634,33 +2595,30 @@ impl CadApp {
                     }
                 }
                 self.paint_edit_inputs(ui, rect);
-                self.paint_origin_planes(ui, rect, pointer);
+                self.paint_planes(ui, rect, pointer);
                 if self.context_picking() {
                     if response.clicked() && canvas_hover && let Some(pos) = pointer { self.pick_context_reference(pos, rect); }
                 } else if self.choosing_plane {
                     if response.clicked()
                         && canvas_hover
                         && let Some(pos) = pointer
+                        && let Some(target) = self.sketch_support_hit(&pick_scene, pos, rect)
                     {
-                        if let Some(hit) =
-                            render::pick(&pick_scene, &self.camera, pos, rect, &self.hidden)
-                        {
-                            if hit.plane.is_some()
-                                && let Some(edit) = &mut self.editor
-                            {
-                                let before=edit.feature.params.clone();
-                                if let Some(params)=edit.feature.params.as_object_mut(){params.remove("context_plane");params.remove("context_ref");}
-                                edit.feature.params["support"] = json!(hit.face);
-                                if edit.feature.params!=before {edit.undo.push(before);edit.redo.clear();edit.changed=true;}
-                                self.choosing_plane = false;
-                                self.align_when_ready = true;
-                                self.rebuild();
+                            match target {
+                                Target::Plane(name) => self.choose_plane(&name),
+                                Target::Face { key, .. } => {
+                                    if let Some(edit) = &mut self.editor {
+                                        let before = edit.feature.params.clone();
+                                        if let Some(params) = edit.feature.params.as_object_mut() { params.remove("context_plane"); params.remove("context_ref"); }
+                                        edit.feature.params["support"] = json!(key);
+                                        if before != edit.feature.params { edit.undo.push(before); edit.redo.clear(); edit.changed = true; }
+                                        self.choosing_plane = false;
+                                        self.align_when_ready = true;
+                                        self.rebuild();
+                                    }
+                                }
+                                _ => (),
                             }
-                        } else if let Some(name) =
-                            self.origin_plane_hits(pos, rect).first().cloned()
-                        {
-                            self.choose_plane(&name);
-                        }
                     }
                 } else if self.is_sketching() {
                     let mut changed = false;
@@ -2683,6 +2641,7 @@ impl CadApp {
                                 self.scene.sketches.get(&edit.feature.id),
                                 plane,
                                 &self.document.variables,
+                                self.document.format,
                                 self.last_error.is_some(),
                             );
                             if action.changed {
@@ -3272,20 +3231,14 @@ impl CadApp {
                     let validation = if vars.len() != self.variables_draft.len() {
                         Err("Variable names must be unique".into())
                     } else {
-                        Numbers::new(&vars).map(|_| ())
+                        Numbers::for_format(&vars, self.document.format).map(|_| ())
                     };
                     if let Err(e) = &validation {
                         ui.colored_label(RED, e);
                     }
-                    if ui
-                        .add_enabled(
-                            validation.is_ok() && self.editor.is_none(),
-                            egui::Button::new("Apply variables"),
-                        )
-                        .clicked()
-                    {
-                        apply = true;
-                    }
+                    let button = ui.add_enabled(validation.is_ok() && self.editor.is_none(), egui::Button::new("Apply variables"));
+                    let button = if self.editor.is_some() { button.on_disabled_hover_text("Finish or cancel the active feature first") } else { button };
+                    if button.clicked() { apply = true; }
                     if apply {
                         let before = self.document.clone();
                         self.document.name = self.variables_name.clone();
@@ -3382,9 +3335,10 @@ impl CadApp {
             egui::Window::new("Rename feature")
                 .collapsible(false)
                 .show(ctx, |ui| {
-                    ui.text_edit_singleline(&mut self.rename_text);
+                    ui.add(egui::TextEdit::singleline(&mut self.rename_text).id(egui::Id::new("rename_input")));
+                    let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
                     ui.horizontal(|ui| {
-                        if ui.button("Rename").clicked() {
+                        if ui.button("Rename").clicked() || enter {
                             if index < self.document.features.len() {
                                 let before = self.document.clone();
                                 self.document.features[index].name = self.rename_text.clone();
@@ -3392,12 +3346,13 @@ impl CadApp {
                             }
                             done = true;
                         }
-                        if ui.button("Cancel").clicked() {
+                        if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                             done = true;
                         }
                     });
                 });
             if done {
+                ctx.memory_mut(|m| m.surrender_focus(egui::Id::new("rename_input")));
                 self.rename_feature = None;
             }
         }
@@ -3430,7 +3385,7 @@ if ui.button("Discard and close").clicked(){self.allow_close=true;ctx.send_viewp
 fn editor_overlay(ctx: &egui::Context, accent: Color32, contents: impl FnOnce(&mut egui::Ui)) -> Rect {
     let viewport = ctx.available_rect();
     egui::Area::new(egui::Id::new("feature_editor_overlay"))
-        .order(egui::Order::Foreground)
+        .order(egui::Order::Middle)
         .movable(false)
         .fixed_pos(viewport.min + egui::vec2(10., 44.))
         .default_size(egui::vec2(244., 180.))
@@ -3545,7 +3500,7 @@ fn parameter_ui(
         .entry(field.key.clone())
         .or_insert_with(|| field.default.clone());
     match field.kind.as_str() {
-        "bodies" | "profile_face" | "axis" => feature_inputs::input_ui(ui, field, value, scene),
+        "bodies" | "profile_face" | "plane_ref" | "axis" => feature_inputs::input_ui(ui, field, value, scene, document),
         "regions" => {
             let before = value.clone();
             let regions = scene.regions.get(&sketch_reference);
@@ -3868,6 +3823,25 @@ mod save_tests {
         session.apply_to(&mut manual);
         assert_eq!(manual.rollback, Some(2), "Insertion advances the manual bar");
         assert_eq!(manual.features[2..], original.features[1..]);
+    }
+    #[test]
+    fn document_dialogs_remain_above_the_model_editor_overlay() {
+        let ctx=egui::Context::default();
+        for _ in 0..3 {
+            let mut point=egui::Pos2::ZERO;
+            let mut expected=None;
+            let _=ctx.run(egui::RawInput { screen_rect:Some(Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(1000.,700.))), ..Default::default() }, |ctx| {
+                egui::TopBottomPanel::top("tools").exact_height(60.).show(ctx, |_| {});
+                egui::SidePanel::left("history").exact_width(188.).show(ctx, |_| {});
+                let inspector=editor_overlay(ctx,ACCENT,|ui| {ui.label("Sketch");ui.allocate_space(egui::vec2(200.,200.));});
+                let dialog=egui::Window::new("Variables").fixed_pos(inspector.min+egui::vec2(5.,5.))
+                    .fixed_size(egui::vec2(240.,180.)).show(ctx, |ui| {ui.label("width");ui.text_edit_singleline(&mut "40".to_owned());}).unwrap();
+                point=inspector.intersect(dialog.response.rect).center();
+                expected=Some(dialog.response.layer_id);
+                egui::CentralPanel::default().show(ctx, |_| {});
+            });
+            assert_eq!(ctx.layer_id_at(point),expected,"The normal document dialog must receive overlapping pointer input");
+        }
     }
     #[test]
     fn editor_overlay_does_not_resize_or_shift_the_model_view() {

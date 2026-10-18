@@ -3,7 +3,7 @@ use cad::{
     dimensions,
     engine::{Evaluation, Runtime},
     file_lock::FileLock,
-    model::{Document, Feature, Plane},
+    model::{Document, Feature, Plane, PlaneReference},
     plugins::{Field, Numbers, Registry},
 };
 use serde::Deserialize;
@@ -219,6 +219,8 @@ fn field_value(field: &Field, value: &Value) -> cad::model::Result<()> {
                         && reference_text(o.get("face"), 8192)
                 })
         }
+        "plane_ref" => serde_json::from_value::<PlaneReference>(value.clone())
+            .is_ok_and(|reference| reference.validate().is_ok()),
         "axis" => {
             value.is_null()
                 || value
@@ -596,7 +598,7 @@ fn apply(
 
 fn validate(document: &Document, registry: &Registry) -> cad::model::Result<()> {
     document.validate()?;
-    let numbers = Numbers::new(&document.variables)?;
+    let numbers = Numbers::for_document(document)?;
     for (index, feature) in document.features.iter().enumerate() {
         let plugin = registry
             .plugins
@@ -698,6 +700,7 @@ fn summary(evaluation: &Evaluation) -> Value {
     let scene = &evaluation.scene;
     json!({
         "error":scene.error,
+        "planes":scene.planes.iter().map(|(id,plane)| json!({"id":id,"plane":plane})).collect::<Vec<_>>(),
         "statuses":scene.statuses.iter().map(|s| json!({"id":s.id,"error":s.error,"suppressed":s.suppressed,"rolled_back":s.rolled_back})).collect::<Vec<_>>(),
         "parts":scene.meshes.iter().map(|m| json!({
             "key":m.part,"name":m.name,"volume_mm3":m.volume,"bounds_mm":m.bounds,

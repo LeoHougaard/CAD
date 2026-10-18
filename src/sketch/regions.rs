@@ -305,7 +305,7 @@ fn sources(sketch: &ResolvedSketch) -> Result<Vec<Source>> {
     for e in sketch.entities.iter().filter(|e| !e.construction) {
         if e.kind == "circle" {
             result.push(Source {
-                key: format!("c{}", e.id),
+                key: e.curve_key(0),
                 curve: Curve::Circle {
                     center: [e.values[0], e.values[1]],
                     radius: e.values[2],
@@ -316,7 +316,7 @@ fn sources(sketch: &ResolvedSketch) -> Result<Vec<Source>> {
         } else if let Some(arc) = e.arc() {
             let lo = (arc.start + arc.sweep.min(0.)).rem_euclid(TAU);
             let hi = lo + arc.sweep.abs();
-            let key = format!("a{}", e.id);
+            let key = e.curve_key(0);
             let (a, b) = if arc.sweep > 0. { (1, 2) } else { (2, 1) };
             result.push(Source {
                 curve: Curve::Circle {
@@ -333,11 +333,7 @@ fn sources(sketch: &ResolvedSketch) -> Result<Vec<Source>> {
                 if distance(pair[0], pair[1]) < EPS {
                     return Err("Sketch contains a zero-length boundary".into());
                 }
-                let key = if e.kind == "line" {
-                    format!("l{}", e.id)
-                } else {
-                    format!("r{}.{i}", e.id)
-                };
+                let key = e.curve_key(i);
                 result.push(Source {
                     arc: None,
                     splits: vec![(0., format!("{key}:0")), (1., format!("{key}:1"))],
@@ -516,13 +512,7 @@ pub fn trim_entity(
         e.construction = false;
     }
     let boundaries = sources(&all)?;
-    let key = match original.kind.as_str() {
-        "line" => format!("l{entity}"),
-        "rectangle" => format!("r{entity}.{edge}"),
-        "circle" => format!("c{entity}"),
-        "arc" => format!("a{entity}"),
-        _ => return Err("This curve cannot be trimmed".into()),
-    };
+    let key = original.curve_key(edge);
     let target = boundaries
         .iter()
         .find(|s| s.key == key)
@@ -1254,6 +1244,7 @@ mod arc_tests {
         ResolvedEntity {
             id,
             kind: kind.into(),
+            curve_identity: None,
             values: values.to_vec(),
             construction: false,
             fixed: false,

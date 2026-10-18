@@ -25,6 +25,23 @@ the local profile resolver and operation scopes:
   plane normal. Straight and circular edges supply their exact axes. The axis
   must lie in the profile plane. The older `sketch_line` spelling still works.
 
+Each connected Revolve region must stay on one side of the axis; touching it at
+the boundary is allowed. This is checked using exact straight-edge endpoints and
+bounded circular-arc extrema, rather than display polylines or a signed volume.
+Separate regions on opposite sides are checked independently. A crossing region
+is rejected atomically, including partial turns. Off-axis arcs whose source-circle
+radius reaches its distance from the axis currently require an unsupported
+spindle/horn torus path. That path produced an incorrect independently imported
+STEP volume, so it is rejected explicitly. Centered spherical arcs and ordinary
+ring-torus arcs retain their analytical paths.
+
+Persistent face and edge names use only the features that actually contributed
+to that part. Boolean and merge results inherit their input contributors; copies,
+patterns and mirrors inherit the source contributors. Unrelated later geometry
+cannot supply matching plane or curve names to an earlier part. Arc profiles also
+retain the planar closing-edge provenance, and old explicit source-edge aliases
+still resolve uniquely within the same contributor scope.
+
 Old pinned Extrude 1.0/1.1 and Revolve 1.0 documents retain their original whole
 sketch and single-target behavior when the new inputs are absent. Compatibility
 recognizes only the exact previous bundled hashes and exact installed builtin
@@ -46,10 +63,10 @@ stale scopes, face profiles, all axis families, upstream edits, reopen, coplanar
 part naming, rotated plates, multiple holes, and 1/2 mm blends. It verifies valid
 closed topology and analytical volumes. Fresh STEP exports also undergo
 independent Open CASCADE volume, placement and solid-count checks. The exports
-include a trimmed semicircle extrusion with an exact bounded circular wall:
+include a trimmed semicircle extrusion and a bounded ring-torus arc revolution:
 
 ```text
-cargo test --no-default-features --features step --release --test geometry_controls
+cargo test --no-default-features --features step --release --test geometry_controls --test sketch_trim --test provenance_revolve
 python tools/verify_geometry_controls_step.py
 ```
 

@@ -4,13 +4,20 @@ use super::*;
 pub(super) fn selectable(kind: &str) -> bool {
     matches!(
         kind,
-        "regions" | "profile_face" | "axis" | "edges" | "faces" | "body" | "bodies"
+        "regions" | "profile_face" | "plane_ref" | "axis" | "edges" | "faces" | "body" | "bodies"
     )
 }
 
 pub(super) fn visible(field: &Field, feature: &Feature) -> bool {
     let p = &feature.params;
-    !((matches!(field.kind.as_str(), "body" | "bodies") && p["mode"] == "New")
+    !((feature.plugin == "plane"
+        && match field.key.as_str() {
+            "second" | "flip_alignment" => p["mode"] != "Midplane",
+            "axis_ref" | "angle" => p["mode"] != "Angle",
+            "offset" => p["mode"] != "Offset",
+            _ => false,
+        })
+        || (matches!(field.kind.as_str(), "body" | "bodies") && p["mode"] == "New")
         || (p.get("profile_face").is_some_and(|v| !v.is_null())
             && matches!(field.kind.as_str(), "sketch" | "regions"))
         || (feature.plugin == "boolean" && field.key == "targets" && p["mode"] != "Subtract")
@@ -35,6 +42,7 @@ fn input<'a>(edit: &Editor, registry: &'a Registry) -> Option<&'a Field> {
             [
                 "regions",
                 "profile_face",
+                "plane_ref",
                 "edges",
                 "faces",
                 "bodies",
@@ -86,7 +94,13 @@ pub(super) fn referenced_sketches<'a>(feature: &'a Feature, registry: &Registry)
     ids
 }
 
-pub(super) fn input_ui(ui: &mut egui::Ui, field: &Field, value: &mut Value, scene: &Scene) -> bool {
+pub(super) fn input_ui(
+    ui: &mut egui::Ui,
+    field: &Field,
+    value: &mut Value,
+    scene: &Scene,
+    document: &Document,
+) -> bool {
     let before = value.clone();
     match field.kind.as_str() {
         "bodies" => {
@@ -129,7 +143,7 @@ pub(super) fn input_ui(ui: &mut egui::Ui, field: &Field, value: &mut Value, scen
             }
             *value = json!(selected);
         }
-        "profile_face" | "axis" => {
+        "profile_face" | "plane_ref" | "axis" => {
             let mut options = vec![(
                 Value::Null,
                 if field.kind == "axis" {
@@ -138,7 +152,20 @@ pub(super) fn input_ui(ui: &mut egui::Ui, field: &Field, value: &mut Value, scen
                     "None".into()
                 },
             )];
-            if field.kind == "profile_face" {
+            if field.kind == "plane_ref" {
+                for plane in ["Top", "Front", "Right"] {
+                    options.push((json!({"kind":"origin","plane":plane}), plane.into()));
+                }
+                for id in scene.planes.keys() {
+                    let name = document
+                        .features
+                        .iter()
+                        .find(|f| &f.id == id)
+                        .map_or(id.as_str(), |f| f.name.as_str());
+                    options.push((json!({"kind":"datum","feature":id}), name.into()));
+                }
+            }
+            if matches!(field.kind.as_str(), "profile_face" | "plane_ref") {
                 for mesh in &scene.meshes {
                     for (index, face) in mesh
                         .faces
@@ -147,7 +174,11 @@ pub(super) fn input_ui(ui: &mut egui::Ui, field: &Field, value: &mut Value, scen
                         .filter(|(_, f)| f.plane.is_some())
                     {
                         options.push((
-                            json!({"part":mesh.part,"face":face.key}),
+                            if field.kind == "plane_ref" {
+                                json!({"kind":"face","part":mesh.part,"face":face.key})
+                            } else {
+                                json!({"part":mesh.part,"face":face.key})
+                            },
                             format!("{} / face {}", mesh.name, index + 1),
                         ));
                     }
@@ -209,6 +240,16 @@ pub(super) fn input_ui(ui: &mut egui::Ui, field: &Field, value: &mut Value, scen
 }
 
 pub(super) fn seed(feature: &mut Feature, targets: &[Target], scene: &Scene) -> Option<String> {
+    if feature.plugin == "plane" {
+        let references: Vec<_> = targets
+            .iter()
+            .filter_map(|t| plane_value(t, scene))
+            .collect();
+        if let Some(reference) = references.last() {
+            feature.params["reference"] = reference.clone();
+        }
+        return Some("reference".into());
+    }
     if feature.plugin == "boolean" {
         feature.params["tools"] = json!(parts(targets));
         return Some("tools".into());
@@ -271,6 +312,25 @@ fn parts(targets: &[Target]) -> Vec<String> {
     result
 }
 
+fn plane_value(target: &Target, scene: &Scene) -> Option<Value> {
+    match target {
+        Target::Plane(name) if matches!(name.as_str(), "Top" | "Front" | "Right") => {
+            Some(json!({"kind":"origin","plane":name}))
+        }
+        Target::Plane(id) | Target::Feature(id) if scene.planes.contains_key(id) => {
+            Some(json!({"kind":"datum","feature":id}))
+        }
+        Target::Face { part, key }
+            if scene.meshes.iter().any(|m| {
+                &m.part == part && m.faces.iter().any(|f| &f.key == key && f.plane.is_some())
+            }) =>
+        {
+            Some(json!({"kind":"face","part":part,"face":key}))
+        }
+        _ => None,
+    }
+}
+
 fn apply_selection(params: &mut Value, field: &Field, targets: &[Target], scene: &Scene) {
     if !targets.is_empty()
         && !targets.iter().any(|t| match (field.kind.as_str(), t) {
@@ -278,6 +338,7 @@ fn apply_selection(params: &mut Value, field: &Field, targets: &[Target], scene:
             | ("regions", Target::Region { .. })
             | ("faces", Target::Face { .. })
             | ("edges", Target::Edge { .. }) => true,
+            ("plane_ref", t) => plane_value(t, scene).is_some(),
             ("profile_face", Target::Face { part, key }) => scene.meshes.iter().any(|m| {
                 &m.part == part && m.faces.iter().any(|f| &f.key == key && f.plane.is_some())
             }),
@@ -312,6 +373,11 @@ fn apply_selection(params: &mut Value, field: &Field, targets: &[Target], scene:
                 })
                 .collect::<Vec<_>>()
         ),
+        "plane_ref" => targets
+            .iter()
+            .rev()
+            .find_map(|t| plane_value(t, scene))
+            .unwrap_or(Value::Null),
         "profile_face" => targets
             .iter()
             .rev()
@@ -372,7 +438,9 @@ fn apply_selection(params: &mut Value, field: &Field, targets: &[Target], scene:
 impl CadApp {
     pub(super) fn paint_feature_axis(&self, ui: &egui::Ui, scene: &Scene, rect: Rect) {
         let Some(edit) = &self.editor else { return };
-        if edit.feature.plugin != "revolve" {
+        if edit.feature.plugin != "revolve"
+            && !(edit.feature.plugin == "plane" && edit.feature.params["mode"] == "Angle")
+        {
             return;
         }
         let p = &edit.feature.params;
@@ -426,7 +494,7 @@ impl CadApp {
                 .sketches
                 .get(p["sketch"].as_str().unwrap_or_default())
                 .map(|sk| {
-                    let offset = Numbers::new(&self.document.variables)
+                    let offset = Numbers::for_document(&self.document)
                         .and_then(|n| n.eval(p["axis_offset"].as_str().unwrap_or("0")))
                         .unwrap_or(0.);
                     if p["axis"] == "U" {
@@ -510,6 +578,29 @@ impl CadApp {
                     self.selection.add(Target::Part(part.into()));
                 }
             }
+            "plane_ref" => match value["kind"].as_str() {
+                Some("origin") => {
+                    if let Some(name) = value["plane"].as_str() {
+                        self.selection.add(Target::Plane(name.into()));
+                    }
+                }
+                Some("datum") => {
+                    if let Some(id) = value["feature"].as_str() {
+                        self.selection.add(Target::Plane(id.into()));
+                    }
+                }
+                Some("face") => {
+                    if let (Some(part), Some(key)) =
+                        (value["part"].as_str(), value["face"].as_str())
+                    {
+                        self.selection.add(Target::Face {
+                            part: part.into(),
+                            key: key.into(),
+                        });
+                    }
+                }
+                _ => (),
+            },
             "profile_face" => {
                 if let (Some(part), Some(key)) = (value["part"].as_str(), value["face"].as_str()) {
                     self.selection.add(Target::Face {
@@ -713,5 +804,85 @@ mod tests {
             &Scene::default(),
         );
         assert_eq!(params, before);
+    }
+    #[test]
+    fn plane_inputs_pick_origin_datum_and_planar_face_independently() {
+        let mut scene = Scene::default();
+        scene.planes.insert("f3".into(), Plane::named("Front", 10.));
+        let mut params = json!({"reference":{"kind":"origin","plane":"Top"},"second":null});
+        apply_selection(
+            &mut params,
+            &field("second", "plane_ref"),
+            &[Target::Feature("f3".into())],
+            &scene,
+        );
+        assert_eq!(params["reference"], json!({"kind":"origin","plane":"Top"}));
+        assert_eq!(params["second"], json!({"kind":"datum","feature":"f3"}));
+        apply_selection(
+            &mut params,
+            &field("reference", "plane_ref"),
+            &[Target::Plane("Right".into())],
+            &scene,
+        );
+        assert_eq!(
+            params["reference"],
+            json!({"kind":"origin","plane":"Right"})
+        );
+        let before = params.clone();
+        apply_selection(
+            &mut params,
+            &field("reference", "plane_ref"),
+            &[Target::Part("p".into())],
+            &scene,
+        );
+        assert_eq!(params, before);
+        apply_selection(&mut params, &field("second", "plane_ref"), &[], &scene);
+        assert!(params["second"].is_null());
+    }
+    #[test]
+    fn midplane_second_input_routes_history_selection_without_overwriting_reference() {
+        let mut scene = Scene::default();
+        scene.planes.insert("f1".into(),Plane::named("Top",10.));
+        scene.planes.insert("f2".into(),Plane::named("Top",30.));
+        let mut params = json!({"mode":"Midplane","reference":{"kind":"datum","feature":"f2"},"second":{"kind":"origin","plane":"Top"}});
+        let mut selected = crate::selection::Selection::default();
+        selected.add(Target::Plane("Top".into()));
+        selected.toggle(Target::Feature("f1".into()));
+        apply_selection(&mut params,&field("second","plane_ref"),selected.items(),&scene);
+        assert_eq!(params["second"],json!({"kind":"datum","feature":"f1"}));
+        assert_eq!(params["reference"],json!({"kind":"datum","feature":"f2"}));
+    }
+    #[test]
+    fn construction_plane_mode_fields_and_active_input_follow_one_manifest() {
+        let registry = Registry::builtin().unwrap();
+        let mut doc = Document::default();
+        let mut feature = registry.create("plane", &mut doc).unwrap();
+        for (mode, shown, hidden) in [
+            (
+                "Offset",
+                vec!["reference", "offset", "flip_normal"],
+                vec!["second", "angle", "axis_ref", "flip_alignment"],
+            ),
+            (
+                "Midplane",
+                vec!["reference", "second", "flip_alignment", "flip_normal"],
+                vec!["offset", "angle", "axis_ref"],
+            ),
+            (
+                "Angle",
+                vec!["reference", "axis_ref", "angle", "flip_normal"],
+                vec!["second", "offset", "flip_alignment"],
+            ),
+        ] {
+            feature.params["mode"] = json!(mode);
+            for field in &registry.plugins["plane"].manifest.fields {
+                if shown.contains(&field.key.as_str()) {
+                    assert!(visible(field, &feature), "{mode}/{}", field.key);
+                }
+                if hidden.contains(&field.key.as_str()) {
+                    assert!(!visible(field, &feature), "{mode}/{}", field.key);
+                }
+            }
+        }
     }
 }

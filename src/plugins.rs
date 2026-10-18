@@ -123,6 +123,10 @@ impl Registry {
                 include_str!("../plugins/boolean.rhai"),
             ),
             (
+                include_str!("../plugins/plane.json"),
+                include_str!("../plugins/plane.rhai"),
+            ),
+            (
                 include_str!("../plugins/sweep.json"),
                 include_str!("../plugins/sweep.rhai"),
             ),
@@ -279,17 +283,29 @@ impl Registry {
     }
 }
 
+mod expressions;
+
 pub struct Numbers {
     engine: Engine,
     values: BTreeMap<String, f64>,
+    format: u32,
 }
 impl Numbers {
     pub fn new(vars: &BTreeMap<String, String>) -> Result<Self> {
+        Self::for_format(vars, 2)
+    }
+    pub fn for_document(document: &Document) -> Result<Self> {
+        Self::for_format(&document.variables, document.format)
+    }
+    pub fn for_format(vars: &BTreeMap<String, String>, format: u32) -> Result<Self> {
+        if !matches!(format, 1 | 2) { return Err(format!("Unsupported expression format {format}")); }
         let mut engine = script_engine();
+        if format >= 2 { expressions::functions(&mut engine); }
         // CAD dimensions use real division even when both literals are integers.
         // Feature scripts retain normal Rhai integer semantics for indexes/loops.
         #[allow(deprecated)]
-        engine.on_parse_token(|token, _, _| match token {
+        engine.on_parse_token(move |token, _, _| match token {
+            rhai::Token::XOr if format >= 2 => rhai::Token::PowerOf,
             rhai::Token::IntegerConstant(n) => {
                 rhai::Token::FloatConstant(((n as f64).into(), n.to_string().into()).into())
             }
@@ -297,6 +313,7 @@ impl Numbers {
         });
         let mut n = Self {
             engine,
+            format,
             values: BTreeMap::from([
                 ("mm".into(), 1.),
                 ("cm".into(), 10.),
@@ -306,6 +323,13 @@ impl Numbers {
                 ("PI".into(), std::f64::consts::PI),
             ]),
         };
+        if format >= 2 {
+            n.values.extend([
+                ("pi".into(), std::f64::consts::PI),
+                ("e".into(), std::f64::consts::E),
+                ("rad".into(), 180. / std::f64::consts::PI),
+            ]);
+        }
         let mut pending = vars.clone();
         while !pending.is_empty() {
             let mut progress = false;
@@ -316,7 +340,8 @@ impl Numbers {
                 {
                     return Err(format!("Invalid variable name '{name}'"));
                 }
-                if ["mm", "cm", "m", "inch", "deg", "PI"].contains(&name.as_str()) {
+                if ["mm", "cm", "m", "inch", "deg", "PI"].contains(&name.as_str())
+                    || (format >= 2 && ["pi", "e", "rad"].contains(&name.as_str())) {
                     return Err(format!("'{name}' is a reserved unit name"));
                 }
                 if let Ok(x) = n.eval(&expr) {
@@ -338,7 +363,8 @@ impl Numbers {
         if expr.len() > 2048 {
             return Err("Expression is too long".into());
         }
-        let expression = expr.trim().trim_start_matches('=').replace('#', "");
+        let text = expr.trim().trim_start_matches('=');
+        let expression = if self.format >= 2 { expressions::normalize(text)? } else { text.replace('#', "") };
         let mut scope = Scope::new();
         for (k, v) in &self.values {
             scope.push_constant(k.as_str(), *v);

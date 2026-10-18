@@ -1,0 +1,295 @@
+//! Origin and feature planes share one drawing, picking and attachment path.
+use super::*;
+
+pub(super) fn attach(params: &mut Value, id: &str) {
+    if let Some(object) = params.as_object_mut() {
+        object.remove("context_plane");
+        object.remove("context_ref");
+    }
+    if matches!(id, "Top" | "Front" | "Right") {
+        params["plane"] = json!(id);
+        params["support"] = json!("");
+    } else {
+        params["support"] = json!(id);
+    }
+}
+
+pub(super) fn detach(params: &mut Value, evaluated: &Plane) {
+    params["context_plane"] = json!(evaluated);
+    params["offset"] = json!("0");
+    params["support"] = json!("");
+    if let Some(object) = params.as_object_mut() {
+        object.remove("context_ref");
+    }
+}
+
+impl CadApp {
+    pub(super) fn plane_frame(&self, id: &str) -> Option<Plane> {
+        if matches!(id, "Top" | "Front" | "Right") {
+            return Some(Plane::named(id, 0.));
+        }
+        self.scene
+            .planes
+            .get(id)
+            .or_else(|| self.source_scene.as_ref().and_then(|s| s.planes.get(id)))
+            .cloned()
+    }
+    pub(super) fn plane_name(&self, id: &str) -> String {
+        self.document
+            .features
+            .iter()
+            .find(|f| f.id == id)
+            .map_or_else(|| id.to_owned(), |f| f.name.clone())
+    }
+    pub(super) fn selected_plane_id(&self) -> Option<String> {
+        self.selection
+            .items()
+            .iter()
+            .rev()
+            .find_map(|target| match target {
+                Target::Plane(id) | Target::Feature(id) if self.plane_frame(id).is_some() => {
+                    Some(id.clone())
+                }
+                _ => None,
+            })
+            .or_else(|| {
+                self.selected_plane
+                    .as_ref()
+                    .filter(|id| self.plane_frame(id).is_some())
+                    .cloned()
+            })
+    }
+    pub(super) fn selected_sketch_support(&self) -> Option<Target> {
+        self.selection
+            .items()
+            .iter()
+            .rev()
+            .find_map(|target| match target {
+                Target::Plane(id) | Target::Feature(id) if self.plane_frame(id).is_some() => {
+                    Some(Target::Plane(id.clone()))
+                }
+                Target::Face { .. } => Some(target.clone()),
+                _ => None,
+            })
+            .or_else(|| self.selected_plane_id().map(Target::Plane))
+    }
+    pub(super) fn selected_support_plane(&self) -> Option<Plane> {
+        match self.selected_sketch_support()? {
+            Target::Plane(id) => self.plane_frame(&id),
+            Target::Face { part, key } => self
+                .source_scene
+                .as_ref()
+                .unwrap_or(&self.scene)
+                .meshes
+                .iter()
+                .find(|m| m.part == part)?
+                .faces
+                .iter()
+                .find(|f| f.key == key)?
+                .plane
+                .clone(),
+            _ => None,
+        }
+    }
+    pub(super) fn plane_input_active(&self) -> bool {
+        self.editor.as_ref().is_some_and(|edit| {
+            feature_inputs::active_key(edit, &self.registry)
+                .and_then(|key| {
+                    self.registry
+                        .plugins
+                        .get(&edit.feature.plugin)?
+                        .manifest
+                        .fields
+                        .iter()
+                        .find(|f| f.key == key)
+                })
+                .is_some_and(|f| f.kind == "plane_ref")
+        })
+    }
+    fn displayed_planes(&self) -> Vec<(String, Plane)> {
+        if !self.show_planes {
+            return vec![];
+        }
+        // Aligned parallel planes share projected labels. During sketch editing,
+        // only the chosen support is relevant; choosing a support still shows all.
+        if let Some(edit) = &self.editor
+            && edit.sketch.is_some()
+            && !self.choosing_plane
+        {
+            let id = edit.feature.params["support"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .or_else(|| edit.feature.params["plane"].as_str())
+                .unwrap_or("Top");
+            return self
+                .plane_frame(id)
+                .filter(|_| !self.hidden_sketches.contains(id))
+                .map(|plane| vec![(id.to_owned(), plane)])
+                .unwrap_or_default();
+        }
+        let selecting = self.choosing_plane || self.plane_input_active();
+        let selected = self.selected_plane_id();
+        let mut planes = BTreeMap::new();
+        for id in ["Top", "Front", "Right"] {
+            if (selecting || self.scene.meshes.is_empty() || selected.as_deref() == Some(id))
+                && !self.hidden_sketches.contains(id)
+            {
+                planes.insert(id.to_owned(), Plane::named(id, 0.));
+            }
+        }
+        if let Some(source) = &self.source_scene {
+            planes.extend(source.planes.clone());
+        }
+        planes.extend(self.scene.planes.clone());
+        planes.retain(|id, _| !self.hidden_sketches.contains(id));
+        planes.into_iter().collect()
+    }
+    fn plane_intersections(&self, pos: egui::Pos2, rect: Rect) -> Vec<(f32, String)> {
+        let (origin, ray) = self.camera.ray(pos, rect);
+        let mut hits = vec![];
+        for (id, plane) in self.displayed_planes() {
+            if self.plane_input_active() && self.editor.as_ref().is_some_and(|e| e.feature.id == id)
+            {
+                continue;
+            }
+            if let Some(p) = self.camera.plane_point(pos, rect, &plane)
+                && p.into_iter()
+                    .all(|v| v.abs() <= render::ORIGIN_PLANE_HALF_SIZE)
+            {
+                let point = glam::Vec3::from_array(plane.at(p).map(|v| v as f32));
+                let distance = (point - origin).dot(ray);
+                if distance > 0. {
+                    hits.push((distance, id));
+                }
+            }
+        }
+        hits.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+        hits
+    }
+    pub(super) fn plane_hits(&self, pos: egui::Pos2, rect: Rect) -> Vec<String> {
+        self.plane_intersections(pos, rect)
+            .into_iter()
+            .map(|(_, id)| id)
+            .collect()
+    }
+    pub(super) fn sketch_support_hit(
+        &self,
+        scene: &Scene,
+        pos: egui::Pos2,
+        rect: Rect,
+    ) -> Option<Target> {
+        let face = render::pick(scene, &self.camera, pos, rect, &self.hidden);
+        if let Some((distance, id)) = self.plane_intersections(pos, rect).into_iter().next()
+            && face.as_ref().is_none_or(|f| distance <= f.distance + 1e-4)
+        {
+            return Some(Target::Plane(id));
+        }
+        face.filter(|f| f.plane.is_some()).map(|f| Target::Face {
+            part: f.part,
+            key: f.face,
+        })
+    }
+    pub(super) fn paint_planes(&self, ui: &egui::Ui, rect: Rect, pointer: Option<egui::Pos2>) {
+        let hover = pointer.and_then(|p| self.plane_hits(p, rect).into_iter().next());
+        let mut planes = self.displayed_planes();
+        planes.sort_by_key(|(id, _)| {
+            std::cmp::Reverse(
+                self.editor.as_ref().is_some_and(|e| e.feature.id == *id) as u8 * 2
+                    + (self.selection.contains(&Target::Plane(id.clone()))
+                        || self.selection.contains(&Target::Feature(id.clone())))
+                        as u8,
+            )
+        });
+        let mut labels: Vec<(Rect, egui::epaint::Mesh)> = Vec::new();
+        for (id, plane) in planes {
+            let selected = self.selection.contains(&Target::Plane(id.clone()))
+                || self.selection.contains(&Target::Feature(id.clone()))
+                || self.selected_plane.as_ref() == Some(&id);
+            let input = self.editor.as_ref().is_some_and(|edit| {
+                edit.feature.id == id
+                    || edit.feature.params["support"] == id
+                    || ["reference", "second"].iter().any(|key| {
+                        let value = &edit.feature.params[key];
+                        value["feature"] == id || value["plane"] == id
+                    })
+            });
+            let color = if selected {
+                rgb(self.settings.appearance.turquoise)
+            } else if input || hover.as_ref() == Some(&id) {
+                rgb(self.settings.appearance.purple)
+            } else {
+                MUTED
+            };
+            let points = render::origin_plane_points(&plane)
+                .into_iter()
+                .map(|p| self.camera.project(p, rect))
+                .collect();
+            ui.painter().add(egui::Shape::convex_polygon(
+                points,
+                color.gamma_multiply(if input || selected { 0.10 } else { 0.04 }),
+                Stroke::new(1_f32, color),
+            ));
+            if let Some(mesh) = render::plane_label_mesh(
+                ui,
+                &self.camera,
+                &plane,
+                rect,
+                &self.plane_name(&id),
+                color,
+            ) {
+                let bounds = mesh.vertices.iter().fold(Rect::NOTHING, |bounds, vertex| {
+                    bounds.union(Rect::from_min_max(vertex.pos, vertex.pos))
+                });
+                if !labels
+                    .iter()
+                    .any(|(other, _)| other.expand(4.).intersects(bounds))
+                {
+                    labels.push((bounds, mesh));
+                }
+            }
+        }
+        for (_, mesh) in labels {
+            ui.painter().add(egui::Shape::mesh(mesh));
+        }
+    }
+    pub(super) fn choose_plane(&mut self, id: &str) {
+        if self.plane_frame(id).is_none() {
+            return;
+        }
+        self.selected_plane = Some(id.into());
+        if let Some(edit) = &mut self.editor
+            && edit.sketch.is_some()
+        {
+            let before = edit.feature.params.clone();
+            attach(&mut edit.feature.params, id);
+            if before != edit.feature.params {
+                edit.undo.push(before);
+                edit.redo.clear();
+                edit.changed = true;
+            }
+            self.choosing_plane = false;
+            self.align_when_ready = true;
+            self.rebuild();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn datum_attachment_is_explicit_and_detach_preserves_evaluated_frame() {
+        let mut params = json!({"plane":"Top","offset":"3","support":"","context_ref":{}});
+        attach(&mut params, "f8");
+        assert_eq!(params["support"], "f8");
+        assert!(params.get("context_ref").is_none());
+        let frame = Plane::named("Right", 27.);
+        detach(&mut params, &frame);
+        assert_eq!(params["context_plane"], json!(frame));
+        assert_eq!(params["offset"], "0");
+        assert_eq!(params["support"], "");
+        attach(&mut params, "Front");
+        assert_eq!(params["plane"], "Front");
+        assert!(params.get("context_plane").is_none());
+    }
+}

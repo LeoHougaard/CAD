@@ -1,0 +1,19 @@
+{
+  "id":"plane",
+  "name":"Plane",
+  "version":"1.0.0",
+  "category":"feature",
+  "editor":"",
+  "script":"plane.rhai",
+  "fields":[
+    {"key":"mode","label":"Plane type","kind":"choice","default":"Offset","options":["Offset","Midplane","Angle"]},
+    {"key":"reference","label":"Reference plane","kind":"plane_ref","default":{"kind":"origin","plane":"Top"}},
+    {"key":"second","label":"Second plane","kind":"plane_ref","default":{"kind":"origin","plane":"Top"}},
+    {"key":"offset","label":"Offset","kind":"number","default":"10"},
+    {"key":"axis_ref","label":"Axis","kind":"axis","default":null},
+    {"key":"angle","label":"Angle","kind":"number","default":"45"},
+    {"key":"flip_alignment","label":"Flip alignment","kind":"bool","default":false},
+    {"key":"flip_normal","label":"Flip normal","kind":"bool","default":false}
+  ],
+  "description":"Create a reusable offset, midplane or angled construction plane."
+}

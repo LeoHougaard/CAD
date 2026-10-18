@@ -1012,6 +1012,7 @@ impl AssemblyEvaluation {
                 name: instance.name.clone(),
                 solid,
                 feature: format!("{}::{}", instance.id, part.feature),
+                source_features: part.source_features.clone(),
             });
         }
         Ok(geometry)

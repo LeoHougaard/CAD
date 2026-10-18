@@ -16,6 +16,8 @@ def verify(folder=None, names=("bearing-blocks", "analytic-rings", "context-boun
     gmsh.initialize()
     try:
         gmsh.option.setNumber("General.Terminal", 0)
+        # Analytic torus patch boxes can otherwise use loose control-point bounds.
+        gmsh.option.setNumber("Geometry.OCCBoundsUseStl", 1)
         for name in names:
             spec = json.loads((folder / f"{name}.json").read_text(encoding="utf-8"))
             assert spec["case"] == name and spec["step_exported"] is True

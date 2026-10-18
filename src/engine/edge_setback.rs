@@ -78,11 +78,12 @@ impl Geometry {
         solid: SolidId,
         edges: &[EdgeId],
         distance: f64,
+        owner: &str,
     ) -> Result<Option<SolidId>> {
         if distance <= 1e-7 {
             return Err("Chamfer distance must be positive".into());
         }
-        let available = self.edge_keys(solid)?;
+        let available = self.edge_keys_scoped(solid, Some(owner))?;
         let keys = edges
             .iter()
             .map(|id| {
@@ -96,7 +97,7 @@ impl Geometry {
         let mut result = solid;
         for key in keys {
             let edges: Vec<_> = self
-                .edge_keys(result)?
+                .edge_keys_scoped(result, Some(owner))?
                 .into_iter()
                 .filter(|(_, k)| k == &key)
                 .collect();

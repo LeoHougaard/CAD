@@ -27,6 +27,7 @@ Press a tool's key again to exit it. Escape cancels the current gesture or tool.
 | --- | --- |
 | Extrude / revolve | Shift+E / Shift+W |
 | New sketch | Shift+S, outside sketch editing |
+| Rename selected feature | Shift+N |
 | Edge fillet | Shift+F, outside sketch editing |
 | Front / back / left / right | Shift+1 / Shift+2 / Shift+3 / Shift+4 |
 | Top / bottom / isometric | Shift+5 / Shift+6 / Shift+7 |
@@ -53,3 +54,9 @@ Selection follows [Onshape's toggle behavior](https://cad.onshape.com/help/Conte
 In sketches, drag from empty space left to right to select only enclosed curves. Drag right to left to select curves the box crosses. Hold Ctrl while dragging to subtract those curves from the selection. Individual rectangle edges can be selected. Construction geometry participates in sketch selection and constraints but does not add solid regions.
 
 A draws a three-point arc by start, end, then a point on its span. Center arc uses center, start, then end; its Clockwise option selects the opposite span. M removes the exact curve interval under the pointer. No intersection removes the entire curve. Trimming preserves valid surviving constraints and reports removed dimensions or endpoint references.
+
+Q toggles each selected curve independently. Pressing Q twice restores a mixed
+regular/construction selection. Selecting one rectangle side changes that side;
+the shared structural replacement preserves surviving dimensions and joins.
+The Construction checkbox sets all selected curves to its checked state. With no
+selection, Q switches construction mode for subsequent drawing.

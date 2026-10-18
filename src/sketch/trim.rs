@@ -18,6 +18,16 @@ pub fn apply_trim(
     numbers: &Numbers,
 ) -> Result<TrimEdit> {
     let pieces = super::trim_entity(resolved, entity, edge, point)?;
+    replace_entity(original, resolved, entity, &pieces, numbers)
+}
+
+fn replace_entity(
+    original: &Sketch,
+    resolved: &ResolvedSketch,
+    entity: u64,
+    pieces: &[TrimPiece],
+    numbers: &Numbers,
+) -> Result<TrimEdit> {
     let index = original
         .entities
         .iter()
@@ -37,6 +47,25 @@ pub fn apply_trim(
         let id = if n == 0 { entity } else { sketch.allocate_id() };
         let mut replacement = entity_from_values(id, &piece.kind, &piece.values);
         replacement.construction = original.entities[index].construction;
+        // Source edge indices are explicit. Preserve logical identity only when
+        // this replacement keeps that entire oriented curve span unchanged.
+        let unchanged = if piece.kind == "line" && matches!(old.kind.as_str(), "line" | "rectangle")
+        {
+            let line = dimensions::line(resolved, entity, piece.source_edge)?;
+            near(line[0], [piece.values[0], piece.values[1]])
+                && near(line[1], [piece.values[2], piece.values[3]])
+        } else {
+            piece.kind == old.kind
+                && piece.values.len() == old.values.len()
+                && piece
+                    .values
+                    .iter()
+                    .zip(&old.values)
+                    .all(|(a, b)| (a - b).abs() < 1e-9)
+        };
+        if unchanged {
+            replacement.curve_identity = Some(old.curve_key(piece.source_edge));
+        }
         replacements.push(replacement);
     }
     sketch
@@ -51,6 +80,7 @@ pub fn apply_trim(
                 ResolvedEntity {
                     id: e.id,
                     kind: e.kind.clone(),
+                    curve_identity: e.curve_identity.clone(),
                     values: piece.values.clone(),
                     construction: e.construction,
                     fixed: false,
@@ -364,6 +394,87 @@ pub fn apply_trim(
         removed_constraints: removed,
     })
 }
+/// Construction is per selected curve, including individual rectangle sides.
+/// Rectangles become native constrained lines through the same remapping as Trim.
+pub fn set_construction(
+    original: &Sketch,
+    resolved: &ResolvedSketch,
+    selected: &[dimensions::Selection],
+    state: Option<bool>,
+    numbers: &Numbers,
+) -> Result<(Sketch, ResolvedSketch, Vec<dimensions::Selection>)> {
+    use dimensions::{Selection, Sub};
+    let mut sketch = original.clone();
+    let mut solved = resolved.clone();
+    let mut selection = selected.to_vec();
+    let mut rectangles: Vec<_> = selected
+        .iter()
+        .filter_map(|s| matches!(s.sub, Sub::Edge(_)).then_some(s.entity))
+        .filter(|id| {
+            resolved
+                .entities
+                .iter()
+                .any(|e| e.id == *id && e.kind == "rectangle")
+        })
+        .collect();
+    rectangles.sort_unstable();
+    rectangles.dedup();
+    for id in rectangles {
+        let old = solved
+            .entities
+            .iter()
+            .find(|e| e.id == id)
+            .ok_or("Rectangle is missing")?;
+        let points = old.control_points();
+        let pieces: Vec<_> = (0..4)
+            .map(|edge| TrimPiece {
+                kind: "line".into(),
+                source_edge: edge,
+                values: points[edge]
+                    .into_iter()
+                    .chain(points[(edge + 1) % 4])
+                    .collect(),
+            })
+            .collect();
+        let index = sketch.entities.iter().position(|e| e.id == id).unwrap();
+        let replacement = replace_entity(&sketch, &solved, id, &pieces, numbers)?;
+        if replacement.removed_constraints != 0 {
+            return Err("Construction cannot preserve this rectangle's constraints".into());
+        }
+        for selected in selection.iter_mut().filter(|s| s.entity == id) {
+            *selected = match selected.sub {
+                Sub::Edge(edge) => {
+                    Selection::edge(replacement.sketch.entities[index + edge % 4].id, 0)
+                }
+                Sub::Point(point) => {
+                    Selection::point(replacement.sketch.entities[index + point % 4].id, 0)
+                }
+            };
+        }
+        sketch = replacement.sketch;
+        solved = replacement.resolved;
+    }
+    let mut ids: Vec<_> = selection
+        .iter()
+        .filter(|s| s.entity != 0)
+        .map(|s| s.entity)
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
+    for entity in &mut sketch.entities {
+        if ids.contains(&entity.id) {
+            entity.construction = state.unwrap_or(!entity.construction);
+        }
+    }
+    // Construction changes profile participation, never its equations or solution.
+    for entity in &mut solved.entities {
+        if let Some(source) = sketch.entities.iter().find(|e| e.id == entity.id) {
+            entity.construction = source.construction;
+        }
+    }
+    Ok((sketch, solved, selection))
+}
+
 fn near(a: [f64; 2], b: [f64; 2]) -> bool {
     (a[0] - b[0]).hypot(a[1] - b[1]) < 1e-6
 }

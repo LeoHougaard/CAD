@@ -4,6 +4,35 @@ use std::collections::BTreeMap;
 
 pub type Result<T> = std::result::Result<T, String>;
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PlaneReference {
+    Origin { plane: String },
+    Datum { feature: String },
+    Face { part: String, face: String },
+}
+impl PlaneReference {
+    pub fn validate(&self) -> Result<()> {
+        let reference = |s: &str, max: usize| !s.is_empty() && s != "@last" && s.len() <= max;
+        match self {
+            Self::Origin { plane } if ["Top", "Front", "Right"].contains(&plane.as_str()) => Ok(()),
+            Self::Datum { feature } if reference(feature, 128) => Ok(()),
+            Self::Face { part, face }
+                if reference(part, 1024)
+                    && reference(face, 8192)
+                    && !face.contains("untracked:") =>
+            {
+                Ok(())
+            }
+            _ => Err(concat!(
+                "Choose an origin plane, an earlier construction plane, ",
+                "or a persistent planar face"
+            )
+            .into()),
+        }
+    }
+}
+
 pub fn atomic_write(
     path: &std::path::Path,
     write: impl FnOnce(&mut std::fs::File) -> Result<()>,
@@ -33,7 +62,7 @@ pub struct Document {
 impl Default for Document {
     fn default() -> Self {
         Self {
-            format: 1,
+            format: 2,
             name: "Untitled".into(),
             variables: BTreeMap::new(),
             features: vec![],
@@ -68,7 +97,7 @@ impl Document {
         Ok(doc)
     }
     pub fn validate(&self) -> Result<()> {
-        if self.format != 1 {
+        if !matches!(self.format, 1 | 2) {
             return Err(format!("Unsupported document format {}", self.format));
         }
         let mut ids = std::collections::BTreeSet::new();
@@ -106,6 +135,7 @@ impl Document {
                         return Err("Invalid sketch constraint data".into());
                     }
                 }
+                sk.validate_curve_identities()?;
                 let mut entity_ids = std::collections::BTreeSet::new();
                 for e in &sk.entities {
                     if e.id == 0 || e.id > sk.next_id || !entity_ids.insert(e.id) {
@@ -160,6 +190,7 @@ impl Sketch {
         self.entities.push(Entity {
             id,
             kind: "rectangle".into(),
+            curve_identity: None,
             values: vec![
                 fmt(a[0].min(b[0])),
                 fmt(a[1].min(b[1])),
@@ -174,6 +205,7 @@ impl Sketch {
         self.entities.push(Entity {
             id,
             kind: "circle".into(),
+            curve_identity: None,
             values: vec![fmt(center[0]), fmt(center[1]), fmt(radius)],
             construction: false,
         });
@@ -184,6 +216,7 @@ impl Sketch {
         self.entities.push(Entity {
             id,
             kind: "arc".into(),
+            curve_identity: None,
             values: [
                 center[0],
                 center[1],
@@ -227,6 +260,7 @@ impl Sketch {
         self.entities.push(Entity {
             id,
             kind: "line".into(),
+            curve_identity: None,
             values: vec![fmt(a[0]), fmt(a[1]), fmt(b[0]), fmt(b[1])],
             construction: false,
         });
@@ -237,8 +271,53 @@ impl Sketch {
 pub struct Entity {
     pub id: u64,
     pub kind: String,
+    /// Logical source curve retained across a representation-only replacement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub curve_identity: Option<String>,
     pub values: Vec<String>,
     pub construction: bool,
+}
+
+/// Shared names for region boundaries, their endpoints and generated solid edges.
+pub fn curve_key(kind: &str, id: u64, edge: usize) -> String {
+    match kind {
+        "rectangle" => format!("r{id}.{edge}"),
+        "circle" => format!("c{id}"),
+        "arc" => format!("a{id}"),
+        _ => format!("l{id}"),
+    }
+}
+impl Entity {
+    pub fn curve_key(&self, edge: usize) -> String {
+        self.curve_identity.clone().unwrap_or_else(|| curve_key(&self.kind, self.id, edge))
+    }
+}
+impl Sketch {
+    pub fn validate_curve_identities(&self) -> Result<()> {
+        let mut seen = std::collections::BTreeSet::new();
+        for entity in &self.entities {
+            if let Some(key) = &entity.curve_identity {
+                if key.len() > 32 || key.len() < 2 { return Err("Invalid sketch curve identity".into()); }
+                let (kind, id, edge) = match key.as_bytes()[0] {
+                    b'r' if entity.kind == "line" => {
+                        let (id, edge) = key[1..].split_once('.').ok_or("Invalid rectangle curve identity")?;
+                        ("rectangle", id.parse::<u64>().map_err(|_| "Invalid curve identity")?, edge.parse::<usize>().map_err(|_| "Invalid curve identity")?)
+                    }
+                    b'l' if entity.kind == "line" => ("line",key[1..].parse::<u64>().map_err(|_| "Invalid curve identity")?,0),
+                    b'c' if entity.kind == "circle" => ("circle",key[1..].parse::<u64>().map_err(|_| "Invalid curve identity")?,0),
+                    b'a' if entity.kind == "arc" => ("arc",key[1..].parse::<u64>().map_err(|_| "Invalid curve identity")?,0),
+                    _ => return Err("Curve identity does not match its geometry".into()),
+                };
+                if id == 0 || id > self.next_id || edge > 3 || curve_key(kind,id,edge) != *key {
+                    return Err("Invalid or noncanonical sketch curve identity".into());
+                }
+            }
+            for edge in 0..if entity.kind == "rectangle" {4} else {1} {
+                if !seen.insert(entity.curve_key(edge)) { return Err("Duplicate sketch curve identity".into()); }
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -271,15 +350,28 @@ pub struct Plane {
 
 impl Plane {
     pub fn validate(&self) -> Result<()> {
-        let dot = |a: [f64; 3], b: [f64; 3]| a.into_iter().zip(b).map(|(a,b)| a*b).sum::<f64>();
-        if self.origin.iter().chain(&self.u).chain(&self.v).chain(&self.normal)
-            .any(|v| !v.is_finite() || v.abs() > 1e8) {
+        let dot = |a: [f64; 3], b: [f64; 3]| a.into_iter().zip(b).map(|(a, b)| a * b).sum::<f64>();
+        if self
+            .origin
+            .iter()
+            .chain(&self.u)
+            .chain(&self.v)
+            .chain(&self.normal)
+            .any(|v| !v.is_finite() || v.abs() > 1e8)
+        {
             return Err("Reference plane contains invalid coordinates".into());
         }
-        let cross = [self.u[1]*self.v[2]-self.u[2]*self.v[1],
-            self.u[2]*self.v[0]-self.u[0]*self.v[2], self.u[0]*self.v[1]-self.u[1]*self.v[0]];
-        if [self.u, self.v, self.normal].iter().any(|&v| (dot(v,v)-1.).abs()>1e-7)
-            || dot(self.u,self.v).abs()>1e-7 || dot(cross,self.normal)<1.-1e-7 {
+        let cross = [
+            self.u[1] * self.v[2] - self.u[2] * self.v[1],
+            self.u[2] * self.v[0] - self.u[0] * self.v[2],
+            self.u[0] * self.v[1] - self.u[1] * self.v[0],
+        ];
+        if [self.u, self.v, self.normal]
+            .iter()
+            .any(|&v| (dot(v, v) - 1.).abs() > 1e-7)
+            || dot(self.u, self.v).abs() > 1e-7
+            || dot(cross, self.normal) < 1. - 1e-7
+        {
             return Err("Reference plane must have an orthonormal, right-handed frame".into());
         }
         Ok(())

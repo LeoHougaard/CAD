@@ -1371,27 +1371,31 @@ impl AssemblyUi {
                         )
                         .contains(p)
                 }) && !blocked;
+                let (right_drag, middle_drag) = ui.input(|i| (
+                    render::navigation_drag(i, egui::PointerButton::Secondary),
+                    render::navigation_drag(i, egui::PointerButton::Middle),
+                ));
                 let orbiting = canvas_hover
                     && response.hovered()
                     && ui.input(|i| {
-                        i.pointer.button_down(egui::PointerButton::Secondary)
+                        right_drag.is_some()
                             && !i.modifiers.shift
                             && !i.modifiers.ctrl
                     });
                 if orbiting && !self.orbiting {
-                    camera.pivot = ui
-                        .input(|i| i.pointer.press_origin())
+                    camera.pivot = right_drag.and_then(|m| m.start)
+                        .or_else(|| ui.input(|i| i.pointer.press_origin()))
                         .or(pointer)
                         .and_then(|p| render::pick(&self.scene, camera, p, rect, &self.hidden))
                         .map(|p| p.point)
                         .or_else(|| render::model_center(&self.scene, &self.hidden))
                         .unwrap_or(camera.center);
                 }
-                self.orbiting = orbiting;
+                self.orbiting = orbiting && ui.input(|i| i.pointer.button_down(egui::PointerButton::Secondary));
                 if response.hovered() && canvas_hover {
-                    let delta = ui.input(|i| i.pointer.delta());
-                    let right = ui.input(|i| i.pointer.button_down(egui::PointerButton::Secondary));
-                    let middle = ui.input(|i| i.pointer.button_down(egui::PointerButton::Middle));
+                    let delta = middle_drag.or(right_drag).map_or(egui::Vec2::ZERO, |m| m.delta);
+                    let right = right_drag.is_some();
+                    let middle = middle_drag.is_some();
                     if middle || (right && ui.input(|i| i.modifiers.shift || i.modifiers.ctrl)) {
                         camera.pan(delta * settings.mouse_pan_speed, rect);
                     } else if right {

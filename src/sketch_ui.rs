@@ -259,15 +259,64 @@ impl SketchUi {
             }
         }
     }
+    fn edit_construction(
+        &mut self,
+        sketch: &mut Sketch,
+        state: Option<bool>,
+        vars: &BTreeMap<String, String>,
+        format: u32,
+    ) -> bool {
+        let Some(resolved) = &self.last_good else {
+            return false;
+        };
+        // All numeric seeds come from the evaluated sketch. Expressions remain
+        // persisted constraints during structural replacement.
+        match Numbers::for_format(vars, format).and_then(|numbers| {
+            crate::sketch::set_construction(sketch, resolved, &self.selected, state, &numbers)
+        }) {
+            Ok((candidate, solved, selected)) => {
+                let changed = *sketch != candidate;
+                *sketch = candidate;
+                self.last_good = Some(solved);
+                self.selected = selected;
+                self.hint.clear();
+                changed
+            }
+            Err(error) => {
+                self.hint = error;
+                false
+            }
+        }
+    }
+    fn update_resolved(&mut self, resolved: &ResolvedSketch) {
+        let valid = |s: &Selection| {
+            if s.entity == 0 {
+                return s.sub == Sub::Point(0);
+            }
+            resolved
+                .entities
+                .iter()
+                .find(|e| e.id == s.entity)
+                .is_some_and(|e| match s.sub {
+                    Sub::Point(index) => index < e.control_points().len(),
+                    Sub::Edge(index) => index < if e.kind == "rectangle" { 4 } else { 1 },
+                })
+        };
+        self.selected.retain(valid);
+        self.picks.retain(valid);
+        self.last_good = Some(resolved.clone());
+    }
     pub fn inspector(
         &mut self,
         ui: &mut egui::Ui,
         sketch: &mut Sketch,
         resolved: Option<&ResolvedSketch>,
         error: Option<&str>,
+        vars: &BTreeMap<String, String>,
+        format: u32,
     ) -> bool {
         if let Some(s) = resolved {
-            self.last_good = Some(s.clone());
+            self.update_resolved(s);
         }
         let mut changed = false;
         ui.separator();
@@ -321,12 +370,7 @@ impl SketchUi {
                 .filter(|e| ids.contains(&e.id))
                 .all(|e| e.construction);
             if ui.checkbox(&mut construction, "Construction").changed() {
-                for e in &mut sketch.entities {
-                    if ids.contains(&e.id) {
-                        e.construction = construction;
-                    }
-                }
-                changed = true;
+                changed |= self.edit_construction(sketch, Some(construction), vars, format);
             }
         }
         ui.separator();
@@ -600,10 +644,11 @@ impl SketchUi {
         resolved: Option<&ResolvedSketch>,
         plane: Plane,
         vars: &BTreeMap<String, String>,
+        format: u32,
         conflict: bool,
     ) -> Edit {
         if let Some(s) = resolved {
-            self.last_good = Some(s.clone());
+            self.update_resolved(s);
         }
         let sk = self.last_good.clone().unwrap_or(ResolvedSketch {
             entities: vec![],
@@ -650,17 +695,9 @@ impl SketchUi {
                 Err(error) => self.hint = error,
             }
         }
-        if std::mem::take(&mut self.pending_construction) {
-            let construction = !sketch
-                .entities
-                .iter()
-                .filter(|e| self.selected.iter().any(|s| s.entity == e.id))
-                .all(|e| e.construction);
-            for e in &mut sketch.entities {
-                if self.selected.iter().any(|s| s.entity == e.id) {
-                    e.construction = construction;
-                }
-            }
+        if std::mem::take(&mut self.pending_construction)
+            && self.edit_construction(sketch, None, vars, format)
+        {
             edit.change(true);
         }
         self.labels.clear();
@@ -722,6 +759,7 @@ impl SketchUi {
                         crate::sketch::ResolvedEntity {
                             id: 0,
                             kind: "arc".into(),
+                            curve_identity: None,
                             values,
                             construction: false,
                             fixed: false,
@@ -772,7 +810,7 @@ impl SketchUi {
                 self.selected.clear();
             } else if self.tool == Tool::Trim {
                 if let (Some(hit), Some(point)) = (hit, raw) {
-                    match Numbers::new(vars).and_then(|numbers| {
+                    match Numbers::for_format(vars, format).and_then(|numbers| {
                         crate::sketch::apply_trim(
                             sketch,
                             &sk,
@@ -1051,7 +1089,7 @@ impl SketchUi {
                     } => {
                         let delta = [p[0] - start[0], p[1] - start[1]];
                         let targets = drag_targets(original, selected, p, delta);
-                        if let Ok(numbers) = Numbers::new(vars) {
+                        if let Ok(numbers) = Numbers::for_format(vars, format) {
                             let mut candidate = sketch.clone();
                             for target in &targets {
                                 if target.kind == "CurvePoint"
@@ -1132,7 +1170,9 @@ impl SketchUi {
                 }
             }
         }
-        if self.dimension_dialog(ui, &sk, sketch, &projector, rect, vars) {
+        if self.dimension_dialog(ui, &sk, sketch, &projector, rect, || {
+            Numbers::for_format(vars, format)
+        }) {
             edit.change(true);
         }
         let helper = if self.tool == Tool::Trim && !self.hint.is_empty() {
@@ -1222,7 +1262,7 @@ impl SketchUi {
         sketch: &mut Sketch,
         projector: &Projector,
         rect: Rect,
-        vars: &BTreeMap<String, String>,
+        numbers: impl FnOnce() -> crate::model::Result<Numbers>,
     ) -> bool {
         let Some(mut draft) = self.dimension.take() else {
             return false;
@@ -1231,6 +1271,7 @@ impl SketchUi {
         let screen = projector.project(sk.plane.at(p), rect);
         let mut accept = false;
         let mut cancel = false;
+        let mut input_id = None;
         egui::Area::new(egui::Id::new("dimension_input"))
             .fixed_pos(Pos2::new(
                 screen.x.clamp(rect.left() + 8., rect.right() - 205.),
@@ -1248,6 +1289,7 @@ impl SketchUi {
                         .desired_width(145.)
                         .id_salt("value")
                         .show(ui);
+                    input_id = Some(output.response.id);
                     if draft.focus {
                         output.response.request_focus();
                         let mut state = output.state;
@@ -1281,8 +1323,8 @@ impl SketchUi {
                 });
             });
         if accept {
-            match Numbers::new(vars).and_then(|n| n.eval(&draft.text)) {
-                Ok(value) => {
+            match numbers().and_then(|n| n.eval(&draft.text).map(|value| (n, value))) {
+                Ok((numbers, value)) => {
                     if matches!(
                         draft.constraint.kind.as_str(),
                         "Radius" | "Diameter" | "Length" | "Width" | "Height" | "Distance"
@@ -1300,15 +1342,16 @@ impl SketchUi {
                         } else {
                             candidate.constraints.push(draft.constraint.clone());
                         }
-                        match Numbers::new(vars).and_then(|numbers| {
-                            crate::sketch::resolve(&candidate, sk.plane.clone(), &numbers)
-                        }) {
+                        match crate::sketch::resolve(&candidate, sk.plane.clone(), &numbers) {
                             Ok(solved) => {
                                 seed_from_resolved(&mut candidate, Some(&solved));
                                 *sketch = candidate;
                                 self.last_good = Some(solved);
                                 self.picks.clear();
                                 self.selected.clear();
+                                if let Some(id) = input_id {
+                                    ui.memory_mut(|m| m.surrender_focus(id));
+                                }
                                 return true;
                             }
                             Err(error) => draft.error = Some(error),
@@ -1322,6 +1365,9 @@ impl SketchUi {
             self.dimension = Some(draft);
         } else {
             self.picks.clear();
+            if let Some(id) = input_id {
+                ui.memory_mut(|m| m.surrender_focus(id));
+            }
         }
         false
     }
@@ -2021,6 +2067,7 @@ mod tests {
         time: f64,
         modifiers: egui::Modifiers,
         checkpoints: usize,
+        format: u32,
     }
     impl Harness {
         fn new() -> Self {
@@ -2034,6 +2081,7 @@ mod tests {
                 time: 0.,
                 modifiers: egui::Modifiers::NONE,
                 checkpoints: 0,
+                format: 2,
             }
         }
         fn frame(&mut self, events: Vec<egui::Event>) {
@@ -2055,7 +2103,7 @@ mod tests {
             let resolved = crate::sketch::resolve(
                 &self.sketch,
                 Plane::named("Top", 0.),
-                &Numbers::new(&BTreeMap::new()).unwrap(),
+                &Numbers::for_format(&BTreeMap::new(), self.format).unwrap(),
             )
             .unwrap();
             let _ = self.ctx.run(input, |ctx| {
@@ -2074,6 +2122,7 @@ mod tests {
                             Some(&resolved),
                             Plane::named("Top", 0.),
                             &BTreeMap::new(),
+                            self.format,
                             false,
                         );
                         self.checkpoints += usize::from(edit.checkpoint);
@@ -2143,6 +2192,47 @@ mod tests {
         }
     }
     #[test]
+    fn dimension_expressions_use_document_format_and_preserve_invalid_drafts() {
+        for (format, expression) in [(2, "sqrt(81) + 2 x sin(30)"), (1, "10 * sin(PI / 2)")] {
+            let mut h = Harness::new();
+            h.format = format;
+            h.sketch.add_circle([0., 0.], 20.);
+            h.frame(vec![]);
+            h.editor.selected = vec![Selection::edge(1, 0)];
+            h.key(egui::Key::D);
+            let label = h.screen([30., 25.]);
+            h.click(label.x, label.y);
+            h.frame(vec![egui::Event::Text(expression.into())]);
+            h.key(egui::Key::Enter);
+            assert!(h.editor.dimension.is_none());
+            assert_eq!(h.sketch.constraints[0].value, expression);
+            let solved = crate::sketch::resolve(
+                &h.sketch,
+                Plane::named("Top", 0.),
+                &Numbers::for_format(&BTreeMap::new(), format).unwrap(),
+            )
+            .unwrap();
+            let radius = if h.sketch.constraints[0].kind == "Diameter" {
+                5.
+            } else {
+                10.
+            };
+            assert!(
+                (solved.entities[0].values[2] - radius).abs() < 1e-6,
+                "{format}/{expression}: {:?}",
+                solved.entities[0].values
+            );
+            let before = h.sketch.clone();
+            h.editor.edit_dimension(&h.sketch, 0);
+            h.frame(vec![]);
+            h.frame(vec![egui::Event::Text("sqrt(-1)".into())]);
+            h.key(egui::Key::Enter);
+            assert_eq!(h.sketch, before);
+            assert!(h.editor.dimension.as_ref().unwrap().error.is_some());
+            assert_eq!(h.editor.dimension.as_ref().unwrap().text, "sqrt(-1)");
+        }
+    }
+    #[test]
     fn trim_key_edits_the_exact_curve_as_one_undo_checkpoint_and_reopens() {
         let mut h = Harness::new();
         h.sketch.add_circle([0., 0.], 20.);
@@ -2170,6 +2260,117 @@ mod tests {
         assert_eq!(h.sketch, before);
     }
 
+    #[test]
+    fn q_changes_only_selected_rectangle_sides_and_restores_mixed_flags() {
+        let mut h = Harness::new();
+        h.sketch.add_rect([-20., -10.], [20., 10.]);
+        h.sketch.add_circle([60., 0.], 5.);
+        h.sketch.entities[1].construction = true;
+        h.editor.selected = vec![Selection::edge(1, 2), Selection::edge(2, 0)];
+        h.frame(vec![]);
+        let before = h.sketch.clone();
+        let checkpoints = h.checkpoints;
+        h.key(egui::Key::Q);
+        assert_eq!(h.sketch.entities.len(), 5);
+        assert_eq!(h.checkpoints, checkpoints + 1);
+        for (edge, line) in h.sketch.entities[..4].iter().enumerate() {
+            assert_eq!(line.construction, edge == 2);
+        }
+        assert!(!h.sketch.entities[4].construction);
+        let after = h.sketch.clone();
+        h.key(egui::Key::Q);
+        assert!(h.sketch.entities[..4].iter().all(|e| !e.construction));
+        assert!(h.sketch.entities[4].construction);
+        // Editor undo/redo restores complete snapshots; stale selected child IDs
+        // are pruned when undo restores the original structural rectangle.
+        h.sketch = before;
+        h.editor.cancel_gesture();
+        h.frame(vec![]);
+        assert!(
+            h.editor
+                .selected
+                .iter()
+                .all(|s| h.sketch.entities.iter().any(|e| e.id == s.entity))
+        );
+        h.sketch = after.clone();
+        h.frame(vec![]);
+        assert_eq!(
+            serde_json::from_str::<Sketch>(&serde_json::to_string(&h.sketch).unwrap()).unwrap(),
+            after
+        );
+    }
+    #[test]
+    fn center_rectangle_side_conversion_preserves_center_and_width_dimension() {
+        let mut h = Harness::new();
+        h.key(egui::Key::R);
+        let a = h.screen([0., 0.]);
+        h.click(a.x, a.y);
+        let b = h.screen([20., 10.]);
+        h.click(b.x, b.y);
+        h.key(egui::Key::Escape);
+        h.sketch.constraints.push(SketchConstraint {
+            kind: "Width".into(),
+            a: 1,
+            value: "40".into(),
+            ..Default::default()
+        });
+        h.frame(vec![]);
+        h.editor.selected = vec![Selection::edge(1, 1)];
+        h.key(egui::Key::Q);
+        assert_eq!(h.sketch.entities.len(), 6);
+        assert!(h.sketch.entities[1].construction);
+        let width = h
+            .sketch
+            .constraints
+            .iter_mut()
+            .find(|c| c.kind == "Length" && c.value == "40")
+            .unwrap();
+        width.value = "70".into();
+        let solved = crate::sketch::resolve(
+            &h.sketch,
+            Plane::named("Top", 0.),
+            &Numbers::new(&BTreeMap::new()).unwrap(),
+        )
+        .unwrap();
+        let endpoints: Vec<_> = solved.entities[..4]
+            .iter()
+            .flat_map(|e| e.control_points())
+            .collect();
+        let lo = endpoints.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min);
+        let hi = endpoints
+            .iter()
+            .map(|p| p[0])
+            .fold(f64::NEG_INFINITY, f64::max);
+        assert!(
+            (lo + hi).abs() < 1e-6,
+            "Center rectangle must remain centered: {lo}..{hi}"
+        );
+        assert!((hi - lo - 70.).abs() < 1e-6);
+    }
+    #[test]
+    fn q_creation_mode_and_dimension_cancel_release_keyboard_focus() {
+        let mut h = Harness::new();
+        h.key(egui::Key::L);
+        h.key(egui::Key::Q);
+        let a = h.screen([-20., 0.]);
+        h.click(a.x, a.y);
+        let b = h.screen([20., 0.]);
+        h.click(b.x, b.y);
+        assert!(h.sketch.entities[0].construction);
+        h.key(egui::Key::Escape);
+        h.editor.selected = vec![Selection::edge(1, 0)];
+        h.key(egui::Key::D);
+        let label = h.screen([0., -15.]);
+        h.click(label.x, label.y);
+        assert!(h.editor.dimension.is_some());
+        assert!(h.ctx.wants_keyboard_input());
+        h.key(egui::Key::Escape);
+        assert!(h.editor.dimension.is_none());
+        assert!(!h.ctx.wants_keyboard_input());
+        h.editor.selected = vec![Selection::edge(1, 0)];
+        h.key(egui::Key::Q);
+        assert!(!h.sketch.entities[0].construction);
+    }
     #[test]
     fn center_arc_draw_drag_radius_dimension_and_construction_are_native() {
         let mut h = Harness::new();

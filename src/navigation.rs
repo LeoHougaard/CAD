@@ -159,11 +159,13 @@ pub fn show(
             face_label(ui, camera, center, *f);
         }
     }
-    if response.dragged() {
+    if response.dragged() || response.drag_stopped() {
         if response.drag_started() {
             camera.pivot = model_pivot;
         }
-        camera.orbit(ui.input(|i| i.pointer.delta()));
+        if let Some(motion) = ui.input(|i| crate::render::navigation_drag(i, egui::PointerButton::Primary)) {
+            camera.orbit(motion.delta);
+        }
     } else if response.clicked()
         && let Some(direction) = hit
     {

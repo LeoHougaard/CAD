@@ -69,3 +69,11 @@ view. Switching inputs restores that input's values rather than copying the same
 selection into every compatible field. Extrude and Revolve share profile, axis
 and operation-scope resolution. Geometry operations preserve part identities and
 source provenance so later tools refer to the same analytical geometry.
+
+The follow-up adds reusable construction-plane references, exact per-edge
+construction edits and shared numeric expressions. Native input regression also
+covers frame-ordered press/move/release handling shared by Part Studio, Assembly
+and the view cube, retaining movement on the release frame and excluding pointer
+travel outside the held-button interval.
+
+Logical curve identity is separate from a sketch entity's current representation. Per-edge construction can turn a rectangle into connected lines without renaming surviving region, edge or support references. Genuine splits receive new identities. Part provenance also limits reference candidates to features that actually contributed to that part; adding an unrelated later feature must not rename an earlier face.

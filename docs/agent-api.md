@@ -50,6 +50,10 @@ Supported edits are:
 
 Parameters use their plugin's declared types. Numeric values can be numbers or expression strings. Dimensions, variables, and sketch entity values use expression strings. `set_param` cannot replace sketch geometry or feature metadata. Add a sketch through `add_feature` with a complete serialized `Sketch` in `params.geometry`. It contains `entities`, `constraints`, and `next_id`. Entity and constraint structures match `result.document` from inspect. `add_feature` also accepts its normal plane, offset, and support parameters.
 
+Sketch entities may contain optional `curve_identity` metadata. Preserve it when editing existing entities: it keeps references to the same logical curve stable when a rectangle is decomposed into connected lines for per-edge construction. New entities normally omit it; arbitrary or duplicate aliases are rejected. It does not identify a replacement curve after an actual trim or split.
+
+New Part Studio documents use `format: 2` for the shared [numeric expression language](numeric-expressions.md). Older format 1 documents retain their original radians semantics. Use the document's format when interpreting expressions. Construction-plane `plane_ref` fields use typed origin, datum or face references; see [construction planes](construction-planes.md).
+
 Fields with kind `bodies` take distinct persistent part IDs, not `@last`.
 Extrude and Revolve use an explicit `targets` scope for Add, Remove and Intersect;
 an empty scope is an error. `profile_face` is null or `{"part":"f2:0","face":"f2:end"}`.
@@ -100,7 +104,7 @@ Create an empty design, then add features with guarded apply requests:
   "path": "new-part.cadpart",
   "action": {
     "op": "create",
-    "document": {"format":1,"name":"New part","variables":{},"features":[],"rollback":null,"next_id":1}
+    "document": {"format":2,"name":"New part","variables":{},"features":[],"rollback":null,"next_id":1}
   }
 }
 ```

@@ -25,6 +25,10 @@ impl Geometry {
             _ => return Err("Sketch region selections must be an array or null".into()),
         };
         if selected.is_none()
+            && !sk
+                .entities
+                .iter()
+                .any(|e| !e.construction && e.kind == "arc")
             && let Ok(faces) = sketch::faces(&mut self.topo, sk)
         {
             return Ok(Profile {
@@ -189,100 +193,101 @@ impl Geometry {
             edges,
         })
     }
-    fn revolve_axis(&self, p: &Value, plane: &Plane) -> Result<(brepkit_math::vec::Point3, Vec3)> {
-        let (origin, direction) = if let Some(reference) =
-            p.get("axis_ref").filter(|v| !v.is_null())
-        {
-            match text(reference, "kind", "") {
-                "origin" => {
-                    let direction = match text(reference, "axis", "") {
-                        "X" => [1., 0., 0.],
-                        "Y" => [0., 1., 0.],
-                        "Z" => [0., 0., 1.],
-                        _ => return Err("Choose an origin X, Y or Z axis".into()),
-                    };
-                    (p3([0.; 3]), v3(direction))
-                }
-                "sketch_line" | "sketch_entity" => {
-                    let sk = self
-                        .sketches
-                        .get(text(reference, "sketch", ""))
-                        .ok_or("Revolve axis sketch is missing or suppressed")?;
-                    let id = reference
-                        .get("entity")
-                        .and_then(Value::as_u64)
-                        .ok_or("Choose a sketch entity identity for the revolve axis")?;
-                    let entity = sk
-                        .entities
-                        .iter()
-                        .find(|e| e.id == id)
-                        .ok_or("Revolve axis entity is missing; reselect it")?;
-                    let a = p3(sk.plane.at([entity.values[0], entity.values[1]]));
-                    match entity.kind.as_str() {
-                        "line" => {
-                            let b = p3(sk.plane.at([entity.values[2], entity.values[3]]));
-                            (a, b - a)
+    pub(super) fn resolve_in_plane_axis(
+        &self,
+        p: &Value,
+        plane: &Plane,
+    ) -> Result<(brepkit_math::vec::Point3, Vec3)> {
+        let (origin, direction) =
+            if let Some(reference) = p.get("axis_ref").filter(|v| !v.is_null()) {
+                match text(reference, "kind", "") {
+                    "origin" => {
+                        let direction = match text(reference, "axis", "") {
+                            "X" => [1., 0., 0.],
+                            "Y" => [0., 1., 0.],
+                            "Z" => [0., 0., 1.],
+                            _ => return Err("Choose an origin X, Y or Z axis".into()),
+                        };
+                        (p3([0.; 3]), v3(direction))
+                    }
+                    "sketch_line" | "sketch_entity" => {
+                        let sk = self
+                            .sketches
+                            .get(text(reference, "sketch", ""))
+                            .ok_or("Axis sketch is missing or suppressed")?;
+                        let id = reference
+                            .get("entity")
+                            .and_then(Value::as_u64)
+                            .ok_or("Choose a sketch entity identity for the axis")?;
+                        let entity = sk
+                            .entities
+                            .iter()
+                            .find(|e| e.id == id)
+                            .ok_or("Axis entity is missing; reselect it")?;
+                        let a = p3(sk.plane.at([entity.values[0], entity.values[1]]));
+                        match entity.kind.as_str() {
+                            "line" => {
+                                let b = p3(sk.plane.at([entity.values[2], entity.values[3]]));
+                                (a, b - a)
+                            }
+                            "circle" | "arc" => (a, v3(sk.plane.normal)),
+                            _ => return Err("Choose a line, circle or arc for the axis".into()),
                         }
-                        "circle" | "arc" => (a, v3(sk.plane.normal)),
-                        _ => return Err("Choose a line, circle or arc for the revolve axis".into()),
                     }
+                    "edge" => {
+                        if text(reference, "part", "").is_empty() {
+                            return Err("Choose the part containing the axis edge".into());
+                        }
+                        let i = self.target(text(reference, "part", ""))?;
+                        let key = text(reference, "edge", "");
+                        if key.is_empty() || key.contains("untracked:") {
+                            return Err("Axis requires a persistent straight-edge reference".into());
+                        }
+                        let available = self.edge_keys(self.parts[i].solid)?;
+                        let edge = self.resolve_edge_scoped(
+                            self.parts[i].solid,
+                            &self.parts[i].key,
+                            key,
+                            &available,
+                        )?;
+                        analytic_edge_axis(&self.topo, edge)?
+                            .ok_or("Axis requires a straight or circular edge")?
+                    }
+                    _ => return Err("Unknown axis reference".into()),
                 }
-                "edge" => {
-                    if text(reference, "part", "").is_empty() {
-                        return Err("Choose the part containing the revolve axis edge".into());
-                    }
-                    let i = self.target(text(reference, "part", ""))?;
-                    let key = text(reference, "edge", "");
-                    if key.is_empty() || key.contains("untracked:") {
-                        return Err(
-                            "Revolve axis requires a persistent straight-edge reference".into()
-                        );
-                    }
-                    let edges: Vec<_> = self
-                        .edge_keys(self.parts[i].solid)?
-                        .into_iter()
-                        .filter(|(_, k)| k == key)
-                        .collect();
-                    if edges.len() != 1 {
-                        return Err("Revolve axis edge is missing or ambiguous; reselect it".into());
-                    }
-                    analytic_edge_axis(&self.topo, edges[0].0)?
-                        .ok_or("Revolve axis requires a straight or circular edge")?
-                }
-                _ => return Err("Unknown revolve axis reference".into()),
-            }
-        } else {
-            let (axis, shift) = match text(p, "axis", "V") {
-                "U" => (plane.u, plane.v),
-                "V" => (plane.v, plane.u),
-                _ => return Err("Choose a sketch U or V axis".into()),
+            } else {
+                let (axis, shift) = match text(p, "axis", "V") {
+                    "U" => (plane.u, plane.v),
+                    "V" => (plane.v, plane.u),
+                    _ => return Err("Choose a sketch U or V axis".into()),
+                };
+                (
+                    p3(std::array::from_fn(|k| {
+                        plane.origin[k] + shift[k] * num(p, "axis_offset", 0.)
+                    })),
+                    v3(axis),
+                )
             };
-            (
-                p3(std::array::from_fn(|k| {
-                    plane.origin[k] + shift[k] * num(p, "axis_offset", 0.)
-                })),
-                v3(axis),
-            )
-        };
         let direction = direction
             .normalize()
-            .map_err(|_| "Revolve axis has zero length".to_owned())?;
+            .map_err(|_| "Axis has zero length".to_owned())?;
         if direction.dot(v3(plane.normal)).abs() > 1e-7
             || (origin - p3(plane.origin)).dot(v3(plane.normal)).abs() > 1e-6
         {
-            return Err("Revolve axis must lie in the profile plane".into());
+            return Err("Axis must lie in the reference plane".into());
         }
         Ok((origin, direction))
     }
     pub(super) fn execute_revolve(&mut self, f: &Feature, ordinal: usize, p: &Value) -> Result<()> {
         let profile = self.resolve_profile(p)?;
-        let (origin, axis) = self.revolve_axis(p, &profile.plane)?;
+        let (origin, axis) = self.resolve_in_plane_axis(p, &profile.plane)?;
         let angle = num(p, "angle", 360.);
         if angle <= 0. || angle > 360. {
             return Err("Revolve angle must be between 0 and 360 degrees".into());
         }
         let mut solids = vec![];
         for &face in &profile.faces {
+            self.validate_revolve_profile(face, origin, axis, &profile.plane)?;
             solids.push(
                 ops::revolve::revolve(&mut self.topo, face, origin, axis, angle.to_radians())
                     .map_err(err)?,
@@ -290,6 +295,62 @@ impl Geometry {
         }
         self.register_revolve_references(f, &profile, &solids, origin, axis, angle)?;
         self.apply_profile_solids(f, ordinal, p, solids)
+    }
+    fn validate_revolve_profile(
+        &self,
+        face: FaceId,
+        origin: brepkit_math::vec::Point3,
+        axis: Vec3,
+        plane: &Plane,
+    ) -> Result<()> {
+        // A signed Pappus volume can look plausible for a self-overlapping sweep.
+        // Test each connected profile independently, using exact arc extrema.
+        let radial = axis.cross(v3(plane.normal));
+        let mut lo = f64::INFINITY;
+        let mut hi = f64::NEG_INFINITY;
+        let mut spindle = false;
+        let mut include = |point: brepkit_math::vec::Point3| {
+            let distance = (point - origin).dot(radial);
+            lo = lo.min(distance);
+            hi = hi.max(distance);
+        };
+        for id in face_edges(&self.topo, face).map_err(err)? {
+            let edge = self.topo.edge(id).map_err(err)?;
+            let a = self.topo.vertex(edge.start()).map_err(err)?.point();
+            let b = self.topo.vertex(edge.end()).map_err(err)?.point();
+            include(a);
+            include(b);
+            match edge.curve() {
+                EdgeCurve::Line => {}
+                EdgeCurve::Circle(circle) => {
+                    let delta = circle.center() - origin;
+                    let major = (delta - axis * delta.dot(axis)).length();
+                    spindle |= major > 1e-9 && circle.radius() >= major - 1e-9;
+                    let (start, end) = edge.curve().domain_with_endpoints(a, b);
+                    for sign in [-1., 1.] {
+                        let point = circle.center() + radial * (circle.radius() * sign);
+                        let parameter = start
+                            + (circle.project(point) - start).rem_euclid(std::f64::consts::TAU);
+                        if parameter <= end + 1e-10 {
+                            include(circle.evaluate(parameter));
+                        }
+                    }
+                }
+                _ => {
+                    return Err(
+                        "Revolve profiles currently require exact straight or circular boundaries"
+                            .into(),
+                    );
+                }
+            }
+        }
+        if lo < -1e-7 && hi > 1e-7 {
+            return Err("Revolve axis crosses the interior of a selected profile. Choose an axis outside or on its boundary.".into());
+        }
+        if spindle {
+            return Err("This circular arc requires a spindle-torus surface, which is not supported precisely. Move the axis outside its source circle or through its center.".into());
+        }
+        Ok(())
     }
     fn register_revolve_references(
         &mut self,
@@ -545,6 +606,13 @@ impl Geometry {
                 }
                 self.parts[index].solid = result;
                 self.parts[index].feature = f.id.clone();
+                self.parts[index].source_features = self.contributing_sources(
+                    &targets
+                        .iter()
+                        .map(|key| self.target(key))
+                        .collect::<Result<Vec<_>>>()?,
+                    f,
+                );
                 self.parts
                     .retain(|part| part.key == first || !targets.contains(&part.key));
                 self.record_output(f, vec![first]);
@@ -593,6 +661,15 @@ impl Geometry {
         }
         Ok(selected)
     }
+    fn contributing_sources(&self, parts: &[usize], f: &Feature) -> BTreeSet<String> {
+        std::iter::once(f.id.clone())
+            .chain(
+                parts
+                    .iter()
+                    .flat_map(|&i| self.parts[i].source_features.iter().cloned()),
+            )
+            .collect()
+    }
     pub(super) fn execute_boolean(&mut self, f: &Feature, p: &Value) -> Result<()> {
         let mode = text(p, "mode", "Union");
         let tools = self.part_scope(p, "tools")?;
@@ -606,6 +683,7 @@ impl Geometry {
                 return Err("A part cannot be both a target and a tool".into());
             }
             let mut outputs = vec![];
+            let tools_sources = self.contributing_sources(&tools, f);
             for index in targets {
                 let mut solid =
                     ops::copy::copy_solid(&mut self.topo, self.parts[index].solid).map_err(err)?;
@@ -622,6 +700,9 @@ impl Geometry {
                 }
                 self.parts[index].solid = solid;
                 self.parts[index].feature = f.id.clone();
+                self.parts[index]
+                    .source_features
+                    .extend(tools_sources.iter().cloned());
                 outputs.push(self.parts[index].key.clone());
             }
             if !keep {
@@ -642,6 +723,7 @@ impl Geometry {
                 return Err("Union or Intersect requires at least two parts".into());
             }
             let first = tools[0];
+            let source_features = self.contributing_sources(&tools, f);
             let mut solid =
                 ops::copy::copy_solid(&mut self.topo, self.parts[first].solid).map_err(err)?;
             for &tool in &tools[1..] {
@@ -656,12 +738,14 @@ impl Geometry {
                     name: f.name.clone(),
                     solid,
                     feature: f.id.clone(),
+                    source_features,
                 });
                 key
             } else {
                 let key = self.parts[first].key.clone();
                 self.parts[first].solid = solid;
                 self.parts[first].feature = f.id.clone();
+                self.parts[first].source_features = source_features;
                 let remove: BTreeSet<_> = tools[1..]
                     .iter()
                     .map(|&i| self.parts[i].key.clone())

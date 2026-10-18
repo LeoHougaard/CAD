@@ -1,4 +1,5 @@
 //! Native geometry execution. This module knows operations, never feature types.
+mod construction_planes;
 mod edge_setback;
 mod feature_controls;
 mod sweep_loft;
@@ -80,12 +81,15 @@ pub struct Part {
     pub name: String,
     pub solid: SolidId,
     pub feature: String,
+    /// Only actual contributors may supply persistent geometric references.
+    pub source_features: BTreeSet<String>,
 }
 #[derive(Clone)]
 pub struct Geometry {
     pub topo: Topology,
     pub parts: Vec<Part>,
     pub sketches: BTreeMap<String, ResolvedSketch>,
+    pub planes: BTreeMap<String, Plane>,
     pub anchors: Vec<(String, Plane)>,
     pub outputs: BTreeMap<String, Vec<String>>,
     edge_anchors: Vec<EdgeAnchor>,
@@ -96,6 +100,7 @@ impl Default for Geometry {
             topo: Topology::new(),
             parts: vec![],
             sketches: BTreeMap::new(),
+            planes: BTreeMap::new(),
             anchors: vec![],
             outputs: BTreeMap::new(),
             edge_anchors: vec![],
@@ -192,6 +197,7 @@ pub struct FeatureStatus {
 pub struct Scene {
     pub meshes: Vec<MeshView>,
     pub sketches: BTreeMap<String, ResolvedSketch>,
+    pub planes: BTreeMap<String, Plane>,
     /// Computed by the geometry worker, never by pointer-hover rendering.
     pub regions: BTreeMap<String, Vec<sketch::ResolvedRegion>>,
     pub statuses: Vec<FeatureStatus>,
@@ -207,6 +213,7 @@ pub struct Runtime {
 struct Checkpoint {
     prefix: Vec<Feature>,
     variables: BTreeMap<String, String>,
+    format: u32,
     geometry: Geometry,
     statuses: Vec<FeatureStatus>,
 }
@@ -228,7 +235,7 @@ impl Runtime {
     pub fn evaluate(&mut self, document: &Document) -> Result<Evaluation> {
         let clock = Instant::now();
         document.validate()?;
-        let numbers = Numbers::new(&document.variables)?;
+        let numbers = Numbers::for_document(document)?;
         let end = document
             .rollback
             .unwrap_or(document.features.len())
@@ -238,6 +245,7 @@ impl Runtime {
         let mut start = 0;
         if let Some(c) = &self.checkpoint
             && c.variables == document.variables
+            && c.format == document.format
             && c.prefix.len() <= end
             && document.features[..c.prefix.len()] == c.prefix
         {
@@ -255,6 +263,7 @@ impl Runtime {
                 self.checkpoint = Some(Checkpoint {
                     prefix: document.features[..index].to_vec(),
                     variables: document.variables.clone(),
+                    format: document.format,
                     geometry: geometry.clone(),
                     statuses: statuses.clone(),
                 });
@@ -313,6 +322,7 @@ impl Runtime {
                     geometry.anchors.truncate(anchors_before);
                     geometry.edge_anchors.truncate(edge_anchors_before);
                     geometry.sketches.remove(&feature.id);
+                    geometry.planes.remove(&feature.id);
                     geometry.outputs.remove(&feature.id);
                 }
                 result
@@ -384,6 +394,7 @@ impl Geometry {
                 name: f.name.clone(),
                 solid,
                 feature: f.id.clone(),
+                source_features: BTreeSet::from([f.id.clone()]),
             });
             self.outputs.entry(f.id.clone()).or_default().push(key);
         } else {
@@ -399,6 +410,7 @@ impl Geometry {
             let result = ops::boolean::boolean(&mut self.topo, op, base, solid).map_err(err)?;
             self.parts[i].solid = result;
             self.parts[i].feature = f.id.clone();
+            self.parts[i].source_features.insert(f.id.clone());
             self.record_output(f, vec![self.parts[i].key.clone()]);
         }
         Ok(())
@@ -412,6 +424,9 @@ impl Geometry {
             return Ok(plane.shifted(offset));
         }
         let support = text(p, "support", "");
+        if let Some(plane) = self.planes.get(support) {
+            return Ok(plane.shifted(offset));
+        }
         if support.is_empty() {
             return Ok(Plane::named(text(p, "plane", "Top"), offset));
         }
@@ -541,6 +556,7 @@ impl Geometry {
     fn execute(&mut self, f: &Feature, ordinal: usize, p: &Value, numbers: &Numbers) -> Result<()> {
         let op = text(p, "op", "");
         match op {
+            "plane" => self.execute_plane(f, p)?,
             "boolean" => self.execute_boolean(f, p)?,
             "sweep" => self.execute_sweep(f, ordinal, p)?,
             "loft" => self.execute_loft(f, ordinal, p)?,
@@ -603,17 +619,7 @@ impl Geometry {
                     solid_edges(&self.topo, solid).map_err(err)?
                 } else {
                     keys.iter()
-                        .map(|k| {
-                            let hits: Vec<_> =
-                                available.iter().filter(|(_, key)| key == k).collect();
-                            if hits.len() != 1 {
-                                return Err(format!(
-                                    "Edge reference '{k}' resolves to {} edges. Reselect it.",
-                                    hits.len()
-                                ));
-                            }
-                            Ok(hits[0].0)
-                        })
+                        .map(|k| self.resolve_edge_scoped(solid, &self.parts[i].key, k, &available))
                         .collect::<Result<Vec<_>>>()?
                 };
                 // The polygon chamfer handles planar corner junctions directly. The
@@ -643,9 +649,12 @@ impl Geometry {
                 {
                     ops::chamfer::chamfer(&mut self.topo, solid, &edges, num(p, "distance", 2.))
                 } else {
-                    if let Some(result) =
-                        self.prismatic_chamfer(solid, &edges, num(p, "distance", 2.))?
-                    {
+                    if let Some(result) = self.prismatic_chamfer(
+                        solid,
+                        &edges,
+                        num(p, "distance", 2.),
+                        &self.parts[i].key.clone(),
+                    )? {
                         Ok(result)
                     } else {
                         ops::blend_ops::chamfer_v2(
@@ -661,6 +670,7 @@ impl Geometry {
                 .map_err(err)?;
                 self.parts[i].solid = result;
                 self.parts[i].feature = f.id.clone();
+                self.parts[i].source_features.insert(f.id.clone());
                 self.record_output(f, vec![self.parts[i].key.clone()]);
             }
             "shell" => {
@@ -700,11 +710,14 @@ impl Geometry {
                         .map_err(err)?;
                 self.parts[i].solid = result;
                 self.parts[i].feature = f.id.clone();
+                self.parts[i].source_features.insert(f.id.clone());
                 self.record_output(f, vec![self.parts[i].key.clone()]);
             }
             "mirror" | "pattern" | "transform" => {
                 let i = self.target(text(p, "target", ""))?;
                 let original = self.parts[i].clone();
+                let mut source_features = original.source_features.clone();
+                source_features.insert(f.id.clone());
                 let mut produced = vec![];
                 if op == "mirror" {
                     let plane = Plane::named(text(p, "plane", "Right"), num(p, "offset", 0.));
@@ -722,10 +735,12 @@ impl Geometry {
                             name: f.name.clone(),
                             solid: result,
                             feature: f.id.clone(),
+                            source_features: source_features.clone(),
                         });
                         produced.push(key);
                     } else {
                         self.parts[i].solid = result;
+                        self.parts[i].source_features = source_features.clone();
                         produced.push(original.key);
                     }
                 } else if op == "pattern" {
@@ -762,6 +777,7 @@ impl Geometry {
                             name: format!("{} {}", original.name, n + 1),
                             solid: result,
                             feature: f.id.clone(),
+                            source_features: source_features.clone(),
                         });
                         produced.push(key);
                     }
@@ -781,10 +797,12 @@ impl Geometry {
                             name: f.name.clone(),
                             solid: result,
                             feature: f.id.clone(),
+                            source_features: source_features.clone(),
                         });
                         produced.push(key);
                     } else {
                         self.parts[i].solid = result;
+                        self.parts[i].source_features = source_features;
                         produced.push(original.key);
                     }
                 }
@@ -812,6 +830,11 @@ impl Geometry {
         owner: Option<&str>,
     ) -> Result<Vec<(FaceId, String)>> {
         let prefix = owner.map(|key| format!("{}:", key.split(':').next().unwrap_or(key)));
+        let sources = owner
+            .and_then(|key| self.parts.iter().find(|part| part.key == key))
+            .map(|part| &part.source_features);
+        let allowed =
+            |key: &str| sources.is_some_and(|s| s.contains(key.split(':').next().unwrap_or(key)));
         solid_faces(&self.topo, solid)
             .map_err(err)?
             .into_iter()
@@ -821,7 +844,7 @@ impl Geometry {
                     FaceSurface::Plane { normal, d } => self
                         .anchors
                         .iter()
-                        .filter(|(_, p)| plane_matches(p, *normal, *d))
+                        .filter(|(key, p)| allowed(key) && plane_matches(p, *normal, *d))
                         .min_by_key(|(key, _)| {
                             usize::from(!prefix.as_ref().is_some_and(|p| key.starts_with(p)))
                         })
@@ -840,6 +863,7 @@ impl Geometry {
                         for edge in face_edges(&self.topo, id).map_err(err)? {
                             for anchor in &self.edge_anchors {
                                 if let Some(side) = &anchor.side
+                                    && allowed(side)
                                     && anchor.matches(&self.topo, edge)
                                 {
                                     sources.insert(side.clone());
@@ -874,12 +898,49 @@ impl Geometry {
             .map(|p| p.key.as_str());
         self.edge_keys_scoped(solid, owner)
     }
+    fn resolve_edge_scoped(
+        &self,
+        solid: SolidId,
+        owner: &str,
+        key: &str,
+        available: &[(EdgeId, String)],
+    ) -> Result<EdgeId> {
+        let mut hits: BTreeSet<_> = available
+            .iter()
+            .filter(|(_, k)| k == key)
+            .map(|(id, _)| *id)
+            .collect();
+        // A formerly untracked adjacent face may acquire its correct source name.
+        // Retain old explicit source-edge aliases, bounded by the same contributors.
+        if hits.is_empty() && !key.contains("untracked:") {
+            let sources = &self.parts[self.target(owner)?].source_features;
+            for anchor in self.edge_anchors.iter().filter(|a| {
+                a.key == key && sources.contains(a.key.split(':').next().unwrap_or(&a.key))
+            }) {
+                for id in solid_edges(&self.topo, solid).map_err(err)? {
+                    if anchor.matches(&self.topo, id) {
+                        hits.insert(id);
+                    }
+                }
+            }
+        }
+        if hits.len() != 1 {
+            return Err(format!(
+                "Edge reference '{key}' resolves to {} edges. Reselect it.",
+                hits.len()
+            ));
+        }
+        Ok(*hits.first().unwrap())
+    }
     fn edge_keys_scoped(
         &self,
         solid: SolidId,
         owner: Option<&str>,
     ) -> Result<Vec<(EdgeId, String)>> {
         let faces = self.face_keys_scoped(solid, owner)?;
+        let sources = owner
+            .and_then(|key| self.parts.iter().find(|part| part.key == key))
+            .map(|part| &part.source_features);
         let mut adjacent: HashMap<EdgeId, Vec<String>> = HashMap::new();
         for (id, key) in faces {
             for edge in face_edges(&self.topo, id).map_err(err)? {
@@ -907,6 +968,11 @@ impl Geometry {
                     let anchors: BTreeSet<_> = self
                         .edge_anchors
                         .iter()
+                        .filter(|a| {
+                            sources.is_some_and(|s| {
+                                s.contains(a.key.split(':').next().unwrap_or(&a.key))
+                            })
+                        })
                         .filter(|a| a.matches(&self.topo, edge))
                         .map(|a| a.key.clone())
                         .collect();
@@ -924,6 +990,7 @@ impl Geometry {
     pub fn scene(&self) -> Result<Scene> {
         let mut scene = Scene {
             sketches: self.sketches.clone(),
+            planes: self.planes.clone(),
             regions: self
                 .sketches
                 .iter()

@@ -16,12 +16,13 @@ mod regions;
 mod trim;
 pub(crate) use regions::{RegionEdge, profile_for_regions, region_edges};
 pub use regions::{ResolvedRegion, TrimPiece, faces_for_regions, regions, trim_entity};
-pub use trim::{TrimEdit, apply_trim};
+pub use trim::{TrimEdit, apply_trim, set_construction};
 
 #[derive(Clone, Debug)]
 pub struct ResolvedEntity {
     pub id: u64,
     pub kind: String,
+    pub curve_identity: Option<String>,
     pub values: Vec<f64>,
     pub construction: bool,
     pub fixed: bool,
@@ -61,6 +62,10 @@ pub fn arc_geometry(values: &[f64]) -> Result<ArcGeometry> {
     })
 }
 impl ResolvedEntity {
+    pub fn curve_key(&self, edge: usize) -> String {
+        self.curve_identity.clone().unwrap_or_else(|| crate::model::curve_key(&self.kind, self.id, edge))
+    }
+
     pub fn control_points(&self) -> Vec<[f64; 2]> {
         match self.kind.as_str() {
             "rectangle" => self.points().into_iter().take(4).collect(),
@@ -179,6 +184,7 @@ pub fn resolve_with_targets(
     if sketch.entities.len() > 1000 {
         return Err("Sketch exceeds 1000 entities".into());
     }
+    sketch.validate_curve_identities()?;
     let mut entities = Vec::new();
     let mut seen = BTreeSet::new();
     for entity in &sketch.entities {
@@ -213,6 +219,7 @@ pub fn resolve_with_targets(
         entities.push(ResolvedEntity {
             id: entity.id,
             kind: entity.kind.clone(),
+            curve_identity: entity.curve_identity.clone(),
             values,
             construction: entity.construction,
             fixed: false,
@@ -908,6 +915,7 @@ pub fn entity_from_values(id: u64, kind: &str, values: &[f64]) -> Entity {
     Entity {
         id,
         kind: kind.into(),
+        curve_identity: None,
         values: values.iter().map(|v| crate::model::fmt(*v)).collect(),
         construction: false,
     }
