@@ -159,7 +159,7 @@ lineage. The signature excludes coordinates and arena allocation order. If the
 known lineage still cannot distinguish patches, the operation requires a repaired
 reference instead of choosing one by proximity.
 
-The frozen application source for this pass is
+The first frozen application source for this pass was
 `18f32bddacc3762f007bbac17e83c962c2a6d4858121a450c552a700c41cf4d6`.
 Windows passed 438 checks with no failures or ignored tests, strict all-target
 Clippy, and the build without desktop features. The ten-project timing table is
@@ -174,3 +174,10 @@ restored 99.9991% of the viewport pixels. That interaction run used source
 build's geometry checks. Physical SpaceMouse feel and direct hands-on Onshape
 comparison remain unverified. Tangent-chain fillet propagation, curved-path
 U-bolts, guided lofts, and the fused-loft through-bore case remain unsupported.
+
+Testing the updated kernel with the saved problem part exposed a further editor
+transition failure. A history double-click could open an editor and then route
+the preceding workspace selection into its inputs. History routing now finishes
+before the editor opens. When the source scene arrives, selection is projected
+again from the saved input values, including edges consumed by a blend or faces
+removed by Shell. The input values remain authoritative throughout the rebuild.

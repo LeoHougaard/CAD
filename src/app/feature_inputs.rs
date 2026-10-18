@@ -860,12 +860,16 @@ impl CadApp {
 
     pub(super) fn restore_feature_selection(&mut self) {
         let Some(edit) = &self.editor else { return };
-        let Some(field) = input(edit, &self.registry) else {
-            return;
-        };
-        self.selection.clear();
-        let value = &edit.feature.params[&field.key];
         let scene = self.source_scene.as_ref().unwrap_or(&self.scene);
+        if let Some(selection) = Self::selection_from_input(edit, &self.registry, scene) {
+            self.selection = selection;
+        }
+    }
+
+    fn selection_from_input(edit: &Editor, registry: &Registry, scene: &Scene) -> Option<Selection> {
+        let field = input(edit, registry)?;
+        let mut selection = Selection::default();
+        let value = &edit.feature.params[&field.key];
         let strings = || {
             value
                 .as_array()
@@ -877,38 +881,38 @@ impl CadApp {
             "profiles" => {
                 for profile in expanded_profiles(field_profiles(&edit.feature.params, field).unwrap_or_default(), scene) {
                     match profile {
-                        ProfileReference::Region { sketch, region } => self.selection.add(Target::Region { sketch, key: region }),
-                        ProfileReference::Face { part, face } => self.selection.add(Target::Face { part, key: face }),
-                        ProfileReference::Sketch { sketch } => self.selection.add(Target::Feature(sketch)),
+                        ProfileReference::Region { sketch, region } => selection.add(Target::Region { sketch, key: region }),
+                        ProfileReference::Face { part, face } => selection.add(Target::Face { part, key: face }),
+                        ProfileReference::Sketch { sketch } => selection.add(Target::Feature(sketch)),
                     }
                 }
             }
             "body" => {
                 if let Some(part) = value.as_str().filter(|s| !s.is_empty()) {
-                    self.selection.add(Target::Part(part.into()));
+                    selection.add(Target::Part(part.into()));
                 }
             }
             "bodies" => {
                 for part in strings() {
-                    self.selection.add(Target::Part(part.into()));
+                    selection.add(Target::Part(part.into()));
                 }
             }
             "plane_ref" => match value["kind"].as_str() {
                 Some("origin") => {
                     if let Some(name) = value["plane"].as_str() {
-                        self.selection.add(Target::Plane(name.into()));
+                        selection.add(Target::Plane(name.into()));
                     }
                 }
                 Some("datum") => {
                     if let Some(id) = value["feature"].as_str() {
-                        self.selection.add(Target::Plane(id.into()));
+                        selection.add(Target::Plane(id.into()));
                     }
                 }
                 Some("face") => {
                     if let (Some(part), Some(key)) =
                         (value["part"].as_str(), value["face"].as_str())
                     {
-                        self.selection.add(Target::Face {
+                        selection.add(Target::Face {
                             part: part.into(),
                             key: key.into(),
                         });
@@ -918,7 +922,7 @@ impl CadApp {
             },
             "profile_face" => {
                 if let (Some(part), Some(key)) = (value["part"].as_str(), value["face"].as_str()) {
-                    self.selection.add(Target::Face {
+                    selection.add(Target::Face {
                         part: part.into(),
                         key: key.into(),
                     });
@@ -929,17 +933,17 @@ impl CadApp {
                     && let (Some(part), Some(key)) =
                         (value["part"].as_str(), value["edge"].as_str())
                 {
-                    self.selection.add(Target::Edge {
+                    selection.add(Target::Edge {
                         part: part.into(),
                         key: key.into(),
                     });
                 } else if matches!(value["kind"].as_str(), Some("sketch_line" | "sketch_entity"))
                     && let (Some(sketch),Some(entity)) = (value["sketch"].as_str(),value["entity"].as_u64()) {
-                    self.selection.add(Target::SketchEntity {sketch:sketch.into(),entity,edge:value["edge"].as_u64().unwrap_or(0) as usize});
+                    selection.add(Target::SketchEntity {sketch:sketch.into(),entity,edge:value["edge"].as_u64().unwrap_or(0) as usize});
                 }
             }
-            "sketch" => { if let Some(id) = value.as_str().filter(|id|!id.is_empty()) { self.selection.add(Target::Feature(id.into())); } }
-            "sketches" => { for id in strings() { self.selection.add(Target::Feature(id.into())); } }
+            "sketch" => { if let Some(id) = value.as_str().filter(|id|!id.is_empty()) { selection.add(Target::Feature(id.into())); } }
+            "sketches" => { for id in strings() { selection.add(Target::Feature(id.into())); } }
             "regions" => {
                 let sketch = edit.feature.params["sketch"].as_str().unwrap_or_default();
                 if let Some(regions) = scene.regions.get(sketch) {
@@ -948,7 +952,7 @@ impl CadApp {
                             a.iter().any(|v| v.as_str().is_some_and(|key| reference_matches(key, &r.key)))
                         })
                     }) {
-                        self.selection.add(Target::Region {
+                        selection.add(Target::Region {
                             sketch: sketch.into(),
                             key: r.key.clone(),
                         });
@@ -959,12 +963,12 @@ impl CadApp {
                 for mesh in &scene.meshes {
                     for key in strings() {
                         if field.kind == "edges" && mesh.edges.iter().any(|e| reference_matches(&e.key, key)) {
-                            self.selection.add(Target::Edge {
+                            selection.add(Target::Edge {
                                 part: mesh.part.clone(),
                                 key: key.into(),
                             });
                         } else if field.kind == "faces" && mesh.faces.iter().any(|f| reference_matches(&f.key, key)) {
-                            self.selection.add(Target::Face {
+                            selection.add(Target::Face {
                                 part: mesh.part.clone(),
                                 key: key.into(),
                             });
@@ -974,9 +978,8 @@ impl CadApp {
             }
             _ => (),
         }
+        Some(selection)
     }
-
-
 }
 
 #[cfg(test)]
@@ -1216,6 +1219,35 @@ mod tests {
             edit.feature.params["targets"] = json!(["f2:0"]);
             assert_eq!(missing(&edit,&registry),None);
             edit.feature.params["targets"] = json!([]);
+        }
+    }
+    #[test]
+    fn saved_inputs_are_reprojected_from_the_source_scene_without_mutating_references() {
+        let (mut document, source, _, registry) = profile_scene();
+        let mesh = &source.meshes[0];
+        for (plugin, key, kind, reference, expected) in [
+            ("fillet", "edges", "edges", mesh.edges[0].key.clone(),
+                Target::Edge { part: mesh.part.clone(), key: mesh.edges[0].key.clone() }),
+            ("chamfer", "edges", "edges", mesh.edges[0].key.clone(),
+                Target::Edge { part: mesh.part.clone(), key: mesh.edges[0].key.clone() }),
+            ("shell", "faces", "faces", mesh.faces[0].key.clone(),
+                Target::Face { part: mesh.part.clone(), key: mesh.faces[0].key.clone() }),
+        ] {
+            let mut feature = registry.create(plugin, &mut document).unwrap();
+            feature.params["target"] = json!(mesh.part);
+            feature.params[key] = json!([reference]);
+            let mut edit = profile_editor(feature);
+            edit.input_field = Some(key.into());
+            let saved = edit.feature.params.clone();
+            // An edited result can consume the selected topology. An empty
+            // projection is display state, never a replacement for saved input.
+            let stale = CadApp::selection_from_input(&edit, &registry, &Scene::default()).unwrap();
+            assert!(stale.items().is_empty());
+            assert_eq!(edit.feature.params, saved);
+            let restored = CadApp::selection_from_input(&edit, &registry, &source).unwrap();
+            assert_eq!(restored.items(), &[expected]);
+            apply_selection(&mut edit.feature.params, &field(key, kind), restored.items(), &source);
+            assert_eq!(edit.feature.params, saved, "Restored inputs round-trip after the prefix arrives");
         }
     }
     fn field(key: &str, kind: &str) -> Field {

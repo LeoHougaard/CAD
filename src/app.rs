@@ -1302,6 +1302,9 @@ impl CadApp {
                                 }
                                 Target::SketchEntity { sketch, entity, .. } => visible_scene.sketches.get(sketch).is_some_and(|s| s.entities.iter().any(|e| e.id == *entity)),
                             });
+                            // The source prefix may contain inputs consumed by
+                            // the edited feature and absent from its result.
+                            if self.editor.is_some() { self.sync_selection_from_editor(); }
                             self.render_revision += 1;
                         }
                         Err(e) => {
@@ -1899,6 +1902,7 @@ impl CadApp {
             return;
         }
         let mut selection_changed = false;
+        let mut open_edit = None;
         egui::SidePanel::left("feature_tree")
             .default_width(188.)
             .width_range(150. ..=340.)
@@ -1939,7 +1943,6 @@ impl CadApp {
                         }
                     });
                 let mut command = None;
-                let mut open_edit = None;
                 let mut moved = None;
                 egui::ScrollArea::vertical()
                     .id_salt("history_scroll")
@@ -2084,9 +2087,6 @@ impl CadApp {
                         }
                     });
                 if self.editor.is_none() {
-                    if let Some(i) = open_edit {
-                        self.edit_feature(i);
-                    }
                     if let Some((i, c)) = command {
                         let before = self.document.clone();
                         match c {
@@ -2191,6 +2191,11 @@ impl CadApp {
                     });
             });
         if selection_changed { self.sync_selection_to_editor(ctx); }
+        // A history click belongs to the current workspace, before the new
+        // editor projects its authoritative inputs into selection.
+        if self.editor.is_none() && let Some(index) = open_edit {
+            self.edit_feature(index);
+        }
     }
 
     fn inspector(&mut self, ctx: &egui::Context) {
