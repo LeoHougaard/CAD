@@ -1,0 +1,12 @@
+{
+  "actual_volume_mm3": 6632.820963120129,
+  "all_sketches_zero_dof": true,
+  "case": "circular-annular-edited",
+  "document_roundtrip_verified": true,
+  "expected_volume_mm3": 6632.374157532048,
+  "faces": 32,
+  "mass_measurement": "numerical torus volume estimate; exact geometry checked independently",
+  "mass_relative_tolerance": 0.0001,
+  "step_roundtrip_verified": true,
+  "topology_and_closed_mesh_verified": true
+}

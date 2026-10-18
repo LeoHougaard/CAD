@@ -1,0 +1,31 @@
+{
+  "adaptations": [
+    "Part 1 base uses connected lines because rectangle trim is unavailable",
+    "Both cut-end offsets share one driving margin variable instead of two separate edge dimensions"
+  ],
+  "author": "Matthew Jourden, Brighton High School",
+  "checks": [
+    "all sketches zero DOF",
+    "tracked riser and outer-wall supports",
+    "cut depth 1in",
+    "cut width edit 2in to 3in",
+    "1 cubic inch boss fused into one part",
+    "parent width edit moves both supports",
+    "analytic volumes",
+    "valid B-rep and closed oriented mesh",
+    "save/load and fresh rebuild"
+  ],
+  "diagram_interpretation": "Page 6 boss bottom and end edges are coincident with supporting face edges. Its 1-by-1-inch profile projects outward by 1 inch.",
+  "pages": "2-7",
+  "result": "passed",
+  "source": "https://resources.finalsite.net/images/v1722986235/brightonk12com/bg0jjfkr34hujkzkp4oq/tutorialextrudepartadd_cutmaterial.pdf",
+  "step_roundtrip_verified": true,
+  "tutorial": "OnShape: Extrude Part 2 Adding Material and Cutting Material",
+  "verification": "Rust engine integration test; native UI workflow not tested here",
+  "volumes_mm3": {
+    "completed": 520289.28199999995,
+    "initial_cut": 516192.51599999995,
+    "parent_width_edit": 618611.666,
+    "widened_cut": 503902.21799999994
+  }
+}

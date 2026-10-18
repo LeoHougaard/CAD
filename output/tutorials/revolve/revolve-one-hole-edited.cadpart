@@ -1,0 +1,755 @@
+{
+  "format": 1,
+  "name": "Jourden revolve profile",
+  "variables": {
+    "bolt_circle": "2.75*inch",
+    "center_diameter": "1.75*inch",
+    "hole_diameter": "0.375*inch"
+  },
+  "features": [
+    {
+      "id": "f1",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Revolve Profile",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Horizontal",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": ""
+            },
+            {
+              "a": 2,
+              "b": 1,
+              "kind": "Coincident",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0:1"
+            },
+            {
+              "a": 2,
+              "b": 0,
+              "kind": "Vertical",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": ""
+            },
+            {
+              "a": 3,
+              "b": 2,
+              "kind": "Coincident",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0:1"
+            },
+            {
+              "a": 3,
+              "b": 0,
+              "kind": "Horizontal",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": ""
+            },
+            {
+              "a": 4,
+              "b": 3,
+              "kind": "Coincident",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0:1"
+            },
+            {
+              "a": 4,
+              "b": 0,
+              "kind": "Vertical",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": ""
+            },
+            {
+              "a": 5,
+              "b": 4,
+              "kind": "Coincident",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0:1"
+            },
+            {
+              "a": 5,
+              "b": 0,
+              "kind": "Horizontal",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": ""
+            },
+            {
+              "a": 6,
+              "b": 5,
+              "kind": "Coincident",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0:1"
+            },
+            {
+              "a": 6,
+              "b": 0,
+              "kind": "Vertical",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": ""
+            },
+            {
+              "a": 7,
+              "b": 6,
+              "kind": "Coincident",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0:1"
+            },
+            {
+              "a": 7,
+              "b": 0,
+              "kind": "Horizontal",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": ""
+            },
+            {
+              "a": 8,
+              "b": 7,
+              "kind": "Coincident",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0:1"
+            },
+            {
+              "a": 8,
+              "b": 0,
+              "kind": "Vertical",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": ""
+            },
+            {
+              "a": 9,
+              "b": 8,
+              "kind": "Coincident",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0:1"
+            },
+            {
+              "a": 9,
+              "b": 0,
+              "kind": "Horizontal",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": ""
+            },
+            {
+              "a": 10,
+              "b": 1,
+              "kind": "Coincident",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "1:0"
+            },
+            {
+              "a": 10,
+              "b": 9,
+              "kind": "Coincident",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0:1"
+            },
+            {
+              "a": 10,
+              "b": 0,
+              "kind": "Vertical",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": ""
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0"
+            },
+            {
+              "a": 2,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "4*inch/2"
+            },
+            {
+              "a": 4,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "5*inch/2"
+            },
+            {
+              "a": 7,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "center_diameter/2"
+            },
+            {
+              "a": 9,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0.5*inch/2"
+            },
+            {
+              "a": 3,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0.5*inch"
+            },
+            {
+              "a": 6,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "1*inch"
+            },
+            {
+              "a": 8,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "2*inch"
+            },
+            {
+              "a": 10,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "(2-0.75)*inch"
+            },
+            {
+              "a": 11,
+              "b": 0,
+              "kind": "Fix",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": ""
+            }
+          ],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "line",
+              "values": [
+                "0",
+                "12.7",
+                "50.8",
+                "12.7"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 2,
+              "kind": "line",
+              "values": [
+                "50.8",
+                "12.7",
+                "50.8",
+                "0"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 3,
+              "kind": "line",
+              "values": [
+                "50.8",
+                "0",
+                "63.5",
+                "0"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 4,
+              "kind": "line",
+              "values": [
+                "63.5",
+                "0",
+                "63.5",
+                "25.4"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 5,
+              "kind": "line",
+              "values": [
+                "63.5",
+                "25.4",
+                "22.225",
+                "25.4"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 6,
+              "kind": "line",
+              "values": [
+                "22.225",
+                "25.4",
+                "22.225",
+                "50.8"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 7,
+              "kind": "line",
+              "values": [
+                "22.225",
+                "50.8",
+                "6.35",
+                "50.8"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 8,
+              "kind": "line",
+              "values": [
+                "6.35",
+                "50.8",
+                "6.35",
+                "31.75"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 9,
+              "kind": "line",
+              "values": [
+                "6.35",
+                "31.75",
+                "0",
+                "31.75"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 10,
+              "kind": "line",
+              "values": [
+                "0",
+                "31.75",
+                "0",
+                "12.7"
+              ]
+            },
+            {
+              "construction": true,
+              "id": 11,
+              "kind": "line",
+              "values": [
+                "0",
+                "-12.7",
+                "0",
+                "63.5"
+              ]
+            }
+          ],
+          "next_id": 11
+        },
+        "offset": "0",
+        "plane": "Front",
+        "support": ""
+      }
+    },
+    {
+      "id": "f2",
+      "plugin": "revolve",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "967fd7d645e4df99",
+      "name": "Revolve 1",
+      "suppressed": false,
+      "params": {
+        "angle": "360",
+        "axis": "V",
+        "axis_offset": "0",
+        "mode": "New",
+        "sketch": "f1",
+        "target": ""
+      }
+    },
+    {
+      "id": "f3",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Bolt Holes",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Origin",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": ""
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Diameter",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "bolt_circle"
+            },
+            {
+              "a": 2,
+              "b": 0,
+              "kind": "Fix",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": ""
+            },
+            {
+              "a": 3,
+              "b": 1,
+              "kind": "PointOnCircle",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": ""
+            },
+            {
+              "a": 3,
+              "b": 2,
+              "kind": "PointOnLine",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": ""
+            },
+            {
+              "a": 3,
+              "b": 0,
+              "kind": "Diameter",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "hole_diameter"
+            }
+          ],
+          "entities": [
+            {
+              "construction": true,
+              "id": 1,
+              "kind": "circle",
+              "values": [
+                "0",
+                "0",
+                "38.1"
+              ]
+            },
+            {
+              "construction": true,
+              "id": 2,
+              "kind": "line",
+              "values": [
+                "0",
+                "0",
+                "0",
+                "50.8"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 3,
+              "kind": "circle",
+              "values": [
+                "0",
+                "38.1",
+                "6.35"
+              ]
+            }
+          ],
+          "next_id": 3
+        },
+        "offset": "1*inch",
+        "plane": "Top",
+        "support": ""
+      }
+    },
+    {
+      "id": "f4",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Bolt Hole Cut",
+      "suppressed": false,
+      "params": {
+        "depth": "0.5*inch",
+        "mode": "Remove",
+        "reverse": true,
+        "sketch": "f3",
+        "symmetric": false,
+        "target": ""
+      }
+    }
+  ],
+  "rollback": null,
+  "next_id": 5
+}

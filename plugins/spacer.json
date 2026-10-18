@@ -1,0 +1,29 @@
+{
+  "id": "spacer",
+  "name": "Spacer",
+  "version": "1.0.0",
+  "category": "feature",
+  "editor": "",
+  "script": "spacer.rhai",
+  "fields": [
+    {
+      "key": "outer",
+      "label": "Outer radius",
+      "kind": "number",
+      "default": "10"
+    },
+    {
+      "key": "inner",
+      "label": "Bore radius",
+      "kind": "number",
+      "default": "4"
+    },
+    {
+      "key": "height",
+      "label": "Height",
+      "kind": "number",
+      "default": "12"
+    }
+  ],
+  "description": "Example user feature: an exact parametric spacer, assembled by a script from native Rust operations."
+}

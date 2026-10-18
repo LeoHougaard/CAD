@@ -1,0 +1,34 @@
+{
+  "verifier": "Gmsh/Open CASCADE, independent of app kernel",
+  "result": "passed",
+  "cases": [
+    {
+      "file": "initial-cut.step",
+      "solids": 1,
+      "faces": 12,
+      "volume_mm3": 516192.5159999999,
+      "expected_mm3": 516192.51599999995
+    },
+    {
+      "file": "widened-cut.step",
+      "solids": 1,
+      "faces": 12,
+      "volume_mm3": 503902.218,
+      "expected_mm3": 503902.21799999994
+    },
+    {
+      "file": "completed-add-cut.step",
+      "solids": 1,
+      "faces": 17,
+      "volume_mm3": 520289.28200000006,
+      "expected_mm3": 520289.28199999995
+    },
+    {
+      "file": "parent-width-edit.step",
+      "solids": 1,
+      "faces": 17,
+      "volume_mm3": 618611.6659999997,
+      "expected_mm3": 618611.666
+    }
+  ]
+}

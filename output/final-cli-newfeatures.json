@@ -1,0 +1,33 @@
+{
+  "platform": "native Debian ARM64 on Pixel 10",
+  "inspect": [
+    {
+      "path": "examples/loft-reducer.cadpart",
+      "parts": 1,
+      "volume_mm3": 6838.200009313779,
+      "error": null
+    },
+    {
+      "path": "examples/sweep-elbow.cadpart",
+      "parts": 1,
+      "volume_mm3": 400.0,
+      "error": null
+    },
+    {
+      "path": "examples/sweep-circular-tube.cadpart",
+      "parts": 1,
+      "volume_mm3": 3158.353195060752,
+      "error": null
+    }
+  ],
+  "actual_loft_array_edit_preview": {
+    "ok": true,
+    "profiles": [
+      "f3",
+      "f2",
+      "f1"
+    ],
+    "source_bytes_preserved": true,
+    "volume_preserved": true
+  }
+}

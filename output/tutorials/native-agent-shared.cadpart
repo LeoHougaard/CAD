@@ -1,0 +1,121 @@
+{
+  "format": 1,
+  "name": "Untitled",
+  "variables": {},
+  "features": [
+    {
+      "id": "f1",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Sketch 1",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Width",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": [
+                -0.38690504848671026,
+                -7.738094731933593
+              ],
+              "reference": false,
+              "relative_position": true,
+              "value": "40"
+            },
+            {
+              "a": 1,
+              "b": 1,
+              "kind": "Equal",
+              "negative": false,
+              "points": [
+                0,
+                1
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": ""
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "DistanceX",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": [
+                -0.09793524999999903,
+                -22.98214169580078
+              ],
+              "reference": false,
+              "relative_position": true,
+              "value": "20"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "DistanceY",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": [
+                -19.005395889282227,
+                0.2321422473754886
+              ],
+              "reference": false,
+              "relative_position": true,
+              "value": "20"
+            }
+          ],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "rectangle",
+              "values": [
+                "-15",
+                "-18.107143",
+                "30",
+                "30"
+              ]
+            }
+          ],
+          "next_id": 1
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": ""
+      }
+    },
+    {
+      "id": "f2",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Extrude 1",
+      "suppressed": false,
+      "params": {
+        "depth": "7",
+        "mode": "New",
+        "reverse": false,
+        "sketch": "f1",
+        "symmetric": false,
+        "target": ""
+      }
+    }
+  ],
+  "rollback": null,
+  "next_id": 3
+}

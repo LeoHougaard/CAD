@@ -1,0 +1,1 @@
+Derived from brepkit-sketch 4.2.2, https://github.com/andymai/brepkit, AGPL-3.0-only. Original source and tests are retained. Local changes add sketch dimension and relationship constraints. See the repository LICENSE for the license text.

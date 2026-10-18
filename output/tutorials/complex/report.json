@@ -1,0 +1,96 @@
+{
+  "adaptations": [
+    "Interior sketch fillet is implemented as an equivalent 0.15in fillet on four pocket vertical edges",
+    "Feature mirrors and circular/linear cut patterns are expressed as fully dimensioned symmetric sketches because existing pattern/mirror commands operate on whole bodies",
+    "Through-all and up-to-next are expressed by parent dimensions so dependent lengths update",
+    "Wall thickness changes before the drilling patterns here; the source changes it after the first Hole Wizard hole",
+    "Tapped holes use conventional #7 0.201in and #36 0.1065in cylindrical tap drills; threads, cosmetic annotations and drill-point cones are omitted"
+  ],
+  "author": "Alejandro Reyes",
+  "checks": [
+    "all 13 sketches zero DOF without Fix",
+    "analytic volume of rounded rectangles, bosses, bores and drills",
+    "valid B-rep",
+    "closed oriented mesh",
+    "six sequential parent-variable edits",
+    "attached planes update",
+    "rollback and restoration",
+    "independent cut suppression",
+    "valid independent cut reordering",
+    "invalid dependency reorder fails",
+    "suppressed parent fails while preserving prior solid",
+    "save/reopen and regeneration"
+  ],
+  "functional_geometry": {
+    "analytic_volume_mm3": 291974.85663237685,
+    "faces": 75,
+    "sketches": 13,
+    "timeline_entries": 29,
+    "volume_mm3": 291974.85691883625
+  },
+  "known_failure": {
+    "baseline_handling": "feature preserved and explicitly suppressed",
+    "error": "Edge reference 'f2:end | f2:side:1:0' resolves to 4 edges. Reselect it.",
+    "feature": "Base finishing fillets",
+    "reproduction": "base-fillet-reproduction.cadpart",
+    "source_radius_in": 0.125
+  },
+  "not_tested": [
+    "Native sketch-entry workflow",
+    "Final source 0.125in finishing edge fillets",
+    "Dimensional tolerance annotations"
+  ],
+  "parent_edits": [
+    {
+      "analytic_mm3": 320396.1707573769,
+      "rebuild_ms": 280.1153,
+      "value": "3*inch",
+      "variable": "depth",
+      "volume_mm3": 320396.1710437194
+    },
+    {
+      "analytic_mm3": 337807.42625737685,
+      "rebuild_ms": 259.4639,
+      "value": "4.5*inch",
+      "variable": "body_width",
+      "volume_mm3": 337807.42625735485
+    },
+    {
+      "analytic_mm3": 420437.2476919779,
+      "rebuild_ms": 279.1708,
+      "value": "4*inch",
+      "variable": "height",
+      "volume_mm3": 420437.24769195623
+    },
+    {
+      "analytic_mm3": 434900.3271796712,
+      "rebuild_ms": 259.4184,
+      "value": "0.3*inch",
+      "variable": "base_thickness",
+      "volume_mm3": 434900.32717964984
+    },
+    {
+      "analytic_mm3": 448575.0952718149,
+      "rebuild_ms": 261.9907,
+      "value": "2*inch",
+      "variable": "main_bore",
+      "volume_mm3": 448575.0952717929
+    },
+    {
+      "analytic_mm3": 468634.95529943623,
+      "rebuild_ms": 261.753,
+      "value": "0.3125*inch",
+      "variable": "front_wall",
+      "volume_mm3": 468634.9552994126
+    }
+  ],
+  "publisher": "SDC Publications",
+  "result": "functional baseline passed with documented source exclusions",
+  "source": "https://static.sdcpublications.com/pdfsample/1-58503-262-x-2.pdf",
+  "source_completion": "incomplete: blocked base finishing fillet and omitted final edge finish; functional housing geometry verified separately",
+  "source_pages": "9-50",
+  "step_roundtrip_verified": true,
+  "tap_drill_reference": "https://cdn.automationdirect.com/static/specs/oldspec/drilltapcombos050823.pdf",
+  "tutorial": "The Housing, Beginner's Guide to SolidWorks 2006",
+  "verification": "Rust engine integration and file tests, not native UI entry"
+}

@@ -1,0 +1,20 @@
+{
+  "issue": "Release tests falsely reject a fresh reopened valid document during concurrent model evaluation",
+  "actual_failure": "Reopening side-hole rejected feature f6, a simple cube Add, as requiring a mesh approximation while another thread executed the known disc-fuse fallback",
+  "baseline_serial": "Original release tutorial_holes binary passes all three tests with --test-threads=1",
+  "cause": "Brepkit mesh_fallback_count is process-global; an unrelated Runtime can increment it between a feature snapshot and its exactness check",
+  "fix": "A process-wide mutex guards each native feature transaction, including execution, exactness/validity checks and rollback. Lock scope is not the whole application or viewport.",
+  "panic_behavior": "RAII releases the guard during unwinding. Poisoned-lock recovery avoids making future independent evaluations fail.",
+  "concurrency": "Native feature transactions serialize between Runtime instances in one process. Viewport work and independent processes remain parallel. Direct external calls to Brepkit must not bypass this transaction discipline.",
+  "regression": "Three synchronized threads, four genuine failing fresh Runtime builds alongside forty valid fresh Runtime builds. Actual failing feature is asserted f6 and previous geometry volume is preserved.",
+  "verification": {
+    "release_build": "default features, optimized thin LTO",
+    "default_thread_suite_runs": 10,
+    "tests_per_run": 4,
+    "passed": 40,
+    "failed": 0,
+    "fresh_valid_concurrent_runtime_evaluations": 400,
+    "genuine_failing_concurrent_runtime_evaluations": 40,
+    "save_load_checks": "Every tutorial run saves, loads and freshly regenerates all passing stages, including fillet/chamfer variants"
+  }
+}

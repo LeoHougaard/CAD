@@ -1,0 +1,20 @@
+{
+  "verifier": "Gmsh/Open CASCADE, independent of app kernel",
+  "result": "passed",
+  "cases": [
+    {
+      "file": "lblock-5in.step",
+      "solids": 1,
+      "faces": 8,
+      "volume_mm3": 737417.8800000001,
+      "expected_mm3": 737417.8799999999
+    },
+    {
+      "file": "lblock-4in.step",
+      "solids": 1,
+      "faces": 8,
+      "volume_mm3": 540773.1120011464,
+      "expected_mm3": 540773.112
+    }
+  ]
+}

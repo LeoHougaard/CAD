@@ -1,0 +1,40 @@
+{
+  "id": "pattern",
+  "name": "Linear pattern",
+  "version": "1.0.0",
+  "category": "feature",
+  "editor": "",
+  "script": "pattern.rhai",
+  "fields": [
+    {
+      "key": "target",
+      "label": "Part",
+      "kind": "body",
+      "default": ""
+    },
+    {
+      "key": "axis",
+      "label": "Direction",
+      "kind": "choice",
+      "default": "X",
+      "options": [
+        "X",
+        "Y",
+        "Z"
+      ]
+    },
+    {
+      "key": "spacing",
+      "label": "Spacing",
+      "kind": "number",
+      "default": "30"
+    },
+    {
+      "key": "count",
+      "label": "Instances",
+      "kind": "number",
+      "default": "3"
+    }
+  ],
+  "description": ""
+}

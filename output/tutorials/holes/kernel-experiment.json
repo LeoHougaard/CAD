@@ -1,0 +1,20 @@
+{
+  "decision": "reject",
+  "change": "Remove duplicate directed non-boundary section edges on u-periodic curved faces, only with identical nonempty source provenance, orientation, 3D endpoints and UV endpoints within existing linear tolerance. Preserve boundary and seam copies.",
+  "baseline": {
+    "exact_recovered_failures": 0,
+    "mesh_fallback_cases": 12,
+    "successful_fixture_volumes": 7
+  },
+  "candidate": {
+    "exact_recovered_failures": 0,
+    "mesh_fallback_cases": 12,
+    "successful_fixture_volumes": 7
+  },
+  "reason": "No exact Fuse case improved. Deduplicating repeated directed section entries does not recover the missing cylindrical wall band.",
+  "remaining_problem": "The periodic curved-face arrangement must construct the cylindrical band and rim-connected NURBS intersection regions consistently. The graph carries period-shifted rim copies and section chains; the exact tracing/ownership defect is not isolated to a safely patchable line.",
+  "correctness": "No candidate result promoted, no tolerances or input geometry changed, no registry or active dependency modified.",
+  "next_step": "A dedicated upstream periodic-face splitting correction with its kernel regression set is required. Preserve explicit exactness rejection until then.",
+  "experiment_directory": ".tools\\boolean-kernel-experiment",
+  "candidate_patch_sha256": "5f40247fe6e4038484d669db474255b36f1b33ca617c5d4c7f4d7e669f8d2355"
+}

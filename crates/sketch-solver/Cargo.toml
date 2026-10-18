@@ -1,0 +1,16 @@
+[package]
+name = "cad-sketch-solver"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+description = "Brepkit 4.2.2 GCS with CAD dimension constraints"
+
+[dependencies]
+thiserror = "2"
+
+[dev-dependencies]
+proptest = "1"
+
+# Retain upstream's explicit matrix indexing style.
+[lints.clippy]
+needless_range_loop = "allow"

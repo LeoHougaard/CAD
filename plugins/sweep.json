@@ -1,0 +1,41 @@
+{
+  "id": "sweep",
+  "name": "Sweep",
+  "version": "1.0.0",
+  "category": "feature",
+  "editor": "",
+  "script": "sweep.rhai",
+  "fields": [
+    {
+      "key": "profile",
+      "label": "Profile",
+      "kind": "sketch",
+      "default": ""
+    },
+    {
+      "key": "path",
+      "label": "Path",
+      "kind": "sketch",
+      "default": ""
+    },
+    {
+      "key": "mode",
+      "label": "Operation",
+      "kind": "choice",
+      "default": "New",
+      "options": [
+        "New",
+        "Add",
+        "Remove",
+        "Intersect"
+      ]
+    },
+    {
+      "key": "target",
+      "label": "Merge scope",
+      "kind": "body",
+      "default": ""
+    }
+  ],
+  "description": "Sweep a positioned profile along a line, polygonal path, or full circle."
+}

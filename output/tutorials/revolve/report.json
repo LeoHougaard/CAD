@@ -1,0 +1,45 @@
+{
+  "adaptations": [
+    "Sketch V axis replaces selecting arbitrary construction line",
+    "Radius expressions replace doubled diameter dimensions to an axis",
+    "Source initial and final center cylinder diameters both read 1.75 inches. Parametric edit tested 1.75 -> 1.50 -> 1.75 inches.",
+    "Bolt-hole sketch uses offset Top plane because revolve does not register stable planar face anchors",
+    "Cut uses explicit 0.5 inch depth rather than through-all termination"
+  ],
+  "author": "Matthew Jourden, Brighton High School",
+  "blocked": [
+    "Circular feature pattern of eight bolt holes is unavailable",
+    "Tutorial downstream rounds and fillets not tested on the incomplete patterned part"
+  ],
+  "method": "Automated document, sketch-solver and geometry APIs. Native GUI not exercised by this test.",
+  "passed": [
+    "closed orthogonal profile, 0 DOF",
+    "full 360 degree revolve",
+    "180 degree revolve",
+    "analytic shell-integral volume",
+    "valid solid topology",
+    "upstream diameter edit and restore",
+    "history prefix reuse for angle edit",
+    "CAD document roundtrip",
+    "STEP export and same-kernel import volume",
+    "construction circle and line locate first bolt hole, 0 DOF",
+    "first hole cut",
+    "hole diameter and bolt-circle edits propagate"
+  ],
+  "regeneration_ms": {
+    "edited_debug": 4.9742,
+    "full_debug": 7.162,
+    "half_debug": 6.300199999999999
+  },
+  "scope": "Dimensioned profile, revolve and first bolt hole, PDF pages 2-7. Full tutorial remains incomplete.",
+  "source": "https://resources.finalsite.net/images/v1722986533/brightonk12com/ywtdpiqjzrokemitsmv4/tutorialonshaperevolvesolidmodel_1.pdf",
+  "title": "Tutorial OnShape Revolve Solid Model",
+  "units": "Source inches converted through inch = 25.4 mm expressions",
+  "volumes_mm3": {
+    "edited": 245341.4275355197,
+    "full": 255798.60313539428,
+    "half": 127899.30156706057,
+    "one_hole": 254189.80688925108,
+    "one_hole_edited": 254893.65524693485
+  }
+}

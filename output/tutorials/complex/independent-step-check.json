@@ -1,0 +1,38 @@
+{
+  "verifier": "Gmsh/Open CASCADE, independent of app kernel",
+  "result": "passed for functional baseline with documented source exclusions",
+  "cases": [
+    {
+      "file": "housing.step",
+      "solids": 1,
+      "faces": 75,
+      "volume_mm3": 291974.85691884416,
+      "analytic_mm3": 291974.85663237696,
+      "absolute_error_mm3": 0.00028646719874814153,
+      "bounds_mm": [
+        -76.20000009999998,
+        -39.6875001,
+        -1e-07,
+        76.20000009999995,
+        39.6875001,
+        98.42500009999998
+      ]
+    },
+    {
+      "file": "housing-resized.step",
+      "solids": 1,
+      "faces": 75,
+      "volume_mm3": 468634.95529943705,
+      "analytic_mm3": 468634.95529943623,
+      "absolute_error_mm3": 8.149072527885437e-10,
+      "bounds_mm": [
+        -76.2000001,
+        -44.450000100000004,
+        -1e-07,
+        76.20000009999997,
+        44.450000100000004,
+        109.2200001
+      ]
+    }
+  ]
+}

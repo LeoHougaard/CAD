@@ -1,0 +1,54 @@
+[package]
+name = "cad"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+description = "A local, lightweight, parametric Rust Part Studio"
+default-run = "cad"
+
+[workspace]
+members = ["crates/sketch-solver"]
+default-members = ["."]
+resolver = "3"
+
+[features]
+default = ["desktop", "step"]
+desktop = ["dep:eframe", "dep:glam", "dep:bytemuck", "dep:winit", "dep:windows-sys", "dep:raw-window-handle"]
+step = ["dep:brepkit-io"]
+
+[dependencies]
+brepkit-math = "=4.2.2"
+brepkit-topology = "=4.2.2"
+brepkit-operations = "=4.2.2"
+brepkit-sketch = { package = "cad-sketch-solver", path = "crates/sketch-solver" }
+brepkit-io = { version = "=4.2.2", optional = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+rhai = { version = "1.26.1", features = ["serde", "sync", "internals"] }
+eframe = { version = "0.33", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"], optional = true }
+glam = { version = "0.30", features = ["bytemuck"], optional = true }
+bytemuck = { version = "1", features = ["derive"], optional = true }
+
+[target.'cfg(windows)'.dependencies]
+winit = { version = "0.30", default-features = false, features = ["rwh_06"], optional = true }
+raw-window-handle = { version = "0.6", optional = true }
+windows-sys = { version = "0.61", features = ["Win32_UI_Input", "Win32_UI_WindowsAndMessaging"], optional = true }
+
+[[bin]]
+name = "cad"
+path = "src/main.rs"
+required-features = ["desktop"]
+
+[[bin]]
+name = "cad-check"
+path = "src/bin/check.rs"
+
+[[bin]]
+name = "cad-agent"
+path = "src/bin/agent.rs"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"
+

@@ -1,0 +1,41 @@
+{
+  "id": "transform",
+  "name": "Transform",
+  "version": "1.0.0",
+  "category": "feature",
+  "editor": "",
+  "script": "transform.rhai",
+  "fields": [
+    {
+      "key": "target",
+      "label": "Part",
+      "kind": "body",
+      "default": ""
+    },
+    {
+      "key": "x",
+      "label": "X translation",
+      "kind": "number",
+      "default": "0"
+    },
+    {
+      "key": "y",
+      "label": "Y translation",
+      "kind": "number",
+      "default": "0"
+    },
+    {
+      "key": "z",
+      "label": "Z translation",
+      "kind": "number",
+      "default": "10"
+    },
+    {
+      "key": "copy",
+      "label": "Create copy",
+      "kind": "bool",
+      "default": false
+    }
+  ],
+  "description": ""
+}

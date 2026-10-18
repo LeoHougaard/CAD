@@ -1,0 +1,13 @@
+{
+  "faces": 45,
+  "features": 42,
+  "full_rebuild_max_ms": 54.338699999999996,
+  "full_rebuild_median_ms": 48.048899999999996,
+  "last_feature_edit_max_ms": 19.727600000000002,
+  "last_feature_edit_median_ms": 17.5701,
+  "mesh_fallbacks": 0,
+  "parts": 1,
+  "samples": 12,
+  "triangles": 3616,
+  "volume": 305185.88553436345
+}

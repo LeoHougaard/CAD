@@ -1,0 +1,2223 @@
+{
+  "format": 1,
+  "name": "Reyes housing",
+  "variables": {
+    "base_thickness": "0.3*inch",
+    "base_width": "6*inch",
+    "body_width": "4.5*inch",
+    "depth": "3*inch",
+    "front_wall": "0.3125*inch",
+    "height": "4*inch",
+    "main_bore": "2*inch",
+    "side_wall": "0.375*inch"
+  },
+  "features": [
+    {
+      "id": "f1",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Base profile",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "-#base_width/2"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "-#depth/2"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Width",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#base_width"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Height",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#depth"
+            }
+          ],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "rectangle",
+              "values": [
+                "0",
+                "0",
+                "10",
+                "10"
+              ]
+            }
+          ],
+          "next_id": 1
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": ""
+      }
+    },
+    {
+      "id": "f2",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Base",
+      "suppressed": false,
+      "params": {
+        "depth": "#base_thickness",
+        "mode": "New",
+        "reverse": false,
+        "sketch": "f1",
+        "symmetric": false,
+        "target": "f2:0"
+      }
+    },
+    {
+      "id": "f3",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Body profile",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "-#body_width/2"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "-#depth/2"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Width",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#body_width"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Height",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#depth"
+            }
+          ],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "rectangle",
+              "values": [
+                "0",
+                "0",
+                "10",
+                "10"
+              ]
+            }
+          ],
+          "next_id": 1
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": "f2:end"
+      }
+    },
+    {
+      "id": "f4",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Body",
+      "suppressed": false,
+      "params": {
+        "depth": "#height",
+        "mode": "Add",
+        "reverse": false,
+        "sketch": "f3",
+        "symmetric": false,
+        "target": "f2:0"
+      }
+    },
+    {
+      "id": "f5",
+      "plugin": "fillet",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1f14e47ce34b6a27",
+      "name": "Quarter inch corner fillets",
+      "suppressed": false,
+      "params": {
+        "edges": [
+          "f2:side:1:0 | f2:side:1:3",
+          "f2:side:1:2 | f2:side:1:3",
+          "f2:side:1:1 | f2:side:1:2",
+          "f2:side:1:0 | f2:side:1:1",
+          "f2:side:1:2 | f4:side:1:3",
+          "f2:side:1:2 | f4:side:1:1",
+          "f2:side:1:0 | f4:side:1:1",
+          "f2:side:1:0 | f4:side:1:3"
+        ],
+        "radius": "0.25*inch",
+        "target": "f2:0"
+      }
+    },
+    {
+      "id": "f6",
+      "plugin": "fillet",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1f14e47ce34b6a27",
+      "name": "Base finishing fillets, blocked",
+      "suppressed": true,
+      "params": {
+        "edges": [
+          "f2:end | f2:side:1:0",
+          "f2:end | f4:side:1:3",
+          "f2:end | f2:side:1:2",
+          "f2:end | untracked:curved:53",
+          "f2:end | f2:side:1:3",
+          "f2:end | untracked:curved:52",
+          "f2:end | f2:side:1:0",
+          "f2:end | untracked:curved:55",
+          "f2:end | f2:side:1:1",
+          "f2:end | untracked:curved:54",
+          "f2:end | f2:side:1:2",
+          "f2:end | f4:side:1:1",
+          "f2:side:1:2",
+          "f2:side:1:0",
+          "f2:end | f2:side:1:2",
+          "f2:end | f2:side:1:2",
+          "f2:end | f2:side:1:0",
+          "f2:end | f2:side:1:0",
+          "f2:end | f4:side:1:3",
+          "f2:end | f4:side:1:3",
+          "f2:end | f4:side:1:1",
+          "f2:end | f4:side:1:1",
+          "f2:end | untracked:curved:56",
+          "f2:end | untracked:curved:57",
+          "f2:end | untracked:curved:58",
+          "f2:end | untracked:curved:59"
+        ],
+        "radius": "0.125*inch",
+        "target": "f2:0"
+      }
+    },
+    {
+      "id": "f7",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Interior profile",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "-#body_width/2+#side_wall"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "-#depth/2+#front_wall"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Width",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#body_width-2*#side_wall"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Height",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#depth-2*#front_wall"
+            }
+          ],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "rectangle",
+              "values": [
+                "0",
+                "0",
+                "10",
+                "10"
+              ]
+            }
+          ],
+          "next_id": 1
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": "f4:end"
+      }
+    },
+    {
+      "id": "f8",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Interior pocket",
+      "suppressed": false,
+      "params": {
+        "depth": "3.5*inch",
+        "mode": "Remove",
+        "reverse": true,
+        "sketch": "f7",
+        "symmetric": false,
+        "target": "f2:0"
+      }
+    },
+    {
+      "id": "f9",
+      "plugin": "fillet",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1f14e47ce34b6a27",
+      "name": "Interior corner fillets",
+      "suppressed": false,
+      "params": {
+        "edges": [
+          "f8:side:1:1 | f8:side:1:2",
+          "f8:side:1:2 | f8:side:1:3",
+          "f8:side:1:0 | f8:side:1:1",
+          "f8:side:1:0 | f8:side:1:3"
+        ],
+        "radius": "0.15*inch",
+        "target": "f2:0"
+      }
+    },
+    {
+      "id": "f10",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Front flange profile",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#base_width/2"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#base_thickness+#height-1.875*inch"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Diameter",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "3.25*inch"
+            }
+          ],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "circle",
+              "values": [
+                "0",
+                "20",
+                "5"
+              ]
+            }
+          ],
+          "next_id": 1
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": "f2:side:1:0"
+      }
+    },
+    {
+      "id": "f11",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Front flange",
+      "suppressed": false,
+      "params": {
+        "depth": "0.25*inch",
+        "mode": "Add",
+        "reverse": false,
+        "sketch": "f10",
+        "symmetric": false,
+        "target": "f2:0"
+      }
+    },
+    {
+      "id": "f12",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Back flange profile",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#base_width/2"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#base_thickness+#height-1.875*inch"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Diameter",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "3.25*inch"
+            }
+          ],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "circle",
+              "values": [
+                "0",
+                "20",
+                "5"
+              ]
+            }
+          ],
+          "next_id": 1
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": "f2:side:1:2"
+      }
+    },
+    {
+      "id": "f13",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Back flange",
+      "suppressed": false,
+      "params": {
+        "depth": "0.25*inch",
+        "mode": "Add",
+        "reverse": false,
+        "sketch": "f12",
+        "symmetric": false,
+        "target": "f2:0"
+      }
+    },
+    {
+      "id": "f14",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Right shaft boss profile",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#depth/2"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#height-0.75*inch"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Diameter",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "1*inch"
+            }
+          ],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "circle",
+              "values": [
+                "0",
+                "20",
+                "5"
+              ]
+            }
+          ],
+          "next_id": 1
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": "f4:side:1:1"
+      }
+    },
+    {
+      "id": "f15",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Right shaft boss",
+      "suppressed": false,
+      "params": {
+        "depth": "0.5*inch",
+        "mode": "Add",
+        "reverse": false,
+        "sketch": "f14",
+        "symmetric": false,
+        "target": "f2:0"
+      }
+    },
+    {
+      "id": "f16",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Left shaft boss profile",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#depth/2"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#height-0.75*inch"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Diameter",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "1*inch"
+            }
+          ],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "circle",
+              "values": [
+                "0",
+                "20",
+                "5"
+              ]
+            }
+          ],
+          "next_id": 1
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": "f4:side:1:3"
+      }
+    },
+    {
+      "id": "f17",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Left shaft boss",
+      "suppressed": false,
+      "params": {
+        "depth": "0.5*inch",
+        "mode": "Add",
+        "reverse": false,
+        "sketch": "f16",
+        "symmetric": false,
+        "target": "f2:0"
+      }
+    },
+    {
+      "id": "f18",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Main bore profile",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#base_width/2"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#base_thickness+#height-1.875*inch"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Diameter",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#main_bore"
+            }
+          ],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "circle",
+              "values": [
+                "0",
+                "20",
+                "5"
+              ]
+            }
+          ],
+          "next_id": 1
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": "f11:end"
+      }
+    },
+    {
+      "id": "f19",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Main bore through both flanges",
+      "suppressed": false,
+      "params": {
+        "depth": "#depth+0.5*inch",
+        "mode": "Remove",
+        "reverse": true,
+        "sketch": "f18",
+        "symmetric": false,
+        "target": "f2:0"
+      }
+    },
+    {
+      "id": "f20",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Shaft bore profile",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#depth/2"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#height-0.75*inch"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Diameter",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0.625*inch"
+            }
+          ],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "circle",
+              "values": [
+                "0",
+                "20",
+                "5"
+              ]
+            }
+          ],
+          "next_id": 1
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": "f15:end"
+      }
+    },
+    {
+      "id": "f21",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Shaft bore through both bosses",
+      "suppressed": false,
+      "params": {
+        "depth": "#body_width+1*inch",
+        "mode": "Remove",
+        "reverse": true,
+        "sketch": "f20",
+        "symmetric": false,
+        "target": "f2:0"
+      }
+    },
+    {
+      "id": "f22",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Front flange drill profile",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#base_width/2+(1.375)*inch"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#base_thickness+#height-1.875*inch+(0)*inch"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Diameter",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0.201*inch"
+            },
+            {
+              "a": 2,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#base_width/2+(0.6875000000000001)*inch"
+            },
+            {
+              "a": 2,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#base_thickness+#height-1.875*inch+(1.190784930203603)*inch"
+            },
+            {
+              "a": 2,
+              "b": 0,
+              "kind": "Diameter",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0.201*inch"
+            },
+            {
+              "a": 3,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#base_width/2+(-0.6874999999999997)*inch"
+            },
+            {
+              "a": 3,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#base_thickness+#height-1.875*inch+(1.1907849302036033)*inch"
+            },
+            {
+              "a": 3,
+              "b": 0,
+              "kind": "Diameter",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0.201*inch"
+            },
+            {
+              "a": 4,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#base_width/2+(-1.375)*inch"
+            },
+            {
+              "a": 4,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#base_thickness+#height-1.875*inch+(0.00000000000000016838893488276108)*inch"
+            },
+            {
+              "a": 4,
+              "b": 0,
+              "kind": "Diameter",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0.201*inch"
+            },
+            {
+              "a": 5,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#base_width/2+(-0.6875000000000007)*inch"
+            },
+            {
+              "a": 5,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#base_thickness+#height-1.875*inch+(-1.1907849302036029)*inch"
+            },
+            {
+              "a": 5,
+              "b": 0,
+              "kind": "Diameter",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0.201*inch"
+            },
+            {
+              "a": 6,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#base_width/2+(0.6875000000000001)*inch"
+            },
+            {
+              "a": 6,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#base_thickness+#height-1.875*inch+(-1.190784930203603)*inch"
+            },
+            {
+              "a": 6,
+              "b": 0,
+              "kind": "Diameter",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0.201*inch"
+            }
+          ],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "circle",
+              "values": [
+                "111.125",
+                "50.8",
+                "2.5527"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 2,
+              "kind": "circle",
+              "values": [
+                "93.6625",
+                "81.045937",
+                "2.5527"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 3,
+              "kind": "circle",
+              "values": [
+                "58.7375",
+                "81.045937",
+                "2.5527"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 4,
+              "kind": "circle",
+              "values": [
+                "41.275",
+                "50.8",
+                "2.5527"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 5,
+              "kind": "circle",
+              "values": [
+                "58.7375",
+                "20.554063",
+                "2.5527"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 6,
+              "kind": "circle",
+              "values": [
+                "93.6625",
+                "20.554063",
+                "2.5527"
+              ]
+            }
+          ],
+          "next_id": 6
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": "f11:end"
+      }
+    },
+    {
+      "id": "f23",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Front flange six tap drills",
+      "suppressed": false,
+      "params": {
+        "depth": "#front_wall+0.25*inch",
+        "mode": "Remove",
+        "reverse": true,
+        "sketch": "f22",
+        "symmetric": false,
+        "target": "f2:0"
+      }
+    },
+    {
+      "id": "f24",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Back flange drill profile",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#base_width/2+(1.375)*inch"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#base_thickness+#height-1.875*inch+(0)*inch"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Diameter",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0.201*inch"
+            },
+            {
+              "a": 2,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#base_width/2+(0.6875000000000001)*inch"
+            },
+            {
+              "a": 2,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#base_thickness+#height-1.875*inch+(1.190784930203603)*inch"
+            },
+            {
+              "a": 2,
+              "b": 0,
+              "kind": "Diameter",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0.201*inch"
+            },
+            {
+              "a": 3,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#base_width/2+(-0.6874999999999997)*inch"
+            },
+            {
+              "a": 3,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#base_thickness+#height-1.875*inch+(1.1907849302036033)*inch"
+            },
+            {
+              "a": 3,
+              "b": 0,
+              "kind": "Diameter",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0.201*inch"
+            },
+            {
+              "a": 4,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#base_width/2+(-1.375)*inch"
+            },
+            {
+              "a": 4,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#base_thickness+#height-1.875*inch+(0.00000000000000016838893488276108)*inch"
+            },
+            {
+              "a": 4,
+              "b": 0,
+              "kind": "Diameter",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0.201*inch"
+            },
+            {
+              "a": 5,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#base_width/2+(-0.6875000000000007)*inch"
+            },
+            {
+              "a": 5,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#base_thickness+#height-1.875*inch+(-1.1907849302036029)*inch"
+            },
+            {
+              "a": 5,
+              "b": 0,
+              "kind": "Diameter",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0.201*inch"
+            },
+            {
+              "a": 6,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#base_width/2+(0.6875000000000001)*inch"
+            },
+            {
+              "a": 6,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#base_thickness+#height-1.875*inch+(-1.190784930203603)*inch"
+            },
+            {
+              "a": 6,
+              "b": 0,
+              "kind": "Diameter",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0.201*inch"
+            }
+          ],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "circle",
+              "values": [
+                "111.125",
+                "50.8",
+                "2.5527"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 2,
+              "kind": "circle",
+              "values": [
+                "93.6625",
+                "81.045937",
+                "2.5527"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 3,
+              "kind": "circle",
+              "values": [
+                "58.7375",
+                "81.045937",
+                "2.5527"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 4,
+              "kind": "circle",
+              "values": [
+                "41.275",
+                "50.8",
+                "2.5527"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 5,
+              "kind": "circle",
+              "values": [
+                "58.7375",
+                "20.554063",
+                "2.5527"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 6,
+              "kind": "circle",
+              "values": [
+                "93.6625",
+                "20.554063",
+                "2.5527"
+              ]
+            }
+          ],
+          "next_id": 6
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": "f13:end"
+      }
+    },
+    {
+      "id": "f25",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Back flange six tap drills",
+      "suppressed": false,
+      "params": {
+        "depth": "#front_wall+0.25*inch",
+        "mode": "Remove",
+        "reverse": true,
+        "sketch": "f24",
+        "symmetric": false,
+        "target": "f2:0"
+      }
+    },
+    {
+      "id": "f26",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Lid drill profile",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "-1*(#body_width/2-0.25*inch)"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "-1*(#depth/2-0.25*inch)"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Diameter",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0.1065*inch"
+            },
+            {
+              "a": 2,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "-1*(#body_width/2-0.25*inch)"
+            },
+            {
+              "a": 2,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "1*(#depth/2-0.25*inch)"
+            },
+            {
+              "a": 2,
+              "b": 0,
+              "kind": "Diameter",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0.1065*inch"
+            },
+            {
+              "a": 3,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "1*(#body_width/2-0.25*inch)"
+            },
+            {
+              "a": 3,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "-1*(#depth/2-0.25*inch)"
+            },
+            {
+              "a": 3,
+              "b": 0,
+              "kind": "Diameter",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0.1065*inch"
+            },
+            {
+              "a": 4,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "1*(#body_width/2-0.25*inch)"
+            },
+            {
+              "a": 4,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "1*(#depth/2-0.25*inch)"
+            },
+            {
+              "a": 4,
+              "b": 0,
+              "kind": "Diameter",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0.1065*inch"
+            }
+          ],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "circle",
+              "values": [
+                "-44.45",
+                "-26.9875",
+                "1.35255"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 2,
+              "kind": "circle",
+              "values": [
+                "-44.45",
+                "26.9875",
+                "1.35255"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 3,
+              "kind": "circle",
+              "values": [
+                "44.45",
+                "-26.9875",
+                "1.35255"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 4,
+              "kind": "circle",
+              "values": [
+                "44.45",
+                "26.9875",
+                "1.35255"
+              ]
+            }
+          ],
+          "next_id": 4
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": "f4:end"
+      }
+    },
+    {
+      "id": "f27",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Four lid tap drills",
+      "suppressed": false,
+      "params": {
+        "depth": "0.75*inch",
+        "mode": "Remove",
+        "reverse": true,
+        "sketch": "f26",
+        "symmetric": false,
+        "target": "f2:0"
+      }
+    },
+    {
+      "id": "f28",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Base mounting drill profile",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "-1*(#base_width/2-0.5*inch)"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "-#depth/2+(0.5+0)*inch"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Diameter",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0.25*inch"
+            },
+            {
+              "a": 2,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "-1*(#base_width/2-0.5*inch)"
+            },
+            {
+              "a": 2,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "-#depth/2+(0.5+0.75)*inch"
+            },
+            {
+              "a": 2,
+              "b": 0,
+              "kind": "Diameter",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0.25*inch"
+            },
+            {
+              "a": 3,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "-1*(#base_width/2-0.5*inch)"
+            },
+            {
+              "a": 3,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "-#depth/2+(0.5+1.5)*inch"
+            },
+            {
+              "a": 3,
+              "b": 0,
+              "kind": "Diameter",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0.25*inch"
+            },
+            {
+              "a": 4,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "1*(#base_width/2-0.5*inch)"
+            },
+            {
+              "a": 4,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "-#depth/2+(0.5+0)*inch"
+            },
+            {
+              "a": 4,
+              "b": 0,
+              "kind": "Diameter",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0.25*inch"
+            },
+            {
+              "a": 5,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "1*(#base_width/2-0.5*inch)"
+            },
+            {
+              "a": 5,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "-#depth/2+(0.5+0.75)*inch"
+            },
+            {
+              "a": 5,
+              "b": 0,
+              "kind": "Diameter",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0.25*inch"
+            },
+            {
+              "a": 6,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "1*(#base_width/2-0.5*inch)"
+            },
+            {
+              "a": 6,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "-#depth/2+(0.5+1.5)*inch"
+            },
+            {
+              "a": 6,
+              "b": 0,
+              "kind": "Diameter",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0.25*inch"
+            }
+          ],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "circle",
+              "values": [
+                "-63.5",
+                "-20.6375",
+                "3.175"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 2,
+              "kind": "circle",
+              "values": [
+                "-63.5",
+                "-1.5875",
+                "3.175"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 3,
+              "kind": "circle",
+              "values": [
+                "-63.5",
+                "17.4625",
+                "3.175"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 4,
+              "kind": "circle",
+              "values": [
+                "63.5",
+                "-20.6375",
+                "3.175"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 5,
+              "kind": "circle",
+              "values": [
+                "63.5",
+                "-1.5875",
+                "3.175"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 6,
+              "kind": "circle",
+              "values": [
+                "63.5",
+                "17.4625",
+                "3.175"
+              ]
+            }
+          ],
+          "next_id": 6
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": "f2:end"
+      }
+    },
+    {
+      "id": "f29",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Six base mounting holes",
+      "suppressed": false,
+      "params": {
+        "depth": "#base_thickness",
+        "mode": "Remove",
+        "reverse": true,
+        "sketch": "f28",
+        "symmetric": false,
+        "target": "f2:0"
+      }
+    }
+  ],
+  "rollback": null,
+  "next_id": 30
+}

@@ -1,0 +1,7 @@
+{
+  "error": "This operation required a mesh approximation. The precise result was rejected; try a simpler profile or a different operation.",
+  "feature_count": 6,
+  "prior_volume_mm3": 364331.20356957905,
+  "result_volume_mm3": 364331.20356957905,
+  "scope": "Six-feature reduction of the source's circle-after-side-hole operation"
+}

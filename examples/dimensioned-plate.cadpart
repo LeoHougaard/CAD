@@ -1,0 +1,165 @@
+{
+  "format": 1,
+  "name": "Dimensioned plate",
+  "variables": {},
+  "features": [
+    {
+      "id": "f1",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Sketch 1",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Coincident",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": ""
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Width",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": [
+                17.205419540405273,
+                -8.323330879211426
+              ],
+              "reference": false,
+              "relative_position": false,
+              "value": "60"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Height",
+              "negative": false,
+              "points": [
+                1,
+                0
+              ],
+              "position": [
+                50.82908248901367,
+                11.243613243103027
+              ],
+              "reference": false,
+              "relative_position": false,
+              "value": "30"
+            },
+            {
+              "a": 2,
+              "b": 0,
+              "kind": "Diameter",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": [
+                11.370019824951171,
+                7.779484514404297
+              ],
+              "reference": false,
+              "relative_position": true,
+              "value": "10"
+            },
+            {
+              "a": 0,
+              "b": 2,
+              "kind": "DistanceX",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": [
+                0.8515910663452146,
+                -23.127051947509766
+              ],
+              "reference": false,
+              "relative_position": true,
+              "value": "30"
+            },
+            {
+              "a": 0,
+              "b": 2,
+              "kind": "DistanceY",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": [
+                -23.555479049682617,
+                2.220395590545654
+              ],
+              "reference": false,
+              "relative_position": true,
+              "value": "15"
+            }
+          ],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "rectangle",
+              "values": [
+                "0",
+                "0",
+                "60",
+                "30"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 2,
+              "kind": "circle",
+              "values": [
+                "30",
+                "11.108921",
+                "5"
+              ]
+            }
+          ],
+          "next_id": 2
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": ""
+      }
+    },
+    {
+      "id": "f2",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Extrude 1",
+      "suppressed": false,
+      "params": {
+        "depth": "10",
+        "mode": "New",
+        "reverse": false,
+        "sketch": "f1",
+        "symmetric": false,
+        "target": ""
+      }
+    }
+  ],
+  "rollback": null,
+  "next_id": 3
+}

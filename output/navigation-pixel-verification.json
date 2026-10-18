@@ -1,0 +1,74 @@
+{
+  "release_checks": {
+    "windows_x86_64": 120,
+    "debian_arm64_pixel_10": 120,
+    "failures": 0
+  },
+  "clippy": "Windows all targets, deny warnings passed",
+  "independent_step_fixtures": 8,
+  "native_test_environment": "Pixel 10, native Debian 13 ARM64, Termux:X11, VirGL/Zink GPU; game closed and other apps minimized",
+  "renderer": {
+    "renderer": "virgl (zink Vulkan 1.4(PowerVR D-Series DXT-48-1536 MC1 (IM...)",
+    "version": "4.3 (Core Profile) Mesa 25.0.7-2+deb13u1"
+  },
+  "native_checks": [
+    "Free right-drag orbit over empty space uses volume centroid",
+    "After 100 px right / 70 px up pan, model-center pivot moves by the same screen offset and stays fixed during orbit",
+    "Face drag at (710,480) retains pivot at (710,480) while rotating",
+    "Cube glyphs follow face rotation and foreshortening; Top face selects top view",
+    "Cursor zoom and oblique close-up show closed circular hole with smooth shading and no artificial seam",
+    "Extrusion expression changed to 12 in native UI, previewed, applied, then undone",
+    "42-feature panel rendered with all 20 holes and survived 1200 right-drag pointer events"
+  ],
+  "pixel_benchmark": {
+    "faces": 45,
+    "features": 42,
+    "full_rebuild_max_ms": 439.18645899999996,
+    "full_rebuild_median_ms": 274.76643299999995,
+    "last_feature_edit_max_ms": 312.45862,
+    "last_feature_edit_median_ms": 296.091224,
+    "mesh_fallbacks": 0,
+    "parts": 1,
+    "samples": 12,
+    "triangles": 6336,
+    "volume": 305185.88553436345
+  },
+  "mounting_plate_idle": {
+    "pid": 24288,
+    "elapsed_s": 15.000744151999243,
+    "cpu_s": 0.0,
+    "one_core_percent": 0.0,
+    "memory": "62f76f0000-7fe9108000 ---p 00000000 00:00 0                              [rollup]\nRss:              107524 kB\nPss:               97813 kB\nPss_Dirty:         40104 kB\nPss_Anon:          36968 kB\nPss_File:          57709 kB\nPss_Shmem:          3136 kB\nShared_Clean:       7868 kB\nShared_Dirty:       6272 kB\nPrivate_Clean:     56416 kB\nPrivate_Dirty:     36968 kB\nReferenced:        86368 kB\nAnonymous:         36968 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+  },
+  "panel_idle": {
+    "pid": 32183,
+    "elapsed_s": 15.002003892004723,
+    "cpu_s": 0.0,
+    "one_core_percent": 0.0,
+    "memory": "64628c0000-7fcd14f000 ---p 00000000 00:00 0                              [rollup]\nRss:              108812 kB\nPss:               98538 kB\nPss_Dirty:         40864 kB\nPss_Anon:          37252 kB\nPss_File:          57674 kB\nPss_Shmem:          3612 kB\nShared_Clean:       8044 kB\nShared_Dirty:       7224 kB\nPrivate_Clean:     56292 kB\nPrivate_Dirty:     37252 kB\nReferenced:        89288 kB\nAnonymous:         37252 kB\nKSM:                   0 kB\nLazyFree:              0 kB\nAnonHugePages:         0 kB\nShmemPmdMapped:        0 kB\nFilePmdMapped:         0 kB\nShared_Hugetlb:        0 kB\nPrivate_Hugetlb:       0 kB\nSwap:                  0 kB\nSwapPss:               0 kB\nLocked:                0 kB\n"
+  },
+  "panel_motion": {
+    "motion_seconds": 12.867498213017825,
+    "events": 1200,
+    "app_cpu_s": 2.46,
+    "one_core_percent": 19.117935431389924
+  },
+  "measurement_limits": [
+    "CPU timer reported no ticks during each 15-second idle sample; not a claim of zero CPU in all conditions",
+    "Memory excludes the shared graphics server",
+    "Motion event rate is not displayed FPS",
+    "Optional Mesa HUD profiler crashed its VirGL client; normal launches and a fresh GPU context succeeded afterward, so no reliable FPS result is reported",
+    "Assemblies, sustained thermal behavior, Linux x86-64, and Linux SpaceMouse input are unverified"
+  ],
+  "spacemouse": "Physical Pro input previously confirmed by Leo. Corrected zoom sign and tested HID object-mode pan/rotation directions in multiple views; physical feel of this revision awaits feedback.",
+  "windows_sha256": "e3b34fe5c27bd364910a1356cf9d30a9a131e112eddb1bc8b05a0d0665c2a512",
+  "linux_sha256": "f8125e48c437aaadb93dcb93a2749bf5e7d8399128186b6994faef70b9dcd3a1",
+  "research": [
+    "https://forum.onshape.com/discussion/comment/60258/",
+    "https://www.onshape.com/en/resource-center/tech-tips/tech-tip-rotation-with-an-upright-vertical-axis",
+    "https://3dconnexion.com/dk/applications/ptc-onshape/learn-more/",
+    "https://raw.githubusercontent.com/FreeSpacenav/spacenavd/master/src/dev.c",
+    "https://raw.githubusercontent.com/FreeSpacenav/libspnav/master/src/util.c",
+    "https://docs.mesa3d.org/envvars.html"
+  ]
+}

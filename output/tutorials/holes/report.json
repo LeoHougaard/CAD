@@ -1,0 +1,58 @@
+{
+  "adaptations": [
+    "Part 1 connected profile replaces trim",
+    "Hole tool step omitted",
+    "Side cut uses explicit 4-inch depth instead of through-all",
+    "Circle midpoint located with dimensions rather than edge midpoint relation"
+  ],
+  "method": "Rust document/solver/kernel integration test. GUI not exercised.",
+  "operation_probes": {
+    "circle_after_side_cut": {
+      "error": "This operation required a mesh approximation. The precise result was rejected; try a simpler profile or a different operation.",
+      "previous_solid_preserved": true,
+      "result": "blocked"
+    },
+    "source_chamfer": {
+      "result": "passed",
+      "selected_edges": [
+        "f6:end | f6:side:1:1"
+      ],
+      "volume_mm3": 585810.3413376467
+    },
+    "three_source_fillets": {
+      "result": "passed",
+      "selected_edges": [
+        "f2:side:1:4 | f2:start",
+        "f2:end | f2:side:1:4",
+        "f2:side:1:2 | f2:side:1:3"
+      ],
+      "volume_mm3": 588737.8978453776
+    }
+  },
+  "result": "passed supported subset; full tutorial incomplete",
+  "source": "https://resources.finalsite.net/images/v1722986241/brightonk12com/nocj9hngnnoxr8c3h2fl/tutorialextrudepartholesandarcs.pdf",
+  "step_roundtrip": true,
+  "tested": [
+    "page 3 dimensioned blind top cut",
+    "page 7 dimensioned side cut",
+    "page 10 whole-circle add before side cut",
+    "history reorder",
+    "all sketches 0 DOF",
+    "analytic volumes",
+    "valid topology",
+    "save/load and fresh regeneration",
+    "split coplanar support retains original frame"
+  ],
+  "title": "OnShape: Extrude Part 3 Holes and Arcs",
+  "unavailable_or_untested": [
+    "Hole tool and mate connectors, including conical drill tip",
+    "Arc/trim option",
+    "Source fillet probe covers three identifiable edges rather than every indicated round"
+  ],
+  "volumes_in3": {
+    "circle_after_side_hole": null,
+    "circle_before_side_hole": 35.873340357836604,
+    "side_hole": 29.590155050657017,
+    "top_hole": 31.357300918301277
+  }
+}

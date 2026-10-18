@@ -1,0 +1,42 @@
+{
+  "adaptations": [
+    "The source draws overlapping rectangles and trims two edges. Trim is unavailable. This test draws the same final six-line outline directly."
+  ],
+  "author": "Matthew Jourden, Brighton High School",
+  "checks": [
+    "zero sketch degrees of freedom without Fix",
+    "every solved endpoint before and after edit",
+    "analytic volume",
+    "eight analytic faces",
+    "valid B-rep",
+    "closed consistently wound display mesh",
+    "save/load equality and fresh regeneration"
+  ],
+  "driving_dimensions_in": {
+    "depth": 4,
+    "edited_width": 4,
+    "height": 3,
+    "initial_width": 5,
+    "notch_height": 1.5,
+    "notch_width": 2.5
+  },
+  "edited_rebuild_ms": 0.8865000000000001,
+  "edited_volume_mm3": 540773.1120011465,
+  "initial_rebuild_ms": 1.4651,
+  "initial_volume_mm3": 737417.8799999999,
+  "kernel_units": "millimeter",
+  "not_tested": [
+    "Rectangle trim interaction",
+    "Cloud sharing/comments",
+    "Native UI entry and mouse workflow"
+  ],
+  "pages": "4-11",
+  "plane": "Front",
+  "result": "passed",
+  "source": "https://drive.google.com/file/d/1PUrUjtnXYu7C9-piphr1rg4BUoxOE2WZ/view",
+  "source_units": "inch",
+  "step_roundtrip_verified": true,
+  "test": "jourden_lblock_dimensions_regenerate_after_width_edit_and_file_roundtrip",
+  "tutorial": "OnShape: Extrude Tutorial Part 1, Single Profile Extrude",
+  "verification": "Rust engine integration test, not native UI interaction"
+}

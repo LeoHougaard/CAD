@@ -1,0 +1,53 @@
+{
+  "id": "extrude",
+  "name": "Extrude",
+  "version": "1.0.0",
+  "category": "feature",
+  "editor": "",
+  "script": "extrude.rhai",
+  "fields": [
+    {
+      "key": "sketch",
+      "label": "Sketch",
+      "kind": "sketch",
+      "default": ""
+    },
+    {
+      "key": "mode",
+      "label": "Operation",
+      "kind": "choice",
+      "default": "New",
+      "options": [
+        "New",
+        "Add",
+        "Remove",
+        "Intersect"
+      ]
+    },
+    {
+      "key": "target",
+      "label": "Merge scope",
+      "kind": "body",
+      "default": ""
+    },
+    {
+      "key": "depth",
+      "label": "Depth",
+      "kind": "number",
+      "default": "10"
+    },
+    {
+      "key": "symmetric",
+      "label": "Symmetric",
+      "kind": "bool",
+      "default": false
+    },
+    {
+      "key": "reverse",
+      "label": "Reverse",
+      "kind": "bool",
+      "default": false
+    }
+  ],
+  "description": "Extrude closed sketch regions with new, add, remove or intersect."
+}

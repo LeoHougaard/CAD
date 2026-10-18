@@ -1,0 +1,34 @@
+{
+  "id": "sketch",
+  "name": "Sketch",
+  "version": "1.0.0",
+  "category": "feature",
+  "editor": "sketch",
+  "script": "sketch.rhai",
+  "fields": [
+    {
+      "key": "plane",
+      "label": "Plane",
+      "kind": "choice",
+      "default": "Top",
+      "options": [
+        "Top",
+        "Front",
+        "Right"
+      ]
+    },
+    {
+      "key": "offset",
+      "label": "Plane offset",
+      "kind": "number",
+      "default": "0"
+    },
+    {
+      "key": "support",
+      "label": "Attached face",
+      "kind": "support",
+      "default": ""
+    }
+  ],
+  "description": "Draw a dimensioned profile on a plane or supported planar face."
+}

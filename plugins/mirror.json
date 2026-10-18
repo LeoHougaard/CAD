@@ -1,0 +1,40 @@
+{
+  "id": "mirror",
+  "name": "Mirror",
+  "version": "1.0.0",
+  "category": "feature",
+  "editor": "",
+  "script": "mirror.rhai",
+  "fields": [
+    {
+      "key": "target",
+      "label": "Part",
+      "kind": "body",
+      "default": ""
+    },
+    {
+      "key": "plane",
+      "label": "Mirror plane",
+      "kind": "choice",
+      "default": "Right",
+      "options": [
+        "Top",
+        "Front",
+        "Right"
+      ]
+    },
+    {
+      "key": "offset",
+      "label": "Plane offset",
+      "kind": "number",
+      "default": "0"
+    },
+    {
+      "key": "keep",
+      "label": "Keep original",
+      "kind": "bool",
+      "default": true
+    }
+  ],
+  "description": ""
+}

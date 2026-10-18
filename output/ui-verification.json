@@ -1,0 +1,28 @@
+{
+  "dimensions": [
+    60,
+    30,
+    10
+  ],
+  "hole_diameter": 10,
+  "center": [
+    30,
+    15
+  ],
+  "sketch_dof": 0,
+  "independent_step_volume": 17214.601836602553,
+  "expected_volume": 17214.601836602553,
+  "native_checks": [
+    "D and label placement",
+    "driving dimensions",
+    "blue-to-white constraint status",
+    "constraint-preserving drag",
+    "undo and redo",
+    "save as",
+    "reopen and auto-fit",
+    "STEP export",
+    "dark fixed-width file dialog",
+    "startup without input",
+    "blank-space clears feature selection and empty Properties panel"
+  ]
+}

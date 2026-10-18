@@ -1,0 +1,101 @@
+{
+  "date": "2026-10-17",
+  "source": {
+    "release_suite_fingerprint": "f7842bcf7d6a5283ee749be6b75d39c41a6e03e161d12ff966db66420de5a26e",
+    "packaged_fingerprint": "c1283df83b5991e35c33c42b282132fcd5143d0ffe168e45bee6cf4fbb143eac",
+    "matching_windows_pixel_source": true,
+    "post_suite_change": "Replaced two missing-glyph profile ordering labels with ASCII ^ and v. Then passed strict all-target Clippy, 13 library tests, release builds and native Pixel UI checks."
+  },
+  "release_tests": {
+    "windows": 152,
+    "pixel_native_arm64_linux": 152,
+    "failures": 0
+  },
+  "independent_step": {
+    "baseline_fixtures": 8,
+    "sweep_loft_fixtures": 17,
+    "sweep_loft_report": "sweep-loft/independent-step-check.json",
+    "ci_reproduction_helper": "../tools/verify_ci_step.py"
+  },
+  "native_final_pixel": {
+    "screen_pixels": [
+      1080,
+      2286
+    ],
+    "cad_window_pixels": [
+      1076,
+      900
+    ],
+    "feature_tree_width_pixels": 188,
+    "checks": [
+      "Loft ordered selectors and ASCII controls render correctly at 1024px window width",
+      "Remove a middle loft section, apply, and undo",
+      "Reverse all three loft profiles using the ordering controls, apply, and undo",
+      "Sweep profile and path selectors render correctly",
+      "More exposes Sweep and Loft",
+      "Circular hollow sweep renders continuously",
+      "29-entry, 13-sketch, 75-face housing renders and fits the compact viewport"
+    ],
+    "evidence": [
+      "pixel-final-loft-ascii-detail.png",
+      "pixel-final-loft-reverse-detail.png",
+      "pixel-final-sweep-editor-detail.png",
+      "pixel-final-more-menu-detail.png",
+      "pixel-final-circular-sweep-detail.png",
+      "pixel-final-housing-detail.png"
+    ],
+    "housing_idle": {
+      "elapsed_seconds": 15.001938291999977,
+      "cpu_seconds": 0.0,
+      "rss_kib": 120536,
+      "rss_mib": 117.7109375,
+      "private_kib": 103868,
+      "shared_graphics_server_excluded": true,
+      "fps_measured": false
+    }
+  },
+  "packages": {
+    "windows_cad": {
+      "path": "../dist/CAD.exe",
+      "sha256": "30354d277a0c75306eacbd7bf9dcce780d256eb8f982a33dd58c58bbda0e30b5",
+      "bytes": 18172928
+    },
+    "windows_agent": {
+      "path": "../dist/cad-agent.exe",
+      "sha256": "4ce0f92af5a5421f14f5edb15dce20d53bdb9014904a488c86990a1fb08b4b39",
+      "bytes": 13025792
+    },
+    "linux_cad_sha256": "7f2926bab0fc2b45010682df2dabee4f0885fd44859aa21b3f2f1ddef57614ea",
+    "linux_agent_sha256": "aa1055a1eb962a05dad4960acfdb2d8589904c4cbf2e868a91acd3b75321d0b1",
+    "linux_arm64_archive": {
+      "path": "CAD-linux-arm64.tar.gz",
+      "sha256": "823ca49a3c59dc8e5852589236800aa8cab035660e9684cbf2dbf393aaf705af",
+      "bytes": 12468554
+    }
+  },
+  "collaboration": "collaboration-pixel-verification.json",
+  "ci": {
+    "workflow": "../.github/workflows/ci.yml",
+    "hosted_results": "https://github.com/LeoHougaard/CAD/actions/workflows/ci.yml",
+    "platforms": [
+      "ubuntu-latest",
+      "windows-latest"
+    ],
+    "checks": [
+      "Strict Clippy",
+      "Locked release workspace tests",
+      "Release applications",
+      "Minimal headless compilation",
+      "Windows package",
+      "25 independent STEP fixtures on Linux"
+    ]
+  },
+  "limits": [
+    "No measured comparison with Onshape and no reliable viewport FPS measurement",
+    "Sweep and loft support only the combinations documented in docs/sweep-loft.md; torus displayed mass is numerical",
+    "Periodic perpendicular-cylinder fuse can still fail and is explicitly rejected",
+    "Some fillets have missing or ambiguous edge references after topology changes",
+    "Arcs, splines, trim, assemblies and Onshape FeatureScript are not implemented",
+    "Linux SpaceMouse input is not implemented; corrected Windows directions have semantic tests but physical feel needs user feedback"
+  ]
+}

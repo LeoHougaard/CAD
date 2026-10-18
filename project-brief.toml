@@ -1,0 +1,136 @@
+# Confirmed product requirements. Update as Leo makes decisions.
+# Implementation choices and current limits are recorded below.
+
+[product]
+goal = "A lightweight, responsive local parametric CAD application."
+intended_workload = "Moderately complex parts and assemblies; complexity is not yet quantified."
+reason_to_choose = "Usable offline and faster than Onshape on relevant modeling workflows."
+scope_limit = "Broad feature completeness comparable to Fusion 360 is not a goal."
+first_release_scope = "A working fully parametric Part Studio. Assembly implementation starts afterward."
+primary_workflow_reference = "Onshape"
+primary_interface_reference = "Onshape"
+implementation_reference = "FreeCAD algorithms, feature behavior and edge cases"
+other_reference = "SolidCraft Rust architecture and geometry work"
+initial_platform = "Windows"
+future_platform = "Linux"
+validated_linux_platform = "Native Debian 13 ARM64 on Pixel 10; x86-64 Linux is not yet tested."
+offline_operation = true
+cloud_required = false
+open_source_acceptable = true
+
+[implementation]
+application_language = "Rust"
+geometry_kernel_language = "Rust"
+sketch_solver_language = "Rust"
+rewrite_scope = "Implement or rewrite the needed geometry and feature algorithms for our CAD."
+reuse_policy = "Evaluate existing Rust modules; reuse suitable code and rewrite gaps as needed."
+freecad_port = false
+cpp_geometry_or_solver_dependency = false
+
+[interaction]
+priority = "Preserve familiar Onshape modeling workflows as features are implemented."
+feature_tree = "Editable ordered history with suppression, rollback and visible feature failures."
+sketch_workflow = "Onshape-style D tool, select geometry, place dimension, enter value; double-click to edit. Geometric constraints and free dragging. No grid."
+current_focus = "Improve sketches before adding more solid features."
+additional_solid_tools = "Leo requested Sweep and Loft; initial exact-solid implementations have restricted documented inputs."
+text_policy = "Keep controls, dimensions, errors and essential status. Put instructions in Help and tooltips."
+feature_workflow = "Select inputs, edit parameters, inspect preview, confirm or cancel."
+part_model = "Support an Onshape-style Part Studio direction, including multiple parts when implemented."
+navigation = "Orthographic camera; interactive face/edge/corner navigation cube; Windows SpaceMouse Pro via foreground Raw Input. Preserve Onshape camera and selection conventions."
+freecad_ui_is_reference = false
+
+[parametric_history]
+required = true
+primary_reference = "Onshape Part Studio"
+additional_timeline_reference = "Fusion 360"
+editable_source = "Preserve sketches, constraints, dimensions, feature definitions and dependencies."
+upstream_edits = "Editing an earlier feature regenerates the affected downstream history."
+history_controls = ["Edit", "Rollback", "Reorder when dependencies permit", "Suppress and unsuppress", "Undo and redo"]
+saved_documents = "Retain the editable parametric history; derived geometry is a cache, not a substitute for the history."
+unresolved = ["Representative user-designed part and feature count"]
+
+[appearance]
+theme = "Dark throughout"
+coverage = ["Viewport", "Feature tree", "Feature dialogs", "Menus", "Popups", "Plugin controls", "Application-owned file picker"]
+follow_os_light_theme = false
+plugin_style_policy = "Plugin controls inherit the host theme."
+
+[extensions]
+principle = "Built-in tools and added tools use the same public extension contract."
+contribution_types = ["Parametric modeling features", "Interactive tools", "Importers and exporters", "Compiled Rust algorithm providers"]
+required_examples = ["New sketch", "Extrude", "Export STEP"]
+feature_storage = "Plugin identity, pinned version, parameter schema version, parameters and stable references."
+ordinary_feature_requires_host_rebuild = false
+optional_features = "Package extra capabilities separately and load only what is needed."
+future_featurescript = "Keep room for a Rust implementation of a documented Onshape FeatureScript subset; do not promise drop-in compatibility."
+
+[performance]
+priority = "Very fast interaction and minimal system resources are release requirements from the first prototype."
+idle = "Event-driven rendering. No continuous redraw or polling while idle."
+interactive_work = "Keep geometry generation, solving and tessellation off the UI thread."
+edits = "Coalesce rapid edits and discard stale background results."
+memory = "Avoid full-model copies per frame or pointer event. Bound caches and checkpoints."
+plugins = "Evaluate feature scripts when needed, not in the viewport rendering loop."
+measurement = ["Cold startup", "Idle CPU", "Idle GPU", "Private process memory", "Peak memory", "GPU allocations", "Edit and preview latency", "Frame time during regeneration", "Installed size"]
+measured_baseline_exists = true
+development_order = "Measure and optimize the complete sketch-to-extrude workflow before expanding feature breadth."
+interaction_gate = "Camera, selection and parameter controls remain responsive while geometry regenerates."
+benchmark_policy = "Use release builds and fixed test models. Record hardware, model complexity, correctness, median and tail latency, and peak memory."
+regression_policy = "Investigate material latency or memory regressions before accepting the change."
+tradeoff_policy = "Prefer less initial feature breadth and a simpler implementation when that improves speed and resource use without compromising geometry correctness."
+
+[geometry_quality]
+model_authority = "Precise BRep geometry; display triangles are derived data."
+mesh_fallback = "Do not silently replace curved modeling geometry with mesh approximations."
+references = "Track face and edge creation history; report missing or ambiguous references."
+verification = "Check topology, analytic dimensions and mass properties, downstream references, and exported STEP using an independent implementation."
+freecad_test_reference = true
+
+[selected_architecture]
+ui = "egui/eframe, native OpenGL, event-driven redraw"
+script_runtime = "Rhai with bounded execution, versioned local packages"
+geometry = "Brepkit 4.2.2, precise BRep, reject mesh fallbacks"
+solver = "Local Rust derivative of Brepkit GCS, dimension constraints and mobility analysis"
+plugin_limit = "Scripts compose existing Rust operations. New codecs, editor types and kernel operations require a rebuild."
+verification = "Release tests, native workflow checks and independent STEP import using a development-only Gmsh verifier"
+
+[first_milestone]
+workflow = [
+  "Draw and dimension a sketch, including a closed profile with a hole.",
+  "Extrude and perform a simple cut.",
+  "Attach a downstream sketch to a generated face and change upstream dimensions.",
+  "Undo, redo, save and reopen without changing intended geometry.",
+  "Export STEP and verify independently.",
+  "Add an editable custom feature through a separate script package without changing host code.",
+  "Measure resource use and interaction latency on a documented reference machine."
+]
+
+[grill]
+status = "Implementation authorized by Leo; deliver a usable Part Studio for design feedback."
+confirmed_user_decisions = [
+  "Offline use is a primary reason to build this.",
+  "Relevant modeling workflows should be faster than Onshape.",
+  "Target moderately complex parts and assemblies.",
+  "A broad feature-complete Fusion 360 equivalent is outside the intended scope.",
+  "About 20 unique parts and 100 total placed instances is a reasonable initial assembly benchmark target.",
+  "Part Studio must work before assembly implementation begins.",
+  "The Part Studio must be fully parametric with an editable Onshape/Fusion-style history timeline."
+]
+unproven_assumptions = [
+  "Eliminating cloud communication will produce a material speed advantage on the target workflows."
+]
+unresolved = [
+  "Representative part feature history and geometry complexity, and a real assembly example.",
+  "Which workflows must beat Onshape and by what margin.",
+  "Reference hardware and acceptable resource budgets.",
+  "Feedback from Leo designing representative parts in the prototype.",
+  "Assembly behavior, deferred until the Part Studio works."
+]
+
+[assembly_target]
+unique_parts = 20
+total_instances = 100
+basis = "Leo accepted this example as a reasonable initial planning and benchmark target."
+part_complexity_defined = false
+assembly_behavior_defined = false
+implementation_deferred_until_part_studio_works = true

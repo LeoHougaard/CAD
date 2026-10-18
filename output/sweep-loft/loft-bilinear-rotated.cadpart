@@ -1,0 +1,492 @@
+{
+  "format": 1,
+  "name": "Rotated section bilinear loft",
+  "variables": {
+    "end_half": "8",
+    "height": "30"
+  },
+  "features": [
+    {
+      "id": "f1",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Square start",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "-10"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "-10"
+            },
+            {
+              "a": 2,
+              "b": 1,
+              "kind": "Coincident",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0:1"
+            },
+            {
+              "a": 2,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "10"
+            },
+            {
+              "a": 2,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "-10"
+            },
+            {
+              "a": 3,
+              "b": 2,
+              "kind": "Coincident",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0:1"
+            },
+            {
+              "a": 3,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "10"
+            },
+            {
+              "a": 3,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "10"
+            },
+            {
+              "a": 4,
+              "b": 1,
+              "kind": "Coincident",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "1:0"
+            },
+            {
+              "a": 4,
+              "b": 3,
+              "kind": "Coincident",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0:1"
+            },
+            {
+              "a": 4,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "-10"
+            },
+            {
+              "a": 4,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "10"
+            }
+          ],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "line",
+              "values": [
+                "-10",
+                "-10",
+                "10",
+                "-10"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 2,
+              "kind": "line",
+              "values": [
+                "10",
+                "-10",
+                "10",
+                "10"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 3,
+              "kind": "line",
+              "values": [
+                "10",
+                "10",
+                "-10",
+                "10"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 4,
+              "kind": "line",
+              "values": [
+                "-10",
+                "10",
+                "-10",
+                "-10"
+              ]
+            }
+          ],
+          "next_id": 4
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": ""
+      }
+    },
+    {
+      "id": "f2",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Rotated end",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "-#end_half"
+            },
+            {
+              "a": 2,
+              "b": 1,
+              "kind": "Coincident",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0:1"
+            },
+            {
+              "a": 2,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#end_half"
+            },
+            {
+              "a": 2,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0"
+            },
+            {
+              "a": 3,
+              "b": 2,
+              "kind": "Coincident",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0:1"
+            },
+            {
+              "a": 3,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0"
+            },
+            {
+              "a": 3,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#end_half"
+            },
+            {
+              "a": 4,
+              "b": 1,
+              "kind": "Coincident",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "1:0"
+            },
+            {
+              "a": 4,
+              "b": 3,
+              "kind": "Coincident",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0:1"
+            },
+            {
+              "a": 4,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "-#end_half"
+            },
+            {
+              "a": 4,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0"
+            }
+          ],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "line",
+              "values": [
+                "0",
+                "-8",
+                "8",
+                "0"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 2,
+              "kind": "line",
+              "values": [
+                "8",
+                "0",
+                "0",
+                "8"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 3,
+              "kind": "line",
+              "values": [
+                "0",
+                "8",
+                "-8",
+                "0"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 4,
+              "kind": "line",
+              "values": [
+                "-8",
+                "0",
+                "0",
+                "-8"
+              ]
+            }
+          ],
+          "next_id": 4
+        },
+        "offset": "#height",
+        "plane": "Top",
+        "support": ""
+      }
+    },
+    {
+      "id": "f3",
+      "plugin": "loft",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "92d687bfc51b42d9",
+      "name": "Loft 1",
+      "suppressed": false,
+      "params": {
+        "mode": "New",
+        "profiles": [
+          "f1",
+          "f2"
+        ],
+        "target": ""
+      }
+    }
+  ],
+  "rollback": null,
+  "next_id": 4
+}

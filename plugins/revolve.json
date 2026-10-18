@@ -1,0 +1,57 @@
+{
+  "id": "revolve",
+  "name": "Revolve",
+  "version": "1.0.0",
+  "category": "feature",
+  "editor": "",
+  "script": "revolve.rhai",
+  "fields": [
+    {
+      "key": "sketch",
+      "label": "Sketch",
+      "kind": "sketch",
+      "default": ""
+    },
+    {
+      "key": "mode",
+      "label": "Operation",
+      "kind": "choice",
+      "default": "New",
+      "options": [
+        "New",
+        "Add",
+        "Remove",
+        "Intersect"
+      ]
+    },
+    {
+      "key": "target",
+      "label": "Merge scope",
+      "kind": "body",
+      "default": ""
+    },
+    {
+      "key": "axis",
+      "label": "Sketch axis",
+      "kind": "choice",
+      "default": "V",
+      "options": [
+        "U",
+        "V"
+      ]
+    },
+    {
+      "key": "angle",
+      "label": "Angle",
+      "kind": "number",
+      "default": "360"
+    },
+    {
+      "key": "axis_offset",
+      "label": "Axis offset",
+      "kind": "number",
+      "default": "0"
+    }
+  ],
+  "description": "Revolve a profile about one of its sketch axes."
+}

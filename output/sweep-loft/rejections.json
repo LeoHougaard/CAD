@@ -1,0 +1,44 @@
+{
+  "cases": [
+    {
+      "case": "missing-sweep-path",
+      "error": "Sketch 'missing' is missing. Choose an earlier, unsuppressed sketch.",
+      "previous_volume_preserved_mm3": 240.0
+    },
+    {
+      "case": "unsupported-sharp-annular-bend",
+      "error": "Sharp-corner sweeps currently need one polygon profile without holes; use a circular path for a curved tube",
+      "previous_volume_preserved_mm3": 240.0
+    },
+    {
+      "case": "profile-not-normal-to-path",
+      "error": "Place the sweep profile perpendicular to the start of its path",
+      "previous_volume_preserved_mm3": 240.0
+    },
+    {
+      "case": "one-loft-profile",
+      "error": "Loft needs between 2 and 32 profile sketches",
+      "previous_volume_preserved_mm3": 240.0
+    },
+    {
+      "case": "loft-inner-wire",
+      "error": "Each loft sketch must contain one closed profile without holes",
+      "previous_volume_preserved_mm3": 240.0
+    },
+    {
+      "case": "mixed-loft-profile-types",
+      "error": "Mixing circular and polygon loft profiles would approximate curves",
+      "previous_volume_preserved_mm3": 240.0
+    },
+    {
+      "case": "loft-180-degree-correspondence-collapse",
+      "error": "Polygon loft sections must stay strictly convex without collapsing or crossing between profiles",
+      "previous_volume_preserved_mm3": 240.0
+    }
+  ],
+  "source_workflow_references": [
+    "https://cad.onshape.com/help/Content/PartStudio/sweep.htm",
+    "https://cad.onshape.com/help/Content/PartStudio/loft.htm"
+  ],
+  "verification": "Rust document/solver/kernel APIs, no native UI entry"
+}

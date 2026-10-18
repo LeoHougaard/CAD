@@ -1,0 +1,231 @@
+{
+  "format": 1,
+  "name": "Perpendicular cylinder fuse reproduction",
+  "variables": {},
+  "features": [
+    {
+      "id": "f1",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Sketch 1",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "rectangle",
+              "values": [
+                "0",
+                "-101.6",
+                "101.6",
+                "101.6"
+              ]
+            }
+          ],
+          "next_id": 1
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": ""
+      }
+    },
+    {
+      "id": "f2",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Extrude 1",
+      "suppressed": false,
+      "params": {
+        "depth": "1.5*inch",
+        "mode": "New",
+        "reverse": false,
+        "sketch": "f1",
+        "symmetric": false,
+        "target": ""
+      }
+    },
+    {
+      "id": "f3",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Side hole sketch",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0.75*inch"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0.75*inch"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Diameter",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0.75*inch"
+            }
+          ],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "circle",
+              "values": [
+                "19.05",
+                "19.05",
+                "9.525"
+              ]
+            }
+          ],
+          "next_id": 1
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": "f2:side:1:0"
+      }
+    },
+    {
+      "id": "f4",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Side hole",
+      "suppressed": false,
+      "params": {
+        "depth": "4*inch",
+        "mode": "Remove",
+        "reverse": true,
+        "sketch": "f3",
+        "symmetric": false,
+        "target": "f2:0"
+      }
+    },
+    {
+      "id": "f5",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Disc add sketch",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0*inch"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "2*inch"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Diameter",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "4*inch"
+            }
+          ],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "circle",
+              "values": [
+                "0",
+                "50.8",
+                "50.8"
+              ]
+            }
+          ],
+          "next_id": 1
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": "f2:start"
+      }
+    },
+    {
+      "id": "f6",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Disc add",
+      "suppressed": false,
+      "params": {
+        "depth": "1*inch",
+        "mode": "Add",
+        "reverse": true,
+        "sketch": "f5",
+        "symmetric": false,
+        "target": "f2:0"
+      }
+    }
+  ],
+  "rollback": null,
+  "next_id": 7
+}

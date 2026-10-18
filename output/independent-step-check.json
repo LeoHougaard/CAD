@@ -1,0 +1,50 @@
+[
+  {
+    "fixture": "plate",
+    "solids": 1,
+    "volume": 31095.221315766128,
+    "expected": 31095.22131576614
+  },
+  {
+    "fixture": "chamfer",
+    "solids": 1,
+    "volume": 23322.66666666665,
+    "expected": 23322.666666666668
+  },
+  {
+    "fixture": "shell",
+    "solids": 1,
+    "volume": 7152.0,
+    "expected": 7152
+  },
+  {
+    "fixture": "revolve",
+    "solids": 1,
+    "volume": 7853.981633974485,
+    "expected": 7853.981633974482
+  },
+  {
+    "fixture": "mirror",
+    "solids": 2,
+    "volume": 48000.0,
+    "expected": 48000
+  },
+  {
+    "fixture": "pattern",
+    "solids": 3,
+    "volume": 72000.0,
+    "expected": 72000
+  },
+  {
+    "fixture": "transform",
+    "solids": 1,
+    "volume": 24000.0,
+    "expected": 24000
+  },
+  {
+    "fixture": "fillet",
+    "solids": 1,
+    "volume": 23695.941606388373,
+    "check": "import and volume bounds"
+  }
+]

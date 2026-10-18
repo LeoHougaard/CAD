@@ -1,0 +1,243 @@
+{
+  "format": 1,
+  "name": "Reyes housing",
+  "variables": {
+    "base_thickness": "0.25*inch",
+    "base_width": "6*inch",
+    "body_width": "4*inch",
+    "depth": "2.625*inch",
+    "height": "3.625*inch"
+  },
+  "features": [
+    {
+      "id": "f1",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Base profile",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "-#base_width/2"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "-#depth/2"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Width",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#base_width"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Height",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#depth"
+            }
+          ],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "rectangle",
+              "values": [
+                "0",
+                "0",
+                "10",
+                "10"
+              ]
+            }
+          ],
+          "next_id": 1
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": ""
+      }
+    },
+    {
+      "id": "f2",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Base",
+      "suppressed": false,
+      "params": {
+        "depth": "#base_thickness",
+        "mode": "New",
+        "reverse": false,
+        "sketch": "f1",
+        "symmetric": false,
+        "target": "f2:0"
+      }
+    },
+    {
+      "id": "f3",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Body profile",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "-#body_width/2"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "-#depth/2"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Width",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#body_width"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Height",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#depth"
+            }
+          ],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "rectangle",
+              "values": [
+                "0",
+                "0",
+                "10",
+                "10"
+              ]
+            }
+          ],
+          "next_id": 1
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": "f2:end"
+      }
+    },
+    {
+      "id": "f4",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Body",
+      "suppressed": false,
+      "params": {
+        "depth": "#height",
+        "mode": "Add",
+        "reverse": false,
+        "sketch": "f3",
+        "symmetric": false,
+        "target": "f2:0"
+      }
+    },
+    {
+      "id": "f5",
+      "plugin": "fillet",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1f14e47ce34b6a27",
+      "name": "Source quarter inch corner fillets",
+      "suppressed": false,
+      "params": {
+        "edges": [
+          "f2:side:1:0 | f2:side:1:3",
+          "f2:side:1:2 | f2:side:1:3",
+          "f2:side:1:1 | f2:side:1:2",
+          "f2:side:1:0 | f2:side:1:1",
+          "f2:side:1:2 | f4:side:1:3",
+          "f2:side:1:2 | f4:side:1:1",
+          "f2:side:1:0 | f4:side:1:1",
+          "f2:side:1:0 | f4:side:1:3"
+        ],
+        "radius": "0.25*inch",
+        "target": "f2:0"
+      }
+    }
+  ],
+  "rollback": null,
+  "next_id": 6
+}

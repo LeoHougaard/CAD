@@ -1,0 +1,955 @@
+{
+  "format": 1,
+  "name": "Perforated panel",
+  "variables": {},
+  "features": [
+    {
+      "id": "f1",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Sketch 1",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "rectangle",
+              "values": [
+                "-100",
+                "-60",
+                "200",
+                "120"
+              ]
+            }
+          ],
+          "next_id": 1
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": ""
+      }
+    },
+    {
+      "id": "f2",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Extrude 1",
+      "suppressed": false,
+      "params": {
+        "depth": "12",
+        "mode": "New",
+        "reverse": false,
+        "sketch": "f1",
+        "symmetric": false,
+        "target": ""
+      }
+    },
+    {
+      "id": "f3",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Sketch 2",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "circle",
+              "values": [
+                "-80",
+                "-42",
+                "3"
+              ]
+            }
+          ],
+          "next_id": 1
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": "f2:end"
+      }
+    },
+    {
+      "id": "f4",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Extrude 2",
+      "suppressed": false,
+      "params": {
+        "depth": "12",
+        "mode": "Remove",
+        "reverse": true,
+        "sketch": "f3",
+        "symmetric": false,
+        "target": ""
+      }
+    },
+    {
+      "id": "f5",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Sketch 3",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "circle",
+              "values": [
+                "-40",
+                "-42",
+                "3"
+              ]
+            }
+          ],
+          "next_id": 1
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": "f2:end"
+      }
+    },
+    {
+      "id": "f6",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Extrude 3",
+      "suppressed": false,
+      "params": {
+        "depth": "12",
+        "mode": "Remove",
+        "reverse": true,
+        "sketch": "f5",
+        "symmetric": false,
+        "target": ""
+      }
+    },
+    {
+      "id": "f7",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Sketch 4",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "circle",
+              "values": [
+                "0",
+                "-42",
+                "3"
+              ]
+            }
+          ],
+          "next_id": 1
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": "f2:end"
+      }
+    },
+    {
+      "id": "f8",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Extrude 4",
+      "suppressed": false,
+      "params": {
+        "depth": "12",
+        "mode": "Remove",
+        "reverse": true,
+        "sketch": "f7",
+        "symmetric": false,
+        "target": ""
+      }
+    },
+    {
+      "id": "f9",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Sketch 5",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "circle",
+              "values": [
+                "40",
+                "-42",
+                "3"
+              ]
+            }
+          ],
+          "next_id": 1
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": "f2:end"
+      }
+    },
+    {
+      "id": "f10",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Extrude 5",
+      "suppressed": false,
+      "params": {
+        "depth": "12",
+        "mode": "Remove",
+        "reverse": true,
+        "sketch": "f9",
+        "symmetric": false,
+        "target": ""
+      }
+    },
+    {
+      "id": "f11",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Sketch 6",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "circle",
+              "values": [
+                "80",
+                "-42",
+                "3"
+              ]
+            }
+          ],
+          "next_id": 1
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": "f2:end"
+      }
+    },
+    {
+      "id": "f12",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Extrude 6",
+      "suppressed": false,
+      "params": {
+        "depth": "12",
+        "mode": "Remove",
+        "reverse": true,
+        "sketch": "f11",
+        "symmetric": false,
+        "target": ""
+      }
+    },
+    {
+      "id": "f13",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Sketch 7",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "circle",
+              "values": [
+                "-80",
+                "-14",
+                "3"
+              ]
+            }
+          ],
+          "next_id": 1
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": "f2:end"
+      }
+    },
+    {
+      "id": "f14",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Extrude 7",
+      "suppressed": false,
+      "params": {
+        "depth": "12",
+        "mode": "Remove",
+        "reverse": true,
+        "sketch": "f13",
+        "symmetric": false,
+        "target": ""
+      }
+    },
+    {
+      "id": "f15",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Sketch 8",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "circle",
+              "values": [
+                "-40",
+                "-14",
+                "3"
+              ]
+            }
+          ],
+          "next_id": 1
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": "f2:end"
+      }
+    },
+    {
+      "id": "f16",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Extrude 8",
+      "suppressed": false,
+      "params": {
+        "depth": "12",
+        "mode": "Remove",
+        "reverse": true,
+        "sketch": "f15",
+        "symmetric": false,
+        "target": ""
+      }
+    },
+    {
+      "id": "f17",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Sketch 9",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "circle",
+              "values": [
+                "0",
+                "-14",
+                "3"
+              ]
+            }
+          ],
+          "next_id": 1
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": "f2:end"
+      }
+    },
+    {
+      "id": "f18",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Extrude 9",
+      "suppressed": false,
+      "params": {
+        "depth": "12",
+        "mode": "Remove",
+        "reverse": true,
+        "sketch": "f17",
+        "symmetric": false,
+        "target": ""
+      }
+    },
+    {
+      "id": "f19",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Sketch 10",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "circle",
+              "values": [
+                "40",
+                "-14",
+                "3"
+              ]
+            }
+          ],
+          "next_id": 1
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": "f2:end"
+      }
+    },
+    {
+      "id": "f20",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Extrude 10",
+      "suppressed": false,
+      "params": {
+        "depth": "12",
+        "mode": "Remove",
+        "reverse": true,
+        "sketch": "f19",
+        "symmetric": false,
+        "target": ""
+      }
+    },
+    {
+      "id": "f21",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Sketch 11",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "circle",
+              "values": [
+                "80",
+                "-14",
+                "3"
+              ]
+            }
+          ],
+          "next_id": 1
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": "f2:end"
+      }
+    },
+    {
+      "id": "f22",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Extrude 11",
+      "suppressed": false,
+      "params": {
+        "depth": "12",
+        "mode": "Remove",
+        "reverse": true,
+        "sketch": "f21",
+        "symmetric": false,
+        "target": ""
+      }
+    },
+    {
+      "id": "f23",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Sketch 12",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "circle",
+              "values": [
+                "-80",
+                "14",
+                "3"
+              ]
+            }
+          ],
+          "next_id": 1
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": "f2:end"
+      }
+    },
+    {
+      "id": "f24",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Extrude 12",
+      "suppressed": false,
+      "params": {
+        "depth": "12",
+        "mode": "Remove",
+        "reverse": true,
+        "sketch": "f23",
+        "symmetric": false,
+        "target": ""
+      }
+    },
+    {
+      "id": "f25",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Sketch 13",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "circle",
+              "values": [
+                "-40",
+                "14",
+                "3"
+              ]
+            }
+          ],
+          "next_id": 1
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": "f2:end"
+      }
+    },
+    {
+      "id": "f26",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Extrude 13",
+      "suppressed": false,
+      "params": {
+        "depth": "12",
+        "mode": "Remove",
+        "reverse": true,
+        "sketch": "f25",
+        "symmetric": false,
+        "target": ""
+      }
+    },
+    {
+      "id": "f27",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Sketch 14",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "circle",
+              "values": [
+                "0",
+                "14",
+                "3"
+              ]
+            }
+          ],
+          "next_id": 1
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": "f2:end"
+      }
+    },
+    {
+      "id": "f28",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Extrude 14",
+      "suppressed": false,
+      "params": {
+        "depth": "12",
+        "mode": "Remove",
+        "reverse": true,
+        "sketch": "f27",
+        "symmetric": false,
+        "target": ""
+      }
+    },
+    {
+      "id": "f29",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Sketch 15",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "circle",
+              "values": [
+                "40",
+                "14",
+                "3"
+              ]
+            }
+          ],
+          "next_id": 1
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": "f2:end"
+      }
+    },
+    {
+      "id": "f30",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Extrude 15",
+      "suppressed": false,
+      "params": {
+        "depth": "12",
+        "mode": "Remove",
+        "reverse": true,
+        "sketch": "f29",
+        "symmetric": false,
+        "target": ""
+      }
+    },
+    {
+      "id": "f31",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Sketch 16",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "circle",
+              "values": [
+                "80",
+                "14",
+                "3"
+              ]
+            }
+          ],
+          "next_id": 1
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": "f2:end"
+      }
+    },
+    {
+      "id": "f32",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Extrude 16",
+      "suppressed": false,
+      "params": {
+        "depth": "12",
+        "mode": "Remove",
+        "reverse": true,
+        "sketch": "f31",
+        "symmetric": false,
+        "target": ""
+      }
+    },
+    {
+      "id": "f33",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Sketch 17",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "circle",
+              "values": [
+                "-80",
+                "42",
+                "3"
+              ]
+            }
+          ],
+          "next_id": 1
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": "f2:end"
+      }
+    },
+    {
+      "id": "f34",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Extrude 17",
+      "suppressed": false,
+      "params": {
+        "depth": "12",
+        "mode": "Remove",
+        "reverse": true,
+        "sketch": "f33",
+        "symmetric": false,
+        "target": ""
+      }
+    },
+    {
+      "id": "f35",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Sketch 18",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "circle",
+              "values": [
+                "-40",
+                "42",
+                "3"
+              ]
+            }
+          ],
+          "next_id": 1
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": "f2:end"
+      }
+    },
+    {
+      "id": "f36",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Extrude 18",
+      "suppressed": false,
+      "params": {
+        "depth": "12",
+        "mode": "Remove",
+        "reverse": true,
+        "sketch": "f35",
+        "symmetric": false,
+        "target": ""
+      }
+    },
+    {
+      "id": "f37",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Sketch 19",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "circle",
+              "values": [
+                "0",
+                "42",
+                "3"
+              ]
+            }
+          ],
+          "next_id": 1
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": "f2:end"
+      }
+    },
+    {
+      "id": "f38",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Extrude 19",
+      "suppressed": false,
+      "params": {
+        "depth": "12",
+        "mode": "Remove",
+        "reverse": true,
+        "sketch": "f37",
+        "symmetric": false,
+        "target": ""
+      }
+    },
+    {
+      "id": "f39",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Sketch 20",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "circle",
+              "values": [
+                "40",
+                "42",
+                "3"
+              ]
+            }
+          ],
+          "next_id": 1
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": "f2:end"
+      }
+    },
+    {
+      "id": "f40",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Extrude 20",
+      "suppressed": false,
+      "params": {
+        "depth": "12",
+        "mode": "Remove",
+        "reverse": true,
+        "sketch": "f39",
+        "symmetric": false,
+        "target": ""
+      }
+    },
+    {
+      "id": "f41",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Sketch 21",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "circle",
+              "values": [
+                "80",
+                "42",
+                "3"
+              ]
+            }
+          ],
+          "next_id": 1
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": "f2:end"
+      }
+    },
+    {
+      "id": "f42",
+      "plugin": "extrude",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "b3447843f1693770",
+      "name": "Extrude 21",
+      "suppressed": false,
+      "params": {
+        "depth": "12",
+        "mode": "Remove",
+        "reverse": true,
+        "sketch": "f41",
+        "symmetric": false,
+        "target": ""
+      }
+    }
+  ],
+  "rollback": null,
+  "next_id": 43
+}

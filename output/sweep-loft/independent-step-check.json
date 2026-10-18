@@ -1,0 +1,447 @@
+{
+  "verifier": "Gmsh/Open CASCADE, independent of app kernel",
+  "bounds_method": "Default OCC bounds for prisms/cones/bilinear surfaces; OCCBoundsUseStl=1 for torus patches whose default BSpline control hull is loose. All compared within1e-5mm.",
+  "bounds_reference": "https://gmsh.info/doc/texinfo/gmsh.html",
+  "result": "passed",
+  "cases": [
+    {
+      "file": "straight-annular.step",
+      "solids": 1,
+      "volume_mm3": 2010.6192982975379,
+      "expected_volume_mm3": 2010.6192982974676,
+      "volume_absolute_error_mm3": 7.02584657119587e-11,
+      "bounds_method": "OCC analytic/control bounds",
+      "bounds_mm": [
+        -5.0000001,
+        -5.0000001,
+        -1e-07,
+        5.0000001,
+        5.0000001,
+        40.000000100001394
+      ],
+      "expected_bounds_mm": [
+        -5,
+        -5,
+        0,
+        5,
+        5,
+        40
+      ],
+      "torus_extrema_projection_errors_mm": []
+    },
+    {
+      "file": "straight-annular-edited.step",
+      "solids": 1,
+      "volume_mm3": 6534.512719602183,
+      "expected_volume_mm3": 6534.512719466769,
+      "volume_absolute_error_mm3": 1.354137566522695e-07,
+      "bounds_method": "OCC analytic/control bounds",
+      "bounds_mm": [
+        -6.0000001,
+        -6.0000001,
+        -1e-07,
+        6.0000001,
+        6.0000001,
+        65.00000010134698
+      ],
+      "expected_bounds_mm": [
+        -6,
+        -6,
+        0,
+        6,
+        6,
+        65
+      ],
+      "torus_extrema_projection_errors_mm": []
+    },
+    {
+      "file": "circular-annular.step",
+      "solids": 1,
+      "volume_mm3": 3158.2734083559367,
+      "expected_volume_mm3": 3158.273408348595,
+      "volume_absolute_error_mm3": 7.341895980061963e-09,
+      "bounds_method": "OCC STL-derived bounds for torus extrema",
+      "bounds_mm": [
+        -23.0,
+        -23.0,
+        -3.0000000000000004,
+        23.0,
+        23.0,
+        3.0000000000000004
+      ],
+      "expected_bounds_mm": [
+        -23,
+        -23,
+        -3,
+        23,
+        23,
+        3
+      ],
+      "torus_extrema_projection_errors_mm": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "file": "circular-annular-edited.step",
+      "solids": 1,
+      "volume_mm3": 6632.374157573169,
+      "expected_volume_mm3": 6632.374157532048,
+      "volume_absolute_error_mm3": 4.1120983951259404e-08,
+      "bounds_method": "OCC STL-derived bounds for torus extrema",
+      "bounds_mm": [
+        -32.0,
+        -32.0,
+        -4.0,
+        32.0,
+        32.0,
+        4.0
+      ],
+      "expected_bounds_mm": [
+        -32,
+        -32,
+        -4,
+        32,
+        32,
+        4
+      ],
+      "torus_extrema_projection_errors_mm": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "file": "mitred-elbow.step",
+      "solids": 1,
+      "volume_mm3": 400.0,
+      "expected_volume_mm3": 400,
+      "volume_absolute_error_mm3": 0.0,
+      "bounds_method": "OCC analytic/control bounds",
+      "bounds_mm": [
+        -2.0000001000000007,
+        -1.0000001,
+        -1e-07,
+        30.0000001,
+        1.0000000999999998,
+        22.0000001
+      ],
+      "expected_bounds_mm": [
+        -2,
+        -1,
+        0,
+        30,
+        1,
+        22
+      ],
+      "torus_extrema_projection_errors_mm": []
+    },
+    {
+      "file": "mitred-elbow-edited.step",
+      "solids": 1,
+      "volume_mm3": 954.0000000000001,
+      "expected_volume_mm3": 954,
+      "volume_absolute_error_mm3": 1.1368683772161603e-13,
+      "bounds_method": "OCC analytic/control bounds",
+      "bounds_mm": [
+        -3.0000001,
+        -1.5000001,
+        -1e-07,
+        18.0000001,
+        1.5000001,
+        38.0000001
+      ],
+      "expected_bounds_mm": [
+        -3,
+        -1.5,
+        0,
+        18,
+        1.5,
+        38
+      ],
+      "torus_extrema_projection_errors_mm": []
+    },
+    {
+      "file": "loft-two-circles.step",
+      "solids": 1,
+      "volume_mm3": 3162.5366046137237,
+      "expected_volume_mm3": 3162.5366046137246,
+      "volume_absolute_error_mm3": 9.094947017729282e-13,
+      "bounds_method": "OCC analytic/control bounds",
+      "bounds_mm": [
+        -9.0000001,
+        -9.0000001,
+        -1e-07,
+        9.0000001,
+        9.0000001,
+        20.0000001
+      ],
+      "expected_bounds_mm": [
+        -9,
+        -9,
+        0,
+        9,
+        9,
+        20
+      ],
+      "torus_extrema_projection_errors_mm": []
+    },
+    {
+      "file": "loft-two-circles-edited.step",
+      "solids": 1,
+      "volume_mm3": 7194.247176720621,
+      "expected_volume_mm3": 7194.247176720626,
+      "volume_absolute_error_mm3": 5.4569682106375694e-12,
+      "bounds_method": "OCC analytic/control bounds",
+      "bounds_mm": [
+        -12.0000001,
+        -12.0000001,
+        -1e-07,
+        12.0000001,
+        12.0000001,
+        30.0000001
+      ],
+      "expected_bounds_mm": [
+        -12,
+        -12,
+        0,
+        12,
+        12,
+        30
+      ],
+      "torus_extrema_projection_errors_mm": []
+    },
+    {
+      "file": "loft-three-circles.step",
+      "solids": 1,
+      "volume_mm3": 6838.200009313779,
+      "expected_volume_mm3": 6838.200009313782,
+      "volume_absolute_error_mm3": 2.7284841053187847e-12,
+      "bounds_method": "OCC analytic/control bounds",
+      "bounds_mm": [
+        -9.000000099999996,
+        -9.000000099999996,
+        -1e-07,
+        9.000000099999996,
+        9.000000099999996,
+        50.0000001
+      ],
+      "expected_bounds_mm": [
+        -9,
+        -9,
+        0,
+        9,
+        9,
+        50
+      ],
+      "torus_extrema_projection_errors_mm": []
+    },
+    {
+      "file": "loft-three-circles-edited.step",
+      "solids": 1,
+      "volume_mm3": 17090.264035528468,
+      "expected_volume_mm3": 17090.264035528475,
+      "volume_absolute_error_mm3": 7.275957614183426e-12,
+      "bounds_method": "OCC analytic/control bounds",
+      "bounds_mm": [
+        -12.0000001,
+        -12.0000001,
+        -1e-07,
+        12.0000001,
+        12.0000001,
+        80.0000001
+      ],
+      "expected_bounds_mm": [
+        -12,
+        -12,
+        0,
+        12,
+        12,
+        80
+      ],
+      "torus_extrema_projection_errors_mm": []
+    },
+    {
+      "file": "loft-two-rectangles.step",
+      "solids": 1,
+      "volume_mm3": 4750.0,
+      "expected_volume_mm3": 4750.0,
+      "volume_absolute_error_mm3": 0.0,
+      "bounds_method": "OCC analytic/control bounds",
+      "bounds_mm": [
+        -10.0000001,
+        -8.0000001,
+        -1e-07,
+        10.0000001,
+        8.0000001,
+        25.0000001
+      ],
+      "expected_bounds_mm": [
+        -10,
+        -8,
+        0,
+        10,
+        8,
+        25
+      ],
+      "torus_extrema_projection_errors_mm": []
+    },
+    {
+      "file": "loft-two-rectangles-edited.step",
+      "solids": 1,
+      "volume_mm3": 6510.0,
+      "expected_volume_mm3": 6510.0,
+      "volume_absolute_error_mm3": 0.0,
+      "bounds_method": "OCC analytic/control bounds",
+      "bounds_mm": [
+        -10.0000001,
+        -6.0000001,
+        -1e-07,
+        10.0000001,
+        6.0000001,
+        35.00000010000001
+      ],
+      "expected_bounds_mm": [
+        -10,
+        -6,
+        0,
+        10,
+        6,
+        35
+      ],
+      "torus_extrema_projection_errors_mm": []
+    },
+    {
+      "file": "loft-three-rectangles.step",
+      "solids": 1,
+      "volume_mm3": 12683.333333333334,
+      "expected_volume_mm3": 12683.333333333332,
+      "volume_absolute_error_mm3": 1.8189894035458565e-12,
+      "bounds_method": "OCC analytic/control bounds",
+      "bounds_mm": [
+        -18.000000100000005,
+        -8.0000001,
+        -1e-07,
+        12.0000001,
+        8.0000001,
+        60.00000010000001
+      ],
+      "expected_bounds_mm": [
+        -18,
+        -8,
+        0,
+        12,
+        8,
+        60
+      ],
+      "torus_extrema_projection_errors_mm": []
+    },
+    {
+      "file": "loft-three-rectangles-edited.step",
+      "solids": 1,
+      "volume_mm3": 16170.000000000004,
+      "expected_volume_mm3": 16170.0,
+      "volume_absolute_error_mm3": 3.637978807091713e-12,
+      "bounds_method": "OCC analytic/control bounds",
+      "bounds_mm": [
+        -18.0000001,
+        -6.0000001,
+        -1e-07,
+        12.0000001,
+        6.0000001,
+        80.00000010000001
+      ],
+      "expected_bounds_mm": [
+        -18,
+        -6,
+        0,
+        12,
+        6,
+        80
+      ],
+      "torus_extrema_projection_errors_mm": []
+    },
+    {
+      "file": "loft-bilinear-rotated.step",
+      "solids": 1,
+      "volume_mm3": 6880.0,
+      "expected_volume_mm3": 6880,
+      "volume_absolute_error_mm3": 0.0,
+      "bounds_method": "OCC analytic/control bounds",
+      "bounds_mm": [
+        -10.0000001,
+        -10.0000001,
+        -1e-07,
+        10.0000001,
+        10.0000001,
+        30.0000001
+      ],
+      "expected_bounds_mm": [
+        -10,
+        -10,
+        0,
+        10,
+        10,
+        30
+      ],
+      "torus_extrema_projection_errors_mm": []
+    },
+    {
+      "file": "loft-bilinear-rotated-edited.step",
+      "solids": 1,
+      "volume_mm3": 13920.0,
+      "expected_volume_mm3": 13920,
+      "volume_absolute_error_mm3": 0.0,
+      "bounds_method": "OCC analytic/control bounds",
+      "bounds_mm": [
+        -12.000000100000001,
+        -12.000000100000001,
+        -1e-07,
+        12.000000100000001,
+        12.000000100000001,
+        45.0000001
+      ],
+      "expected_bounds_mm": [
+        -12,
+        -12,
+        0,
+        12,
+        12,
+        45
+      ],
+      "torus_extrema_projection_errors_mm": []
+    },
+    {
+      "file": "loft-antiparallel-add.step",
+      "solids": 1,
+      "volume_mm3": 1840.0,
+      "expected_volume_mm3": 1840,
+      "volume_absolute_error_mm3": 0.0,
+      "bounds_method": "OCC analytic/control bounds",
+      "bounds_mm": [
+        -1e-07,
+        -1e-07,
+        -1e-07,
+        10.0000001,
+        8.0000001,
+        23.0000001
+      ],
+      "expected_bounds_mm": [
+        0,
+        0,
+        0,
+        10,
+        8,
+        23
+      ],
+      "torus_extrema_projection_errors_mm": []
+    }
+  ]
+}

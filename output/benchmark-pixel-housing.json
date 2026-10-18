@@ -1,0 +1,82 @@
+{
+  "environment": "Pixel 10, native Debian ARM64, headless cad-agent subprocesses",
+  "measurement": "End-to-end inspect wall time includes process startup, complete regeneration, tessellation and JSON serialization; no viewport rendering",
+  "build_source_phase": "Existing Pixel release cad-agent before latest inactive-feature validation and kernel-mutex changes; complex geometry code unchanged",
+  "binary_sha256": "551f492a7125a9f40dc4cde288585bd693d15d828e69b9dda32b0360d51defc2",
+  "samples_per_model": 5,
+  "cases": [
+    {
+      "model": "housing",
+      "faces": 75,
+      "sketches": 13,
+      "volume_mm3": 291974.85691883636,
+      "all_sketches_zero_dof": true,
+      "samples": [
+        {
+          "wall_ms": 473.658697999781,
+          "cumulative_child_max_rss_kib": 26112
+        },
+        {
+          "wall_ms": 593.8330480130389,
+          "cumulative_child_max_rss_kib": 26112
+        },
+        {
+          "wall_ms": 443.9817449892871,
+          "cumulative_child_max_rss_kib": 26112
+        },
+        {
+          "wall_ms": 545.4151310259476,
+          "cumulative_child_max_rss_kib": 26112
+        },
+        {
+          "wall_ms": 521.989063010551,
+          "cumulative_child_max_rss_kib": 26112
+        }
+      ],
+      "median_wall_ms": 521.989063010551,
+      "min_wall_ms": 443.9817449892871,
+      "max_wall_ms": 593.8330480130389,
+      "max_rss_note": "Per-model peak RSS unavailable; sample RSS is cumulative maximum across this benchmark process children"
+    },
+    {
+      "model": "housing-resized",
+      "faces": 75,
+      "sketches": 13,
+      "volume_mm3": 468634.9552994125,
+      "all_sketches_zero_dof": true,
+      "samples": [
+        {
+          "wall_ms": 400.1500270096585,
+          "cumulative_child_max_rss_kib": 26112
+        },
+        {
+          "wall_ms": 554.4089589966461,
+          "cumulative_child_max_rss_kib": 26112
+        },
+        {
+          "wall_ms": 650.287891010521,
+          "cumulative_child_max_rss_kib": 26112
+        },
+        {
+          "wall_ms": 580.464556987863,
+          "cumulative_child_max_rss_kib": 26112
+        },
+        {
+          "wall_ms": 631.4782820118126,
+          "cumulative_child_max_rss_kib": 26112
+        }
+      ],
+      "median_wall_ms": 580.464556987863,
+      "min_wall_ms": 400.1500270096585,
+      "max_wall_ms": 650.287891010521,
+      "max_rss_note": "Per-model peak RSS unavailable; sample RSS is cumulative maximum across this benchmark process children"
+    }
+  ],
+  "limits": [
+    "Five samples per model; filesystem caches were not cleared; no cold-start or sustained thermal characterization",
+    "Wall times include headless process startup and JSON output; they are not viewport frame times",
+    "Child RSS is a cumulative benchmark maximum, not GUI or graphics-server memory",
+    "Existing Pixel release binary predates final validation/mutex changes; hash and build source phase identify this measurement"
+  ],
+  "max_child_rss_kib": 26112
+}

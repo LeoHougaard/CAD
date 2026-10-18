@@ -1,0 +1,30 @@
+{
+  "release_tests": {
+    "passed": 109,
+    "failed": 0,
+    "groups": {
+      "application_ui": 2,
+      "modeling": 12,
+      "robustness": 14,
+      "dimensions": 10,
+      "solver": 69,
+      "doctests": 2
+    }
+  },
+  "clippy": "workspace/all-targets, deny warnings passed",
+  "independent_step_fixtures": 8,
+  "additional_native_ui_step_export": "one solid, analytic volume verified independently",
+  "artifacts": [
+    "output/benchmark.json",
+    "output/resource-use.json",
+    "output/ui-verification.json",
+    "output/independent-step-check.json"
+  ],
+  "platform": "Windows, AMD Ryzen 7 5700G, Intel Arc B580",
+  "untested": [
+    "Linux",
+    "comparative Onshape performance",
+    "large assemblies",
+    "arbitrary production CAD geometry"
+  ]
+}

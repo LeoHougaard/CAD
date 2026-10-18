@@ -1,0 +1,12 @@
+{
+  "actual_volume_mm3": 6534.512719602184,
+  "all_sketches_zero_dof": true,
+  "case": "straight-annular-edited",
+  "document_roundtrip_verified": true,
+  "expected_volume_mm3": 6534.512719466769,
+  "faces": 4,
+  "mass_measurement": "strict analytic comparison",
+  "mass_relative_tolerance": 1e-7,
+  "step_roundtrip_verified": true,
+  "topology_and_closed_mesh_verified": true
+}

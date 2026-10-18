@@ -1,0 +1,29 @@
+{
+  "id": "fillet",
+  "name": "Fillet",
+  "version": "1.0.0",
+  "category": "feature",
+  "editor": "",
+  "script": "fillet.rhai",
+  "fields": [
+    {
+      "key": "target",
+      "label": "Part",
+      "kind": "body",
+      "default": ""
+    },
+    {
+      "key": "edges",
+      "label": "Edges",
+      "kind": "edges",
+      "default": []
+    },
+    {
+      "key": "radius",
+      "label": "Radius",
+      "kind": "number",
+      "default": "2"
+    }
+  ],
+  "description": "Select edges in the viewport. Empty selection means all eligible edges."
+}

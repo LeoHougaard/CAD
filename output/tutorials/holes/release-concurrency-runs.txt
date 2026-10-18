@@ -1,0 +1,109 @@
+Run 1, exit 0
+
+running 4 tests
+test minimal_perpendicular_cylinder_fuse_preserves_precise_solid_on_rejection ... ok
+test attachment_rejects_opposing_planes_missing_faces_and_missing_anchors ... ok
+test parallel_runtimes_do_not_attribute_another_models_mesh_fallback ... ok
+test jourden_holes_and_whole_circle_reorder ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
+
+
+Run 2, exit 0
+
+running 4 tests
+test minimal_perpendicular_cylinder_fuse_preserves_precise_solid_on_rejection ... ok
+test attachment_rejects_opposing_planes_missing_faces_and_missing_anchors ... ok
+test parallel_runtimes_do_not_attribute_another_models_mesh_fallback ... ok
+test jourden_holes_and_whole_circle_reorder ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.58s
+
+
+Run 3, exit 0
+
+running 4 tests
+test minimal_perpendicular_cylinder_fuse_preserves_precise_solid_on_rejection ... ok
+test attachment_rejects_opposing_planes_missing_faces_and_missing_anchors ... ok
+test parallel_runtimes_do_not_attribute_another_models_mesh_fallback ... ok
+test jourden_holes_and_whole_circle_reorder ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.56s
+
+
+Run 4, exit 0
+
+running 4 tests
+test minimal_perpendicular_cylinder_fuse_preserves_precise_solid_on_rejection ... ok
+test attachment_rejects_opposing_planes_missing_faces_and_missing_anchors ... ok
+test parallel_runtimes_do_not_attribute_another_models_mesh_fallback ... ok
+test jourden_holes_and_whole_circle_reorder ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.57s
+
+
+Run 5, exit 0
+
+running 4 tests
+test attachment_rejects_opposing_planes_missing_faces_and_missing_anchors ... ok
+test minimal_perpendicular_cylinder_fuse_preserves_precise_solid_on_rejection ... ok
+test parallel_runtimes_do_not_attribute_another_models_mesh_fallback ... ok
+test jourden_holes_and_whole_circle_reorder ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.57s
+
+
+Run 6, exit 0
+
+running 4 tests
+test minimal_perpendicular_cylinder_fuse_preserves_precise_solid_on_rejection ... ok
+test attachment_rejects_opposing_planes_missing_faces_and_missing_anchors ... ok
+test parallel_runtimes_do_not_attribute_another_models_mesh_fallback ... ok
+test jourden_holes_and_whole_circle_reorder ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.58s
+
+
+Run 7, exit 0
+
+running 4 tests
+test minimal_perpendicular_cylinder_fuse_preserves_precise_solid_on_rejection ... ok
+test attachment_rejects_opposing_planes_missing_faces_and_missing_anchors ... ok
+test parallel_runtimes_do_not_attribute_another_models_mesh_fallback ... ok
+test jourden_holes_and_whole_circle_reorder ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s
+
+
+Run 8, exit 0
+
+running 4 tests
+test minimal_perpendicular_cylinder_fuse_preserves_precise_solid_on_rejection ... ok
+test attachment_rejects_opposing_planes_missing_faces_and_missing_anchors ... ok
+test parallel_runtimes_do_not_attribute_another_models_mesh_fallback ... ok
+test jourden_holes_and_whole_circle_reorder ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.58s
+
+
+Run 9, exit 0
+
+running 4 tests
+test minimal_perpendicular_cylinder_fuse_preserves_precise_solid_on_rejection ... ok
+test attachment_rejects_opposing_planes_missing_faces_and_missing_anchors ... ok
+test parallel_runtimes_do_not_attribute_another_models_mesh_fallback ... ok
+test jourden_holes_and_whole_circle_reorder ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.58s
+
+
+Run 10, exit 0
+
+running 4 tests
+test minimal_perpendicular_cylinder_fuse_preserves_precise_solid_on_rejection ... ok
+test attachment_rejects_opposing_planes_missing_faces_and_missing_anchors ... ok
+test parallel_runtimes_do_not_attribute_another_models_mesh_fallback ... ok
+test jourden_holes_and_whole_circle_reorder ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.57s
+

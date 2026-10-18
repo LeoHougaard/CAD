@@ -1,0 +1,35 @@
+{
+  "id": "loft",
+  "name": "Loft",
+  "version": "1.0.0",
+  "category": "feature",
+  "editor": "",
+  "script": "loft.rhai",
+  "fields": [
+    {
+      "key": "profiles",
+      "label": "Profiles",
+      "kind": "sketches",
+      "default": []
+    },
+    {
+      "key": "mode",
+      "label": "Operation",
+      "kind": "choice",
+      "default": "New",
+      "options": [
+        "New",
+        "Add",
+        "Remove",
+        "Intersect"
+      ]
+    },
+    {
+      "key": "target",
+      "label": "Merge scope",
+      "kind": "body",
+      "default": ""
+    }
+  ],
+  "description": "Create a ruled solid between ordered polygon or coaxial circular profiles."
+}

@@ -1,0 +1,175 @@
+{
+  "format": 1,
+  "name": "Circular section loft",
+  "variables": {
+    "r0": "5",
+    "r1": "12",
+    "r2": "3",
+    "z1": "30",
+    "z2": "80"
+  },
+  "features": [
+    {
+      "id": "f1",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Start",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Radius",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#r0"
+            }
+          ],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "circle",
+              "values": [
+                "0",
+                "0",
+                "10"
+              ]
+            }
+          ],
+          "next_id": 1
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": ""
+      }
+    },
+    {
+      "id": "f2",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Middle",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Radius",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#r1"
+            }
+          ],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "circle",
+              "values": [
+                "0",
+                "0",
+                "10"
+              ]
+            }
+          ],
+          "next_id": 1
+        },
+        "offset": "#z1",
+        "plane": "Top",
+        "support": ""
+      }
+    },
+    {
+      "id": "f3",
+      "plugin": "loft",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "92d687bfc51b42d9",
+      "name": "Loft 1",
+      "suppressed": false,
+      "params": {
+        "mode": "New",
+        "profiles": [
+          "f1",
+          "f2"
+        ],
+        "target": ""
+      }
+    }
+  ],
+  "rollback": null,
+  "next_id": 4
+}

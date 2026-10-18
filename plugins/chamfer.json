@@ -1,0 +1,29 @@
+{
+  "id": "chamfer",
+  "name": "Chamfer",
+  "version": "1.0.0",
+  "category": "feature",
+  "editor": "",
+  "script": "chamfer.rhai",
+  "fields": [
+    {
+      "key": "target",
+      "label": "Part",
+      "kind": "body",
+      "default": ""
+    },
+    {
+      "key": "edges",
+      "label": "Edges",
+      "kind": "edges",
+      "default": []
+    },
+    {
+      "key": "distance",
+      "label": "Distance",
+      "kind": "number",
+      "default": "2"
+    }
+  ],
+  "description": "Select edges in the viewport. Empty selection means all eligible edges."
+}

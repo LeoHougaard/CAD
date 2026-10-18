@@ -1,0 +1,12 @@
+{
+  "actual_volume_mm3": 7194.247176720625,
+  "all_sketches_zero_dof": true,
+  "case": "loft-two-circles-edited",
+  "document_roundtrip_verified": true,
+  "expected_volume_mm3": 7194.247176720626,
+  "faces": 3,
+  "mass_measurement": "strict analytic comparison",
+  "mass_relative_tolerance": 1e-7,
+  "step_roundtrip_verified": true,
+  "topology_and_closed_mesh_verified": true
+}

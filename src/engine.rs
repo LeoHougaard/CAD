@@ -1,0 +1,981 @@
+//! Native geometry execution. This module knows operations, never feature types.
+mod sweep_loft;
+use crate::{
+    model::{Document, Feature, Plane, Result},
+    plugins::{Numbers, Registry},
+    sketch::{self, ResolvedSketch, p3, v3},
+};
+use brepkit_math::{mat::Mat4, vec::Vec3};
+use brepkit_operations as ops;
+use brepkit_topology::{
+    Topology,
+    edge::{EdgeCurve, EdgeId},
+    explorer::{edge_to_face_map, face_edges, solid_edges, solid_faces},
+    face::{FaceId, FaceSurface},
+    solid::SolidId,
+};
+use serde_json::Value;
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::{Arc, Mutex},
+    time::Instant,
+};
+
+// Brepkit exposes a process-wide mesh-fallback counter. Keep native operation
+// transactions together so another Runtime cannot taint the exactness check.
+// This does not serialize independent application processes or viewport work.
+static PRECISE_OPERATION: Mutex<()> = Mutex::new(());
+
+fn err(e: impl std::fmt::Display) -> String {
+    e.to_string()
+}
+
+fn mesh_extent(
+    positions: &[brepkit_math::vec::Point3],
+    indices: &[u32],
+) -> ([[f32; 3]; 2], [f64; 3]) {
+    let mut lo = [f64::INFINITY; 3];
+    let mut hi = [f64::NEG_INFINITY; 3];
+    for p in positions {
+        for (i, x) in [p.x(), p.y(), p.z()].into_iter().enumerate() {
+            lo[i] = lo[i].min(x);
+            hi[i] = hi[i].max(x);
+        }
+    }
+    let mut centroid = std::array::from_fn(|i| (lo[i] + hi[i]) * 0.5);
+    if let Some(&origin) = positions.first() {
+        let mut moment = Vec3::new(0., 0., 0.);
+        let mut volume6 = 0.;
+        for tri in indices.as_chunks::<3>().0 {
+            let a = positions[tri[0] as usize] - origin;
+            let b = positions[tri[1] as usize] - origin;
+            let c = positions[tri[2] as usize] - origin;
+            let v = a.dot(b.cross(c));
+            volume6 += v;
+            moment += (a + b + c) * v;
+        }
+        if volume6.abs() > f64::EPSILON {
+            let p = origin + moment * (0.25 / volume6);
+            centroid = [p.x(), p.y(), p.z()];
+        }
+    }
+    ([lo.map(|x| x as f32), hi.map(|x| x as f32)], centroid)
+}
+fn num(p: &Value, key: &str, default: f64) -> f64 {
+    p.get(key).and_then(Value::as_f64).unwrap_or(default)
+}
+fn text<'a>(p: &'a Value, key: &str, default: &'a str) -> &'a str {
+    p.get(key).and_then(Value::as_str).unwrap_or(default)
+}
+fn flag(p: &Value, key: &str) -> bool {
+    p.get(key).and_then(Value::as_bool).unwrap_or(false)
+}
+
+#[derive(Clone, Debug)]
+pub struct Part {
+    pub key: String,
+    pub name: String,
+    pub solid: SolidId,
+    pub feature: String,
+}
+#[derive(Clone)]
+pub struct Geometry {
+    pub topo: Topology,
+    pub parts: Vec<Part>,
+    pub sketches: BTreeMap<String, ResolvedSketch>,
+    pub anchors: Vec<(String, Plane)>,
+    pub outputs: BTreeMap<String, Vec<String>>,
+}
+impl Default for Geometry {
+    fn default() -> Self {
+        Self {
+            topo: Topology::new(),
+            parts: vec![],
+            sketches: BTreeMap::new(),
+            anchors: vec![],
+            outputs: BTreeMap::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct FaceView {
+    pub key: String,
+    pub part: String,
+    pub start: usize,
+    pub end: usize,
+    pub plane: Option<Plane>,
+    pub global_id: usize,
+}
+#[derive(Clone, Debug)]
+pub struct EdgeView {
+    pub key: String,
+    pub part: String,
+    pub points: Vec<[f32; 3]>,
+    pub seam: bool,
+}
+#[derive(Clone, Debug)]
+pub struct MeshView {
+    pub part: String,
+    pub name: String,
+    pub positions: Vec<[f32; 3]>,
+    pub indices: Vec<u32>,
+    /// Per triangle-corner normals, preserving sharp boundaries between faces.
+    pub normals: Vec<[f32; 3]>,
+    pub faces: Vec<FaceView>,
+    pub edges: Vec<EdgeView>,
+    pub volume: f64,
+    pub bounds: [[f32; 3]; 2],
+    /// Volume centroid of the display mesh, computed once in the worker.
+    pub centroid: [f64; 3],
+}
+#[derive(Clone, Debug)]
+pub struct FeatureStatus {
+    pub id: String,
+    pub error: Option<String>,
+    pub millis: f64,
+    pub suppressed: bool,
+    pub rolled_back: bool,
+}
+#[derive(Clone, Debug, Default)]
+pub struct Scene {
+    pub meshes: Vec<MeshView>,
+    pub sketches: BTreeMap<String, ResolvedSketch>,
+    pub statuses: Vec<FeatureStatus>,
+    pub millis: f64,
+    pub reused_features: usize,
+    pub error: Option<String>,
+}
+
+pub struct Runtime {
+    pub registry: Arc<Registry>,
+    checkpoint: Option<Checkpoint>,
+}
+struct Checkpoint {
+    prefix: Vec<Feature>,
+    variables: BTreeMap<String, String>,
+    geometry: Geometry,
+    statuses: Vec<FeatureStatus>,
+}
+pub struct Evaluation {
+    pub geometry: Geometry,
+    pub scene: Arc<Scene>,
+}
+
+impl Runtime {
+    pub fn new(registry: Registry) -> Self {
+        Self::shared(Arc::new(registry))
+    }
+    pub fn shared(registry: Arc<Registry>) -> Self {
+        Self {
+            registry,
+            checkpoint: None,
+        }
+    }
+    pub fn evaluate(&mut self, document: &Document) -> Result<Evaluation> {
+        let clock = Instant::now();
+        document.validate()?;
+        let numbers = Numbers::new(&document.variables)?;
+        let end = document
+            .rollback
+            .unwrap_or(document.features.len())
+            .min(document.features.len());
+        let mut geometry = Geometry::default();
+        let mut statuses = vec![];
+        let mut start = 0;
+        if let Some(c) = &self.checkpoint
+            && c.variables == document.variables
+            && c.prefix.len() <= end
+            && document.features[..c.prefix.len()] == c.prefix
+        {
+            geometry = c.geometry.clone();
+            statuses = c.statuses.clone();
+            start = c.prefix.len();
+        }
+        let reused = start;
+        let mut failed = false;
+        for (index, feature) in document.features.iter().enumerate().skip(start) {
+            let t = Instant::now();
+            let rolled_back = index >= end;
+            if !failed && !rolled_back && index + 1 == end {
+                // One bounded prefix cache. Geometry is never cloned by the render loop.
+                self.checkpoint = Some(Checkpoint {
+                    prefix: document.features[..index].to_vec(),
+                    variables: document.variables.clone(),
+                    geometry: geometry.clone(),
+                    statuses: statuses.clone(),
+                });
+            }
+            let result = if rolled_back || feature.suppressed {
+                Ok(())
+            } else if failed {
+                Err("Blocked by an earlier feature failure".into())
+            } else {
+                let _operation = PRECISE_OPERATION
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let before = ops::boolean::mesh_fallback_count();
+                let parts_before = geometry.parts.clone();
+                let anchors_before = geometry.anchors.len();
+                let result = (|| {
+                    let plan = self.registry.evaluate(feature, &numbers)?;
+                    let operations = if let Some(a) = plan.as_array() {
+                        a.clone()
+                    } else {
+                        vec![plan]
+                    };
+                    if operations.len() > 200 {
+                        return Err("A feature may run at most 200 operations".into());
+                    }
+                    for (op_index, operation) in operations.iter().enumerate() {
+                        geometry.execute(feature, op_index, operation, &numbers)?;
+                    }
+                    if ops::boolean::mesh_fallback_count() != before {
+                        return Err("This operation required a mesh approximation. The precise result was rejected; try a simpler profile or a different operation.".into());
+                    }
+                    for part in &geometry.parts {
+                        if parts_before.iter().any(|old| old.solid == part.solid) {
+                            continue;
+                        }
+                        let report = ops::validate::validate_solid(&geometry.topo, part.solid)
+                            .map_err(err)?;
+                        if !report.is_valid() {
+                            return Err(format!(
+                                "Invalid solid rejected: {}",
+                                report
+                                    .issues
+                                    .iter()
+                                    .filter(|i| i.severity == ops::validate::Severity::Error)
+                                    .map(|i| i.description.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join("; ")
+                            ));
+                        }
+                    }
+                    Ok(())
+                })();
+                if result.is_err() {
+                    geometry.parts = parts_before;
+                    geometry.anchors.truncate(anchors_before);
+                    geometry.sketches.remove(&feature.id);
+                    geometry.outputs.remove(&feature.id);
+                }
+                result
+            };
+            if result.is_err() {
+                failed = true;
+            }
+            statuses.push(FeatureStatus {
+                id: feature.id.clone(),
+                error: result.err(),
+                millis: t.elapsed().as_secs_f64() * 1000.,
+                suppressed: feature.suppressed,
+                rolled_back,
+            });
+        }
+        let mut scene = geometry.scene()?;
+        scene.statuses = statuses;
+        scene.reused_features = reused;
+        scene.millis = clock.elapsed().as_secs_f64() * 1000.;
+        scene.error = scene.statuses.iter().find_map(|s| s.error.clone());
+        Ok(Evaluation {
+            geometry,
+            scene: Arc::new(scene),
+        })
+    }
+}
+
+impl Geometry {
+    fn target(&self, key: &str) -> Result<usize> {
+        if key.is_empty() || key == "@last" {
+            return self
+                .parts
+                .len()
+                .checked_sub(1)
+                .ok_or("There is no target part".into());
+        }
+        if let Some(i) = self.parts.iter().position(|p| p.key == key) {
+            return Ok(i);
+        }
+        if let Some(keys) = self.outputs.get(key) {
+            if keys.len() != 1 {
+                return Err("Choose one specific part from this feature's output".into());
+            }
+            return self
+                .parts
+                .iter()
+                .position(|p| p.key == keys[0])
+                .ok_or("Referenced part is no longer present".into());
+        }
+        Err(format!(
+            "Part '{key}' is missing or its feature is suppressed"
+        ))
+    }
+    fn record_output(&mut self, f: &Feature, keys: Vec<String>) {
+        self.outputs.insert(f.id.clone(), keys);
+    }
+    fn add_result(
+        &mut self,
+        f: &Feature,
+        solid: SolidId,
+        mode: &str,
+        target: &str,
+        ordinal: usize,
+    ) -> Result<()> {
+        if mode == "New" {
+            let key = format!("{}:{ordinal}", f.id);
+            self.parts.push(Part {
+                key: key.clone(),
+                name: f.name.clone(),
+                solid,
+                feature: f.id.clone(),
+            });
+            self.outputs.entry(f.id.clone()).or_default().push(key);
+        } else {
+            let i = self.target(target)?;
+            // Native operations receive copies. A failure cannot mutate a committed part.
+            let base = ops::copy::copy_solid(&mut self.topo, self.parts[i].solid).map_err(err)?;
+            let op = match mode {
+                "Add" => ops::boolean::BooleanOp::Fuse,
+                "Remove" => ops::boolean::BooleanOp::Cut,
+                "Intersect" => ops::boolean::BooleanOp::Intersect,
+                _ => return Err(format!("Unknown operation {mode}")),
+            };
+            let result = ops::boolean::boolean(&mut self.topo, op, base, solid).map_err(err)?;
+            self.parts[i].solid = result;
+            self.parts[i].feature = f.id.clone();
+            self.record_output(f, vec![self.parts[i].key.clone()]);
+        }
+        Ok(())
+    }
+    pub fn resolve_plane(&self, p: &Value, numbers: &Numbers) -> Result<Plane> {
+        let offset = numbers.value(p.get("offset").unwrap_or(&Value::from(0)))?;
+        let support = text(p, "support", "");
+        if support.is_empty() {
+            return Ok(Plane::named(text(p, "plane", "Top"), offset));
+        }
+        let anchor = self
+            .anchors
+            .iter()
+            .find(|(key, _)| key == support)
+            .ok_or_else(|| {
+                format!("Sketch support '{support}' is missing. Select a new plane or face.")
+            })?;
+        let mut matches = 0;
+        let mut conflicting_orientation = false;
+        for part in &self.parts {
+            for id in solid_faces(&self.topo, part.solid).map_err(err)? {
+                let face = self.topo.face(id).map_err(err)?;
+                if let FaceSurface::Plane { normal, d } = face.surface()
+                    && plane_matches(&anchor.1, *normal, *d)
+                {
+                    matches += 1;
+                    let sign = if face.is_reversed() { -1. } else { 1. };
+                    let outward = [normal.x() * sign, normal.y() * sign, normal.z() * sign];
+                    conflicting_orientation |= dot(anchor.1.normal, outward) < 1. - 1e-6;
+                }
+            }
+        }
+        if matches == 0 || conflicting_orientation {
+            let reason = if conflicting_orientation {
+                "with conflicting orientation"
+            } else {
+                "on the original plane"
+            };
+            return Err(format!(
+                "Sketch support resolves to {matches} faces {reason}. Repair the reference instead of guessing."
+            ));
+        }
+        // A boolean can split a support into coplanar faces. The sketch needs
+        // their common oriented plane, while its original frame stays stable.
+        Ok(anchor.1.shifted(offset))
+    }
+    fn register_extrude_anchors(&mut self, f: &Feature, sk: &ResolvedSketch, start: f64, end: f64) {
+        let sign = if end > start { 1. } else { -1. };
+        let mut a = sk.plane.shifted(start);
+        a.normal = a.normal.map(|v| -sign * v);
+        a.v = cross(a.normal, a.u);
+        let mut b = sk.plane.shifted(end);
+        b.normal = b.normal.map(|v| sign * v);
+        b.v = cross(b.normal, b.u);
+        self.anchors.push((format!("{}:start", f.id), a));
+        self.anchors.push((format!("{}:end", f.id), b));
+        if let Ok(loops) = sketch::loops(sk) {
+            for l in loops {
+                if let sketch::RegionLoop::Polygon { entity, points } = l {
+                    for i in 0..points.len() {
+                        let origin = sk.plane.at(points[i]);
+                        let next = sk.plane.at(points[(i + 1) % points.len()]);
+                        let mut u = sub(next, origin);
+                        let length = dot(u, u).sqrt();
+                        if length < 1e-8 {
+                            continue;
+                        }
+                        u = u.map(|x| x / length);
+                        let n = cross(u, sk.plane.normal);
+                        self.anchors.push((
+                            format!("{}:side:{entity}:{i}", f.id),
+                            Plane {
+                                origin,
+                                u,
+                                v: sk.plane.normal,
+                                normal: n,
+                            },
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    fn execute(&mut self, f: &Feature, ordinal: usize, p: &Value, numbers: &Numbers) -> Result<()> {
+        let op = text(p, "op", "");
+        match op {
+            "sweep" => self.execute_sweep(f, ordinal, p)?,
+            "loft" => self.execute_loft(f, ordinal, p)?,
+            "sketch" => {
+                let plane = self.resolve_plane(&f.params, numbers)?;
+                let s = f.sketch().ok_or("Sketch geometry is invalid")?;
+                self.sketches
+                    .insert(f.id.clone(), sketch::resolve(&s, plane, numbers)?);
+            }
+            "extrude" | "revolve" => {
+                let sk = self
+                    .sketches
+                    .get(text(p, "sketch", ""))
+                    .ok_or("Choose an earlier, unsuppressed sketch")?
+                    .clone();
+                let mut profile = sk.clone();
+                let depth = num(p, "depth", 10.);
+                if depth <= 1e-7 {
+                    return Err("Depth must be positive; use Reverse to change direction".into());
+                }
+                let direction = if flag(p, "reverse") { -1. } else { 1. };
+                let start = if flag(p, "symmetric") {
+                    -direction * depth / 2.
+                } else {
+                    0.
+                };
+                if op == "extrude" {
+                    profile.plane = profile.plane.shifted(start);
+                }
+                let faces = sketch::faces(&mut self.topo, &profile)?;
+                for (i, face) in faces.into_iter().enumerate() {
+                    let solid = if op == "extrude" {
+                        ops::extrude::extrude(
+                            &mut self.topo,
+                            face,
+                            v3(sk.plane.normal) * direction,
+                            depth,
+                        )
+                        .map_err(err)?
+                    } else {
+                        let axis = if text(p, "axis", "V") == "U" {
+                            sk.plane.u
+                        } else {
+                            sk.plane.v
+                        };
+                        let offset = num(p, "axis_offset", 0.);
+                        let shift = if text(p, "axis", "V") == "U" {
+                            sk.plane.v
+                        } else {
+                            sk.plane.u
+                        };
+                        let origin =
+                            std::array::from_fn(|k| sk.plane.origin[k] + shift[k] * offset);
+                        let angle = num(p, "angle", 360.);
+                        if angle <= 0. || angle > 360. {
+                            return Err("Revolve angle must be between 0 and 360 degrees".into());
+                        }
+                        ops::revolve::revolve(
+                            &mut self.topo,
+                            face,
+                            p3(origin),
+                            v3(axis),
+                            angle.to_radians(),
+                        )
+                        .map_err(err)?
+                    };
+                    self.add_result(
+                        f,
+                        solid,
+                        text(p, "mode", "New"),
+                        text(p, "target", ""),
+                        ordinal * 100 + i,
+                    )?;
+                }
+                if op == "extrude" {
+                    self.register_extrude_anchors(f, &sk, start, start + direction * depth);
+                }
+            }
+            "box" | "cylinder" => {
+                let h = num(p, "height", 10.);
+                let solid = if op == "box" {
+                    ops::primitives::make_box(
+                        &mut self.topo,
+                        num(p, "width", 10.),
+                        num(p, "depth", 10.),
+                        h,
+                    )
+                    .map_err(err)?
+                } else {
+                    ops::primitives::make_cylinder(&mut self.topo, num(p, "radius", 5.), h)
+                        .map_err(err)?
+                };
+                ops::transform::transform_solid(
+                    &mut self.topo,
+                    solid,
+                    &Mat4::translation(num(p, "x", 0.), num(p, "y", 0.), num(p, "z", 0.)),
+                )
+                .map_err(err)?;
+                self.add_result(
+                    f,
+                    solid,
+                    text(p, "mode", "New"),
+                    text(p, "target", ""),
+                    ordinal,
+                )?;
+            }
+            "fillet" | "chamfer" => {
+                let i = self.target(text(p, "target", ""))?;
+                let solid =
+                    ops::copy::copy_solid(&mut self.topo, self.parts[i].solid).map_err(err)?;
+                let available = self.edge_keys(solid)?;
+                let keys: Vec<String> = p
+                    .get("edges")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect();
+                if keys.is_empty() {
+                    return Err("Select one or more edges, or choose All edges".into());
+                }
+                let edges = if keys == ["@all"] {
+                    solid_edges(&self.topo, solid).map_err(err)?
+                } else {
+                    keys.iter()
+                        .map(|k| {
+                            let hits: Vec<_> =
+                                available.iter().filter(|(_, key)| key == k).collect();
+                            if hits.len() != 1 {
+                                return Err(format!(
+                                    "Edge reference '{k}' resolves to {} edges. Reselect it.",
+                                    hits.len()
+                                ));
+                            }
+                            Ok(hits[0].0)
+                        })
+                        .collect::<Result<Vec<_>>>()?
+                };
+                // The polygon chamfer handles planar corner junctions directly. The
+                // blend engine currently fails trimming a box when all edges meet.
+                let planar = solid_faces(&self.topo, solid)
+                    .map_err(err)?
+                    .iter()
+                    .all(|id| {
+                        matches!(
+                            self.topo.face(*id).map(|f| f.surface()),
+                            Ok(FaceSurface::Plane { .. })
+                        )
+                    });
+                let result = if op == "fillet" {
+                    ops::blend_ops::fillet_v2(&mut self.topo, solid, &edges, num(p, "radius", 2.))
+                        .map(|r| r.solid)
+                } else if planar {
+                    ops::chamfer::chamfer(&mut self.topo, solid, &edges, num(p, "distance", 2.))
+                } else {
+                    ops::blend_ops::chamfer_v2(
+                        &mut self.topo,
+                        solid,
+                        &edges,
+                        num(p, "distance", 2.),
+                        num(p, "distance", 2.),
+                    )
+                    .map(|r| r.solid)
+                }
+                .map_err(err)?;
+                self.parts[i].solid = result;
+                self.parts[i].feature = f.id.clone();
+                self.record_output(f, vec![self.parts[i].key.clone()]);
+            }
+            "shell" => {
+                let i = self.target(text(p, "target", ""))?;
+                let solid =
+                    ops::copy::copy_solid(&mut self.topo, self.parts[i].solid).map_err(err)?;
+                let keys: Vec<_> = p
+                    .get("faces")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .collect();
+                if keys.is_empty() {
+                    return Err("Select the face or faces to remove for Shell".into());
+                }
+                let available = self.face_keys(solid)?;
+                let faces = keys
+                    .iter()
+                    .map(|k| {
+                        let hits: Vec<_> = available.iter().filter(|(_, key)| key == k).collect();
+                        if hits.len() != 1 {
+                            Err("Shell face reference is missing or ambiguous".into())
+                        } else {
+                            Ok(hits[0].0)
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let result =
+                    ops::shell_op::shell(&mut self.topo, solid, num(p, "thickness", 2.), &faces)
+                        .map_err(err)?;
+                self.parts[i].solid = result;
+                self.parts[i].feature = f.id.clone();
+                self.record_output(f, vec![self.parts[i].key.clone()]);
+            }
+            "mirror" | "pattern" | "transform" => {
+                let i = self.target(text(p, "target", ""))?;
+                let original = self.parts[i].clone();
+                let mut produced = vec![];
+                if op == "mirror" {
+                    let plane = Plane::named(text(p, "plane", "Right"), num(p, "offset", 0.));
+                    let result = ops::mirror::mirror(
+                        &mut self.topo,
+                        original.solid,
+                        p3(plane.origin),
+                        v3(plane.normal),
+                    )
+                    .map_err(err)?;
+                    if flag(p, "keep") {
+                        let key = format!("{}:0", f.id);
+                        self.parts.push(Part {
+                            key: key.clone(),
+                            name: f.name.clone(),
+                            solid: result,
+                            feature: f.id.clone(),
+                        });
+                        produced.push(key);
+                    } else {
+                        self.parts[i].solid = result;
+                        produced.push(original.key);
+                    }
+                } else if op == "pattern" {
+                    let count = num(p, "count", 3.);
+                    if count < 2. || count > 100. || count.fract() != 0. {
+                        return Err("Instances must be a whole number between 2 and 100".into());
+                    }
+                    let spacing = num(p, "spacing", 30.);
+                    if spacing.abs() < 1e-7 {
+                        return Err("Pattern spacing must be nonzero".into());
+                    }
+                    let axis = match text(p, "axis", "X") {
+                        "Y" => [0., 1., 0.],
+                        "Z" => [0., 0., 1.],
+                        _ => [1., 0., 0.],
+                    };
+                    produced.push(original.key);
+                    for n in 1..count as usize {
+                        let result =
+                            ops::copy::copy_solid(&mut self.topo, original.solid).map_err(err)?;
+                        ops::transform::transform_solid(
+                            &mut self.topo,
+                            result,
+                            &Mat4::translation(
+                                axis[0] * spacing * n as f64,
+                                axis[1] * spacing * n as f64,
+                                axis[2] * spacing * n as f64,
+                            ),
+                        )
+                        .map_err(err)?;
+                        let key = format!("{}:{n}", f.id);
+                        self.parts.push(Part {
+                            key: key.clone(),
+                            name: format!("{} {}", original.name, n + 1),
+                            solid: result,
+                            feature: f.id.clone(),
+                        });
+                        produced.push(key);
+                    }
+                } else {
+                    let result =
+                        ops::copy::copy_solid(&mut self.topo, original.solid).map_err(err)?;
+                    ops::transform::transform_solid(
+                        &mut self.topo,
+                        result,
+                        &Mat4::translation(num(p, "x", 0.), num(p, "y", 0.), num(p, "z", 0.)),
+                    )
+                    .map_err(err)?;
+                    if flag(p, "copy") {
+                        let key = format!("{}:0", f.id);
+                        self.parts.push(Part {
+                            key: key.clone(),
+                            name: f.name.clone(),
+                            solid: result,
+                            feature: f.id.clone(),
+                        });
+                        produced.push(key);
+                    } else {
+                        self.parts[i].solid = result;
+                        produced.push(original.key);
+                    }
+                }
+                self.record_output(f, produced);
+            }
+            _ => {
+                return Err(format!(
+                    "The plugin requested an unavailable operation '{op}'"
+                ));
+            }
+        }
+        Ok(())
+    }
+    pub fn face_keys(&self, solid: SolidId) -> Result<Vec<(FaceId, String)>> {
+        solid_faces(&self.topo, solid)
+            .map_err(err)?
+            .into_iter()
+            .map(|id| {
+                let face = self.topo.face(id).map_err(err)?;
+                let key = match face.surface() {
+                    FaceSurface::Plane { normal, d } => self
+                        .anchors
+                        .iter()
+                        .find(|(_, p)| plane_matches(p, *normal, *d))
+                        .map(|(key, _)| key.clone())
+                        .unwrap_or_else(|| {
+                            format!(
+                                "untracked:plane:{:.7}:{:.7}:{:.7}:{:.7}",
+                                normal.x(),
+                                normal.y(),
+                                normal.z(),
+                                d
+                            )
+                        }),
+                    _ => format!("untracked:curved:{}", id.index()),
+                };
+                Ok((id, key))
+            })
+            .collect()
+    }
+    pub fn edge_keys(&self, solid: SolidId) -> Result<Vec<(EdgeId, String)>> {
+        let faces = self.face_keys(solid)?;
+        let mut adjacent: HashMap<EdgeId, Vec<String>> = HashMap::new();
+        for (id, key) in faces {
+            for edge in face_edges(&self.topo, id).map_err(err)? {
+                adjacent.entry(edge).or_default().push(key.clone());
+            }
+        }
+        solid_edges(&self.topo, solid)
+            .map_err(err)?
+            .into_iter()
+            .map(|edge| {
+                let mut names = adjacent.remove(&edge).unwrap_or_default();
+                names.sort();
+                names.dedup();
+                Ok((edge, names.join(" | ")))
+            })
+            .collect()
+    }
+    pub fn scene(&self) -> Result<Scene> {
+        let mut scene = Scene {
+            sketches: self.sketches.clone(),
+            ..Default::default()
+        };
+        let mut global_id = 1;
+        for part in &self.parts {
+            let (mesh, offsets) = ops::tessellate::tessellate_solid_grouped_with_tolerance(
+                &self.topo, part.solid, 0.04, 0.08,
+            )
+            .map_err(err)?;
+            if mesh.indices.len() > 3_000_000 {
+                return Err("Display mesh exceeds one million triangles".into());
+            }
+            let (bounds, centroid) = mesh_extent(&mesh.positions, &mesh.indices);
+            let positions = mesh
+                .positions
+                .iter()
+                .map(|p| [p.x() as f32, p.y() as f32, p.z() as f32])
+                .collect();
+            let mut faces = vec![];
+            let mut normals = Vec::with_capacity(mesh.indices.len());
+            for (i, (id, key)) in self.face_keys(part.solid)?.into_iter().enumerate() {
+                let face = self.topo.face(id).map_err(err)?;
+                let mut cache = HashMap::new();
+                for &vertex in &mesh.indices[offsets[i] as usize..offsets[i + 1] as usize] {
+                    let normal = *cache.entry(vertex).or_insert_with(|| {
+                        let point = mesh.positions[vertex as usize];
+                        let (u, v) = face.surface().project_point(point).unwrap_or((0., 0.));
+                        let n = face.surface().normal(u, v);
+                        let sign = if face.is_reversed() { -1. } else { 1. };
+                        [
+                            (n.x() * sign) as f32,
+                            (n.y() * sign) as f32,
+                            (n.z() * sign) as f32,
+                        ]
+                    });
+                    normals.push(normal);
+                }
+                let plane = if key.starts_with("untracked:") {
+                    None
+                } else {
+                    self.anchors
+                        .iter()
+                        .find(|(k, _)| k == &key)
+                        .map(|(_, p)| p.clone())
+                };
+                faces.push(FaceView {
+                    key,
+                    part: part.key.clone(),
+                    start: offsets[i] as usize,
+                    end: offsets[i + 1] as usize,
+                    plane,
+                    global_id,
+                });
+                global_id += 1;
+            }
+            let mut edges = vec![];
+            let uses = edge_to_face_map(&self.topo, part.solid).map_err(err)?;
+            for (id, key) in self.edge_keys(part.solid)? {
+                let seam = uses
+                    .get(&id.index())
+                    .is_some_and(|faces| faces.len() == 2 && faces[0] == faces[1]);
+                let edge = self.topo.edge(id).map_err(err)?;
+                let a = self.topo.vertex(edge.start()).map_err(err)?.point();
+                let b = self.topo.vertex(edge.end()).map_err(err)?.point();
+                let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+                let n = if matches!(edge.curve(), EdgeCurve::Line) {
+                    1
+                } else {
+                    128
+                };
+                let points = (0..=n)
+                    .map(|i| {
+                        let p = edge.curve().evaluate_with_endpoints(
+                            t0 + (t1 - t0) * i as f64 / n as f64,
+                            a,
+                            b,
+                        );
+                        [p.x() as f32, p.y() as f32, p.z() as f32]
+                    })
+                    .collect();
+                edges.push(EdgeView {
+                    key,
+                    part: part.key.clone(),
+                    points,
+                    seam,
+                });
+            }
+            let volume = solid_volume(&self.topo, part.solid)?;
+            scene.meshes.push(MeshView {
+                part: part.key.clone(),
+                name: part.name.clone(),
+                positions,
+                indices: mesh.indices,
+                normals,
+                faces,
+                edges,
+                volume,
+                bounds,
+                centroid,
+            });
+        }
+        Ok(scene)
+    }
+    pub fn export(&self, format: &str, path: &std::path::Path) -> Result<()> {
+        if self.parts.is_empty() {
+            return Err("There are no parts to export".into());
+        }
+        use std::io::{BufWriter, Seek, SeekFrom, Write};
+        crate::model::atomic_write(path, |file| {
+            let mut writer = BufWriter::new(file);
+            match format {
+                #[cfg(feature = "step")]
+                "step" => {
+                    let text = brepkit_io::step::write_step(
+                        &self.topo,
+                        &self.parts.iter().map(|p| p.solid).collect::<Vec<_>>(),
+                    )
+                    .map_err(err)?;
+                    writer.write_all(text.as_bytes()).map_err(err)?;
+                }
+                "stl" => {
+                    let mut header = [0u8; 84];
+                    header[..20].copy_from_slice(b"Rust CAD millimeters");
+                    writer.write_all(&header).map_err(err)?;
+                    let mut count = 0u32;
+                    for part in &self.parts {
+                        let mesh = ops::tessellate::tessellate_solid_with_tolerance(
+                            &self.topo, part.solid, 0.03, 0.1,
+                        )
+                        .map_err(err)?;
+                        for tri in mesh.indices.as_chunks::<3>().0 {
+                            let p = [
+                                mesh.positions[tri[0] as usize],
+                                mesh.positions[tri[1] as usize],
+                                mesh.positions[tri[2] as usize],
+                            ];
+                            let n = (p[1] - p[0])
+                                .cross(p[2] - p[0])
+                                .normalize()
+                                .unwrap_or(Vec3::new(0., 0., 1.));
+                            let mut record = [0u8; 50];
+                            for (i, v) in [
+                                n.x(),
+                                n.y(),
+                                n.z(),
+                                p[0].x(),
+                                p[0].y(),
+                                p[0].z(),
+                                p[1].x(),
+                                p[1].y(),
+                                p[1].z(),
+                                p[2].x(),
+                                p[2].y(),
+                                p[2].z(),
+                            ]
+                            .into_iter()
+                            .enumerate()
+                            {
+                                record[i * 4..i * 4 + 4].copy_from_slice(&(v as f32).to_le_bytes());
+                            }
+                            writer.write_all(&record).map_err(err)?;
+                            count = count
+                                .checked_add(1)
+                                .ok_or("STL exceeds the triangle count limit")?;
+                        }
+                    }
+                    writer.seek(SeekFrom::Start(80)).map_err(err)?;
+                    writer.write_all(&count.to_le_bytes()).map_err(err)?;
+                }
+                _ => return Err(format!("Exporter '{format}' is not installed")),
+            }
+            writer.flush().map_err(err)
+        })
+    }
+}
+
+pub fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
+    a.iter().zip(b).map(|(x, y)| x * y).sum()
+}
+
+/// Measure a solid, integrating complete bilinear ruled patches exactly before
+/// using the kernel's analytic and tessellation-based measurements.
+pub fn solid_volume(topo: &Topology, solid: SolidId) -> Result<f64> {
+    match sweep_loft::exact_ruled_volume(topo, solid) {
+        Some(volume) => Ok(volume),
+        None => ops::measure::solid_volume(topo, solid, 0.04).map_err(err),
+    }
+}
+pub fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+pub fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    std::array::from_fn(|i| a[i] - b[i])
+}
+fn plane_matches(plane: &Plane, n: Vec3, d: f64) -> bool {
+    let normal = [n.x(), n.y(), n.z()];
+    let alignment = dot(plane.normal, normal);
+    (alignment.abs() - 1.).abs() < 1e-6 && (dot(normal, plane.origin) - d).abs() < 1e-5
+}

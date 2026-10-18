@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUSTUP_TOOLCHAIN: 1.99.1
+  CARGO_TERM_COLOR: always
+  CARGO_BUILD_JOBS: 2
+  RUST_BACKTRACE: 1
+
+jobs:
+  verify:
+    name: Rust / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Linux native dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libxkbcommon-dev libwayland-dev libudev-dev libgl1-mesa-dev libglu1-mesa python3-venv
+
+      - name: Install Rust 1.99.1
+        run: rustup toolchain install 1.99.1 --profile minimal --component clippy
+
+      - name: Cache Cargo dependencies and build outputs
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-rust-1.99.1-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-rust-1.99.1-
+
+      - name: Report toolchain
+        run: |
+          rustc --version
+          cargo --version
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Clear generated STEP verification fixtures
+        if: runner.os == 'Linux'
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          for folder in (Path('target/test-output'), Path('output/sweep-loft')):
+              for path in folder.glob('*'):
+                  if path.suffix in {'.step', '.json'}:
+                      path.unlink()
+          PY
+
+      - name: Release workspace tests
+        run: cargo test --release --workspace --locked
+
+      - name: Build release applications
+        run: cargo build --release --bins --locked
+
+      - name: Check minimal headless CLI
+        run: cargo check --no-default-features --bins --locked
+
+      - name: Check portable Windows package
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./package.ps1 -SkipBuild
+
+      - name: Install independent STEP verifier
+        if: runner.os == 'Linux'
+        run: |
+          python3 -m venv .tools/ci-python
+          .tools/ci-python/bin/python -m pip install --disable-pip-version-check gmsh==4.15.2
+
+      - name: Verify baseline STEP exports with Open CASCADE
+        if: runner.os == 'Linux'
+        run: .tools/ci-python/bin/python tools/verify_step.py
+
+      - name: Verify sweep and loft STEP exports with Open CASCADE
+        if: runner.os == 'Linux'
+        run: .tools/ci-python/bin/python tools/verify_ci_step.py

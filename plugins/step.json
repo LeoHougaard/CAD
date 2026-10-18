@@ -1,0 +1,10 @@
+{
+  "id": "step",
+  "name": "Export STEP",
+  "version": "1.0.0",
+  "category": "exporter",
+  "editor": "",
+  "script": "step.rhai",
+  "fields": [],
+  "description": ""
+}

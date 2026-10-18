@@ -1,0 +1,43 @@
+{
+  "date": "2026-10-17",
+  "platform": "Pixel 10, native Debian 13 ARM64, X11 with VirGL/Zink",
+  "build_note": "Native checks used the collaboration build before the final rollback-row width fix and sweep/loft additions. Later final-build checks are recorded separately.",
+  "native_checks": [
+    "Constructed a centered 30x30 mm square with driving dimensions and Equal, zero remaining degrees of freedom, then extruded 10 mm and saved.",
+    "Reloaded concurrent agent edits to 40x40x5 mm, edited extrusion depth through the desktop UI, and verified stale-save rejection and separate Save as.",
+    "Opened the 29-entry housing and its resized variant; inspected all holes, bosses, fillets and internal pocket in isometric and rotated views.",
+    "Collapsed the feature tree with Tab, fitted the view, and orbited the housing.",
+    "Opened the resized housing in a 1024x1300 window. Fit retained the complete solid. Sketch Finish and Cancel remained accessible with the properties panel open.",
+    "Double-clicked an existing housing sketch dimension and verified its named expression in the edit popup."
+  ],
+  "upstream_edit_limit": {
+    "change": "Body profile Height changed from #depth=76.2 mm to 80 mm while leaving the base depth unchanged.",
+    "result": "The body overhang changes the base/body intersection. A downstream corner fillet reports missing edge f2:side:1:2 | f4:side:1:3 rather than choosing another edge. Later dependent features fail explicitly.",
+    "recovery": "Ctrl+Z restored the original housing. The source document on disk was not changed.",
+    "evidence": [
+      "pixel-housing-dimension-detail.png",
+      "pixel-housing-dimension-edited-detail.png",
+      "pixel-housing-edit-error-detail.png",
+      "pixel-housing-undo.png"
+    ]
+  },
+  "housing_idle_sample": {
+    "pid": 11355,
+    "elapsed_seconds": 15.001292067987379,
+    "app_cpu_seconds": 0.0,
+    "rss_kib": 120380,
+    "private_clean_kib": 57148,
+    "private_dirty_kib": 46580,
+    "shared_graphics_server_excluded": true,
+    "fps_measured": false
+  },
+  "evidence": [
+    "pixel-housing-detail.png",
+    "pixel-housing-orbit-detail.png",
+    "pixel-housing-portrait-detail.png",
+    "pixel-housing-sketch-detail.png"
+  ],
+  "discovered_ui_defect": "Rollback row underestimated its label/button widths and expanded the feature panel. A measured-layout fix was subsequently implemented and tested headlessly; native final-build verification remains separate.",
+  "cad_sha256": "d2755a3984a83e65d465ed59269c974e3d46be016ccc454e8151b2b3ba042b8c",
+  "cad_agent_sha256": "551f492a7125a9f40dc4cde288585bd693d15d828e69b9dda32b0360d51defc2"
+}

@@ -1,0 +1,12 @@
+{
+  "actual_volume_mm3": 12683.333333333334,
+  "all_sketches_zero_dof": true,
+  "case": "loft-three-rectangles",
+  "document_roundtrip_verified": true,
+  "expected_volume_mm3": 12683.333333333332,
+  "faces": 10,
+  "mass_measurement": "strict analytic comparison",
+  "mass_relative_tolerance": 1e-7,
+  "step_roundtrip_verified": true,
+  "topology_and_closed_mesh_verified": true
+}

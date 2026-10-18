@@ -1,0 +1,29 @@
+{
+  "release_checks": 116,
+  "failed_checks": 0,
+  "clippy": "workspace all targets, deny warnings passed",
+  "orthographic": "parallel pick rays and depth-independent scale verified",
+  "circle": "closed consistently wound triangle mesh; seam hidden; both rims preserved; exact per-face surface normals",
+  "native_ui": [
+    "Top and Front cube faces",
+    "cube edge view",
+    "roll control",
+    "Home and Fit",
+    "wheel zoom close-up",
+    "40 mm sketch dimension after viewport changes",
+    "Shift+5 Top shortcut",
+    "release direct startup",
+    "SpaceMouse Pro detected and Raw Input registration succeeded"
+  ],
+  "spacemouse_motion": "decoder and six-axis camera tests passed; physical puck feedback pending",
+  "independent_step_fixtures": 8,
+  "user_session": "Running previous binary moved to .tools/previous-builds; unsaved document left open",
+  "research": [
+    "https://cad.onshape.com/help/Content/View/view_navigation_and_the_view_cube.htm",
+    "https://cad.onshape.com/help/Content/View/camera_and_render_options.htm",
+    "https://learn.microsoft.com/en-us/windows/win32/inputdev/using-raw-input"
+  ],
+  "benchmark": "benchmark-viewport.json",
+  "resources": "resource-use-viewport.json and steady-idle-viewport.json",
+  "installed_sha256": "3827C213BD0DBAE147AC8BE7954B12183AD17C995606C2B68D28C96E788F5C66"
+}

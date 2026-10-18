@@ -1,0 +1,182 @@
+{
+  "date": "2026-10-17",
+  "environment": "Pixel 10 native Debian ARM64 desktop, Termux:X11; cad-agent processes and native CAD GUI",
+  "provenance": {
+    "parallel_run": "Raw JSON pulled from /home/leo/projects/rust-cad/.verification/collaboration/parallel.json",
+    "native_ui": "Root agent observations during Pixel desktop interaction",
+    "saved_artifact_validation": "Local Windows cad-agent inspect of the pulled native files"
+  },
+  "parallel_shared_edits": {
+    "starting_revision": "fnv1a64:bca3b3a57af8d919",
+    "agents": 2,
+    "shared_starting_revision": true,
+    "edits": [
+      [
+        {
+          "op": "set_dimension",
+          "feature": "f1",
+          "index": 0,
+          "before": "30",
+          "value": "40",
+          "binding": {
+            "a": 1,
+            "b": 0,
+            "kind": "Width",
+            "negative": false,
+            "points": [
+              0,
+              0
+            ],
+            "position": [
+              -0.38690504848671026,
+              -7.738094731933593
+            ],
+            "reference": false,
+            "relative_position": true,
+            "value": "30"
+          }
+        },
+        {
+          "op": "set_dimension",
+          "feature": "f1",
+          "index": 2,
+          "before": "15",
+          "value": "20",
+          "binding": {
+            "a": 1,
+            "b": 0,
+            "kind": "DistanceX",
+            "negative": false,
+            "points": [
+              0,
+              0
+            ],
+            "position": [
+              -0.09793524999999903,
+              -22.98214169580078
+            ],
+            "reference": false,
+            "relative_position": true,
+            "value": "15"
+          }
+        },
+        {
+          "op": "set_dimension",
+          "feature": "f1",
+          "index": 3,
+          "before": "15",
+          "value": "20",
+          "binding": {
+            "a": 1,
+            "b": 0,
+            "kind": "DistanceY",
+            "negative": false,
+            "points": [
+              0,
+              0
+            ],
+            "position": [
+              -19.005395889282227,
+              0.2321422473754886
+            ],
+            "reference": false,
+            "relative_position": true,
+            "value": "15"
+          }
+        }
+      ],
+      [
+        {
+          "op": "set_param",
+          "feature": "f2",
+          "key": "depth",
+          "before": "10",
+          "value": "5"
+        }
+      ]
+    ],
+    "responses": [
+      {
+        "ok": true,
+        "source_revision": "fnv1a64:bca3b3a57af8d919",
+        "revision": "fnv1a64:64897f39a2698102",
+        "rebased": false
+      },
+      {
+        "ok": true,
+        "source_revision": "fnv1a64:64897f39a2698102",
+        "revision": "fnv1a64:b4c26c2227d2d204",
+        "rebased": true
+      }
+    ],
+    "final_model": {
+      "dimensions_mm": [
+        40,
+        40,
+        5
+      ],
+      "volume_mm3": 8000,
+      "sketch_degrees_of_freedom": 0,
+      "validation_error": null,
+      "model_error": null
+    },
+    "result": "passed"
+  },
+  "native_ui_checks": [
+    {
+      "check": "Reload merged agent edits with Ctrl+R",
+      "observed": "GUI reloaded the 40x40mm fully constrained sketch and 5mm extrusion",
+      "result": "passed"
+    },
+    {
+      "check": "Protect unsaved human edit against agent disk update",
+      "sequence": [
+        "Human changed depth 5 to 6mm without saving",
+        "Agent changed shared file depth 5 to 7mm",
+        "Human pressed Ctrl+S"
+      ],
+      "observed": "Save rejected; hover tooltip reported file changed on disk",
+      "result": "passed"
+    },
+    {
+      "check": "Guard reload with unsaved changes",
+      "sequence": [
+        "Human pressed Ctrl+R",
+        "Unsaved changes guard appeared",
+        "Human chose Keep editing"
+      ],
+      "observed": "Unsaved 6mm human edit retained",
+      "result": "passed"
+    },
+    {
+      "check": "Preserve both designs using native Save as",
+      "observed": "Saved human fork at 6mm; shared file remained at agent depth 7mm",
+      "result": "passed"
+    }
+  ],
+  "saved_artifacts": {
+    "native-agent-shared": {
+      "path": "output/tutorials/native-agent-shared.cadpart",
+      "depth_expression": "7",
+      "volume_mm3": 11200.0,
+      "sketch_degrees_of_freedom": 0,
+      "revision": "fnv1a64:d981a159dfbdce1e"
+    },
+    "native-human-fork": {
+      "path": "output/tutorials/native-human-fork.cadpart",
+      "depth_expression": "6",
+      "volume_mm3": 9600.0,
+      "sketch_degrees_of_freedom": 0,
+      "revision": "fnv1a64:f8e9d035e897f219"
+    }
+  },
+  "screenshots": [
+    "output/pixel-stale-save-detail.png",
+    "output/pixel-reload-guard-detail.png"
+  ],
+  "limits": [
+    "This verifies the recorded two-process run and native UI sequence, not arbitrary multi-user merges",
+    "GUI stale saves are rejected; GUI does not automatically merge unsaved human edits with agent edits"
+  ],
+  "result": "passed"
+}

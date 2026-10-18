@@ -1,0 +1,55 @@
+{
+  "reproduction": "minimal-disc-fuse-reproduction.cadpart",
+  "runtime": "Brepkit 4.2.2, Windows debug build, six-feature reproduction",
+  "method": "Read-only registry inspection and separate .tools Rust diagnostic executables; no kernel or application source modified during diagnosis.",
+  "confirmed_failure": {
+    "operation": "Fuse rectangular slab with through side hole and a perpendicular cylinder disc",
+    "stage": "GFA Builder curved-face splitting, before boolean face selection/assembly",
+    "face": "Input-local face Id(8), disc cylindrical lateral, u-periodic with v spanning 0..25.4 mm",
+    "sections": "2 vertical line sections at x=0 plus 4 NURBS cylinder/cylinder intersection sections",
+    "error": "face splitting failed: face Id(8) is cut by sections but split into nothing",
+    "fallback": "operations::boolean then uses mesh co-refinement; CAD correctly rejects it and preserves previous exact solid"
+  },
+  "source_locations": [
+    ".tools\\cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\brepkit-algo-4.2.2\\src\\builder\\fill_images_faces.rs:461",
+    ".tools\\cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\brepkit-algo-4.2.2\\src\\builder\\fill_images_faces.rs:533",
+    ".tools\\cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\brepkit-algo-4.2.2\\src\\builder\\mod.rs:536",
+    ".tools\\cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\brepkit-algo-4.2.2\\src\\builder\\face_splitter\\mod.rs:6223",
+    ".tools\\cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\brepkit-algo-4.2.2\\src\\builder\\face_splitter\\mod.rs:7689",
+    ".tools\\cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\brepkit-operations-4.2.2\\src\\boolean\\mod.rs:852",
+    ".tools\\cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\brepkit-operations-4.2.2\\src\\boolean\\mod.rs:899"
+  ],
+  "trace_observations": [
+    "Angular traversal traces only one two-edge remnant and two duplicate three-edge loops at one intersection arch; the cylindrical wall band is absent.",
+    "The pre-trace graph contains repeated NURBS section edges and boundary circles at different unwrapped UV period copies. Period copies alone are legal; the trace does not establish one specific incorrect line.",
+    "The current curved-face splitter already has section deduplication, seam alignment, angular/DCEL rescue and periodic sliver guards. A safe fix needs analysis across those paths, not simply relaxing final validation."
+  ],
+  "tested_exact_alternatives": [
+    {
+      "attempt": "Swap commutative Fuse operands",
+      "result": "Both orders use mesh fallback"
+    },
+    {
+      "attempt": "Rebuild tool as canonical analytic cylinder primitive",
+      "result": "Mesh fallback remains"
+    },
+    {
+      "attempt": "Equivalent cylinder seam positions 0, 90, 180, 270 degrees",
+      "result": "All four use mesh fallback"
+    }
+  ],
+  "proposal": {
+    "fix_location": "Brepkit curved face arrangement for periodic cylinders with open NURBS intersection chains meeting a circular rim",
+    "requirements": [
+      "Preserve shared curve and edge provenance while removing duplicate trace edges",
+      "Build a consistent periodic UV sheet and enumerate the wall band plus intersection regions",
+      "Validate coverage, paired edges, orientation, volume, and STEP roundtrip against existing kernel cases"
+    ],
+    "scope_assessment": "No verified few-line fix identified. Do not vendor the whole kernel or add tolerance/vertex perturbations for this case.",
+    "interim_behavior": "Retain explicit exactness failure and preserved prior solid. Reordering is a different modeled result and is not a fix for this operation."
+  },
+  "logs": [
+    ".tools/disc-diagnostic-28f92db0e61f3072.log",
+    ".tools/disc-split-trace.log"
+  ]
+}

@@ -1,0 +1,224 @@
+{
+  "format": 1,
+  "name": "Straight swept tube",
+  "variables": {
+    "inner": "3",
+    "outer": "5",
+    "rise": "40"
+  },
+  "features": [
+    {
+      "id": "f1",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Tube profile",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Radius",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#outer"
+            },
+            {
+              "a": 2,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0"
+            },
+            {
+              "a": 2,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0"
+            },
+            {
+              "a": 2,
+              "b": 0,
+              "kind": "Radius",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#inner"
+            }
+          ],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "circle",
+              "values": [
+                "0",
+                "0",
+                "10"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 2,
+              "kind": "circle",
+              "values": [
+                "0",
+                "0",
+                "7"
+              ]
+            }
+          ],
+          "next_id": 2
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": ""
+      }
+    },
+    {
+      "id": "f2",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Spine",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Origin",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": ""
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Vertical",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": ""
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Length",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "#rise"
+            }
+          ],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "line",
+              "values": [
+                "0",
+                "0",
+                "0",
+                "20"
+              ]
+            }
+          ],
+          "next_id": 1
+        },
+        "offset": "0",
+        "plane": "Front",
+        "support": ""
+      }
+    },
+    {
+      "id": "f3",
+      "plugin": "sweep",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "71e90ccb1c3e37fd",
+      "name": "Sweep 1",
+      "suppressed": false,
+      "params": {
+        "mode": "New",
+        "path": "f2",
+        "profile": "f1",
+        "target": ""
+      }
+    }
+  ],
+  "rollback": null,
+  "next_id": 4
+}

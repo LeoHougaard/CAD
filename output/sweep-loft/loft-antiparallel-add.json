@@ -1,0 +1,12 @@
+{
+  "actual_volume_mm3": 1840.0,
+  "all_sketches_zero_dof": true,
+  "case": "loft-antiparallel-add",
+  "document_roundtrip_verified": true,
+  "expected_volume_mm3": 1840.0,
+  "faces": 6,
+  "mass_measurement": "strict analytic comparison",
+  "mass_relative_tolerance": 1e-7,
+  "step_roundtrip_verified": true,
+  "topology_and_closed_mesh_verified": true
+}

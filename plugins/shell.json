@@ -1,0 +1,13 @@
+{
+  "id": "shell",
+  "name": "Shell",
+  "version": "1.0.0",
+  "category": "feature",
+  "script": "shell.rhai",
+  "description": "Hollow a part by removing selected faces. Positive thickness offsets inward.",
+  "fields": [
+    {"key":"target","label":"Part","kind":"body","default":""},
+    {"key":"faces","label":"Faces to remove","kind":"faces","default":[]},
+    {"key":"thickness","label":"Wall thickness (mm)","kind":"number","default":"2"}
+  ]
+}

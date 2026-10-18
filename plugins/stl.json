@@ -1,0 +1,10 @@
+{
+  "id": "stl",
+  "name": "Export STL",
+  "version": "1.0.0",
+  "category": "exporter",
+  "editor": "",
+  "script": "stl.rhai",
+  "fields": [],
+  "description": ""
+}
