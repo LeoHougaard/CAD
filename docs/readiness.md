@@ -80,3 +80,24 @@ and the view cube, retaining movement on the release frame and excluding pointer
 travel outside the held-button interval.
 
 Logical curve identity is separate from a sketch entity's current representation. Per-edge construction can turn a rectangle into connected lines without renaming surviving region, edge or support references. Genuine splits receive new identities. Part provenance also limits reference candidates to features that actually contributed to that part; adding an unrelated later feature must not rename an earlier face.
+
+## Profile and sketch interaction follow-up
+
+The baseline is `58f2f91`: 361 checks on Windows and Pixel Linux, 58 independently
+imported STEP files, and passing CI on both systems. Native retesting reproduces
+a face-seeded Extrude whose Clear action leaves face-only picking active. The
+replacement uses one profile input for planar faces and sketch regions.
+
+The sketch audit also found a purple input overlay behind all active sketch
+curves, selected geometry overwritten by coincident later geometry, and
+construction dash patterns restarting at every tessellation segment. The active
+sketch owns its geometry rendering. Selection is painted last, selected points
+have rings, and construction dashes span whole curves. Native verification uses
+the same constrained-chain fixture before and after these changes. Tangent arcs
+are checked through persistent tangency constraints, dimension edits, save/reopen
+and an independently checked solid profile.
+
+Shared trimmed endpoints anchor analytic intersections directly, avoiding the
+quadratic cancellation at tangency. Saved references accept a redundant contact
+label only when both original curve endpoints identify the same junction; genuine
+splits, crossing branches and part owners remain distinct.

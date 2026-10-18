@@ -69,6 +69,7 @@ pub enum Command {
     SketchTool(SketchTool),
     Relationship(&'static str),
     Construction,
+    ToggleTangentArc,
 }
 
 /// Shift can turn a logical number/slash into punctuation on native backends.
@@ -185,6 +186,7 @@ pub fn command_for(key: Key, modifiers: Modifiers, context: Context) -> Option<C
             Key::Num6 => Some(View(self::View::Bottom)),
             Key::Num7 => Some(View(self::View::Isometric)),
             Key::Z => Some(ZoomIn),
+            Key::A if context == Context::Sketch => Some(ToggleTangentArc),
             Key::L if context == Context::Sketch => Some(Relationship("Perpendicular")),
             Key::O if context == Context::Sketch => Some(Relationship("Concentric")),
             Key::J if context == Context::Sketch => Some(Relationship("Fix")),
@@ -266,6 +268,21 @@ pub fn command_for(key: Key, modifiers: Modifiers, context: Context) -> Option<C
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn tangent_transition_uses_shift_a_only_in_sketch() {
+        assert_eq!(
+            command_for(Key::A, Modifiers::SHIFT, Context::Sketch),
+            Some(Command::ToggleTangentArc)
+        );
+        assert_eq!(
+            command_for(Key::A, Modifiers::SHIFT, Context::PartStudio),
+            None
+        );
+        assert_eq!(
+            command_for(Key::A, Modifiers::NONE, Context::Sketch),
+            Some(Command::SketchTool(SketchTool::ThreePointArc))
+        );
+    }
     #[test]
     fn rename_matches_onshape_without_replacing_normal_view() {
         assert_eq!(

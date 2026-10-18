@@ -1,6 +1,6 @@
 use crate::{
     engine::{Runtime, Scene},
-    model::{Document, Feature, Plane, Sketch},
+    model::{Document, Feature, Plane, Sketch, reference_matches},
     plugins::{Field, Manifest, Numbers, Registry},
     render::{self, Camera, Renderer},
     selection::{Filter, Selection, Target},
@@ -411,6 +411,8 @@ impl CadApp {
         let mut d = self.document.clone();
         if let Some(edit) = &self.editor {
             edit.apply_to(&mut d);
+            if !edit.is_new && let Some(feature) = d.features.get_mut(edit.index)
+                && let Some(plugin) = self.registry.plugins.get(&feature.plugin) { plugin.adopt_profile_input(feature); }
             d.rollback = Some(edit.index + 1);
         }
         d
@@ -478,6 +480,7 @@ impl CadApp {
         self.edit_highlight.as_ref().unwrap().2.clone()
     }
     fn paint_edit_inputs(&self, ui: &egui::Ui, rect: Rect) {
+        if self.is_sketching() { return; }
         let Some(edit) = &self.editor else { return; };
         let inputs = feature_inputs::referenced_sketches(&edit.feature, &self.registry);
         let projector = self.camera.projector(rect);
@@ -511,7 +514,7 @@ impl CadApp {
                     .filter(|f| {
                         targets.iter().any(|t| match t {
                             Target::Part(part) => part == &m.part,
-                            Target::Face { part, key } => part == &m.part && key == &f.key,
+                            Target::Face { part, key } => part == &m.part && reference_matches(key, &f.key),
                             _ => false,
                         })
                     })
@@ -528,6 +531,7 @@ impl CadApp {
             .as_ref()
             .and_then(|e| e.feature.params.get("sketch"))
             .and_then(Value::as_str);
+        let references = self.editor.as_ref().map(|e| feature_inputs::referenced_sketches(&e.feature, &self.registry)).unwrap_or_default();
         let axis = self.editor.as_ref().is_some_and(|e| feature_inputs::filter(e, &self.registry) == Filter::Edges && e.input_field.as_deref() == Some("axis_ref"));
         if axis {
             return scene.sketches.iter().filter(|(id, _)| !self.hidden_sketches.contains(*id)).map(|(id, sk)| (id.as_str(), sk)).collect();
@@ -536,9 +540,10 @@ impl CadApp {
             .sketches
             .iter()
             .filter(|(id, _)| {
-                (!self.hidden_sketches.contains(*id) || input == Some(id.as_str()))
+                (!self.hidden_sketches.contains(*id) || input == Some(id.as_str()) || references.contains(&id.as_str()))
                     && (self.show_sketches
                         || input == Some(id.as_str())
+                        || references.contains(&id.as_str())
                         || self
                             .selected_feature
                             .and_then(|i| self.document.features.get(i))
@@ -595,6 +600,11 @@ impl CadApp {
         filter: Filter,
         through: bool,
     ) -> Vec<Target> {
+        if self.editor.as_ref().is_some_and(|e| feature_inputs::profile_input(e, &self.registry)) {
+            let mut referenced = self.editor.as_ref().map(|e| feature_inputs::referenced_sketches(&e.feature, &self.registry)).unwrap_or_default();
+            referenced.extend(self.editor.as_ref().and_then(|e| e.feature.params["sketch"].as_str()));
+            return feature_inputs::profile_candidates(scene, &self.camera, (pos, rect, filter, through), &self.hidden, &self.region_sketches(scene), &referenced);
+        }
         let faces = render::picks(scene, &self.camera, pos, rect, &self.hidden);
         if self.plane_input_active() {
             let mut targets: Vec<_> = self.plane_hits(pos, rect).into_iter().map(Target::Plane).collect();
@@ -626,6 +636,7 @@ impl CadApp {
                 let distance = (world - origin).dot(direction);
                 let editing = self.editor.as_ref().is_some_and(|e| {
                     e.feature.params.get("sketch").and_then(Value::as_str) == Some(id)
+                        || feature_inputs::referenced_sketches(&e.feature, &self.registry).contains(&id)
                 });
                 if distance < 0.
                     || (!through
@@ -867,7 +878,7 @@ impl CadApp {
                 .map(|m| {
                     format!(
                         "Face {} · {}",
-                        m.faces.iter().position(|f| &f.key == key).unwrap_or(0) + 1,
+                        m.faces.iter().position(|f| reference_matches(&f.key, key)).unwrap_or(0) + 1,
                         m.name
                     )
                 })
@@ -882,7 +893,7 @@ impl CadApp {
                         m.edges
                             .iter()
                             .filter(|e| !e.seam)
-                            .position(|e| &e.key == key)
+                            .position(|e| reference_matches(&e.key, key))
                             .unwrap_or(0)
                             + 1,
                         m.name
@@ -893,7 +904,7 @@ impl CadApp {
                 let index = scene
                     .regions
                     .get(sketch)
-                    .and_then(|r| r.iter().position(|r| &r.key == key))
+                    .and_then(|r| r.iter().position(|r| reference_matches(&r.key, key)))
                     .unwrap_or(0)
                     + 1;
                 let name = self
@@ -1022,7 +1033,7 @@ impl CadApp {
             let support = self.selected_sketch_support();
             match &support {
                 Some(Target::Face { part, key }) => {
-                    if !self.scene.meshes.iter().any(|m| &m.part == part && m.faces.iter().any(|f| &f.key == key && f.plane.is_some())) {
+                    if !self.scene.meshes.iter().any(|m| &m.part == part && m.faces.iter().any(|f| reference_matches(&f.key, key) && f.plane.is_some())) {
                         self.last_error = Some("Choose a plane or planar face.".into());
                         return;
                     }
@@ -1107,6 +1118,7 @@ impl CadApp {
         edit.sync();
         let before = self.document.clone();
         if apply {
+            if !edit.is_new && let Some(plugin) = self.registry.plugins.get(&edit.feature.plugin) { plugin.adopt_profile_input(&mut edit.feature); }
             edit.apply_to(&mut self.document);
         }
         let new_plane = apply && edit.is_new && self.scene.planes.contains_key(&edit.feature.id);
@@ -1318,12 +1330,12 @@ impl CadApp {
                                 }
                                 Target::Face { part, key } => {
                                     visible_scene.meshes.iter().any(|m| {
-                                        &m.part == part && m.faces.iter().any(|f| &f.key == key)
+                                        &m.part == part && m.faces.iter().any(|f| reference_matches(&f.key, key))
                                     })
                                 }
                                 Target::Edge { part, key } => {
                                     visible_scene.meshes.iter().any(|m| {
-                                        &m.part == part && m.edges.iter().any(|e| &e.key == key)
+                                        &m.part == part && m.edges.iter().any(|e| reference_matches(&e.key, key))
                                     })
                                 }
                                 Target::Feature(id) => {
@@ -2710,6 +2722,12 @@ impl CadApp {
                                 );
                                 if matches!(filter, Filter::Regions) {
                                     targets = self.box_regions(&pick_scene, rect, area, crossing);
+                                } else if self.editor.as_ref().is_some_and(|e| feature_inputs::profile_input(e, &self.registry)) {
+                                    targets.retain(|t| match t {
+                                        Target::Face { part, key } => pick_scene.meshes.iter().any(|m| &m.part == part && m.faces.iter().any(|f| reference_matches(&f.key, key) && f.plane.is_some() && !key.contains("untracked:"))),
+                                        _ => false,
+                                    });
+                                    if filter == Filter::All { targets.extend(self.box_regions(&pick_scene, rect, area, crossing)); }
                                 }
                                 for target in targets {
                                     if ui.input(|i| i.modifiers.ctrl) {
@@ -2924,7 +2942,7 @@ impl CadApp {
             if self.is_sketching() {
                 for (name, tool) in [("Line  L", Tool::Line), ("Corner rectangle  G", Tool::Rectangle),
                     ("Center rectangle  R", Tool::CenterRectangle), ("Circle  C", Tool::Circle),
-                    ("Three-point arc  A", Tool::ThreePointArc), ("Center-point arc", Tool::Arc),
+                    ("Three-point arc  A", Tool::ThreePointArc), ("Center-point arc", Tool::Arc), ("Tangent arc  Shift+A", Tool::TangentArc),
                     ("Trim  M", Tool::Trim),
                     ("Dimension  D", Tool::Dimension), ("Select", Tool::Select)] {
                     entries.push((name.to_owned(), SearchAction::SketchTool(tool)));
@@ -3492,6 +3510,7 @@ fn parameter_ui(
     registry: &Registry,
     scene: &Scene,
 ) -> bool {
+    if field.kind == "profiles" { return feature_inputs::profiles_ui(ui, field, params, scene, document); }
     let sketch_reference = params
         .get("sketch")
         .and_then(Value::as_str)
@@ -3523,7 +3542,7 @@ fn parameter_ui(
                 for (index, region) in regions.iter().enumerate() {
                     let mut selected = explicit
                         .as_ref()
-                        .map_or(region.legacy_selected, |keys| keys.contains(&region.key));
+                        .map_or(region.legacy_selected, |keys| keys.iter().any(|key| reference_matches(key, &region.key)));
                     if ui
                         .checkbox(&mut selected, format!("Region {}", index + 1))
                         .on_hover_text(&region.key)
@@ -3536,7 +3555,7 @@ fn parameter_ui(
                                 .map(|r| r.key.clone())
                                 .collect()
                         });
-                        keys.retain(|k| k != &region.key);
+                        keys.retain(|k| !reference_matches(k, &region.key));
                         if selected {
                             keys.push(region.key.clone());
                         }
@@ -3545,7 +3564,7 @@ fn parameter_ui(
                 if let Some(keys) = &mut explicit {
                     let missing: Vec<_> = keys
                         .iter()
-                        .filter(|k| !regions.iter().any(|r| &r.key == *k))
+                        .filter(|k| !regions.iter().any(|r| reference_matches(&r.key, k)))
                         .cloned()
                         .collect();
                     for key in missing {
@@ -3993,6 +4012,7 @@ mod save_tests {
             kind: "sketches".into(),
             default: json!([]),
             options: vec![],
+            hidden: false,
         };
         for width in [220., 244.] {
             let ctx = egui::Context::default();

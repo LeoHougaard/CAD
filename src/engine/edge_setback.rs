@@ -99,7 +99,7 @@ impl Geometry {
             let edges: Vec<_> = self
                 .edge_keys_scoped(result, Some(owner))?
                 .into_iter()
-                .filter(|(_, k)| k == &key)
+                .filter(|(_, k)| reference_matches(k, &key))
                 .collect();
             if edges.len() != 1 {
                 return Ok(None);

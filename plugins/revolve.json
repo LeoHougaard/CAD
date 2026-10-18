@@ -1,25 +1,35 @@
 {
   "id": "revolve",
   "name": "Revolve",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "category": "feature",
   "editor": "",
   "script": "revolve.rhai",
   "fields": [
+    {"key":"legacy_profile_source","label":"Legacy profile source","kind":"text","default":"","hidden":true},
+    {
+      "key": "profiles",
+      "label": "Faces and sketch regions",
+      "kind": "profiles",
+      "default": null
+    },
     {
       "key": "regions",
+      "hidden": true,
       "label": "Regions",
       "kind": "regions",
       "default": null
     },
     {
       "key": "profile_face",
+      "hidden": true,
       "label": "Planar face",
       "kind": "profile_face",
       "default": null
     },
     {
       "key": "sketch",
+      "hidden": true,
       "label": "Sketch",
       "kind": "sketch",
       "default": ""

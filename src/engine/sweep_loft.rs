@@ -360,8 +360,8 @@ impl Geometry {
         a.v = cross(a.normal, a.u);
         b.normal = b.normal.map(|x| sign * x);
         b.v = cross(b.normal, b.u);
-        self.anchors.push((format!("{}:start", f.id), a));
-        self.anchors.push((format!("{}:end", f.id), b));
+        self.anchors.push((format!("{}:start", f.id), a, f.id.clone()));
+        self.anchors.push((format!("{}:end", f.id), b, f.id.clone()));
     }
 }
 

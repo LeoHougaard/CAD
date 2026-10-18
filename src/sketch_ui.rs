@@ -9,9 +9,12 @@ use crate::{
 use eframe::egui::{self, Color32, Pos2, Rect, Stroke, Vec2};
 use std::collections::BTreeMap;
 
-const BLUE: Color32 = Color32::from_rgb(104, 147, 169);
+#[cfg(test)]
+#[path = "sketch_feedback_tests.rs"]
+mod feedback_tests;
+
+const BLUE: Color32 = Color32::from_rgb(86, 112, 139);
 const WHITE: Color32 = Color32::from_rgb(221, 230, 240);
-const SELECTED: Color32 = Color32::from_rgb(126, 195, 192);
 const HOVER: Color32 = Color32::from_rgb(170, 145, 196);
 const ORANGE: Color32 = HOVER;
 const RED: Color32 = Color32::from_rgb(247, 119, 132);
@@ -26,6 +29,7 @@ pub enum Tool {
     Circle,
     Arc,
     ThreePointArc,
+    TangentArc,
     Trim,
     Dimension,
     Relationship(&'static str),
@@ -40,6 +44,7 @@ impl Tool {
             Self::Circle => "Circle (C)",
             Self::Arc => "Center arc",
             Self::ThreePointArc => "3 point arc (A)",
+            Self::TangentArc => "Tangent arc",
             Self::Trim => "Trim (M)",
             Self::Dimension => "Dimension (D)",
             Self::Relationship(name) => name,
@@ -52,6 +57,14 @@ struct Snap {
     target: Option<Selection>,
     x_axis: bool,
     y_axis: bool,
+}
+#[derive(Clone)]
+struct TangentStart {
+    snap: Snap,
+    source: Selection,
+    direction: [f64; 2],
+    edge: usize,
+    circle: bool,
 }
 struct DimensionEdit {
     constraint: SketchConstraint,
@@ -98,6 +111,8 @@ pub struct SketchUi {
     first: Option<Snap>,
     second: Option<Snap>,
     clockwise_arc: bool,
+    tangent: Option<TangentStart>,
+    line_moved_away: bool,
     picks: Vec<Selection>,
     dimension: Option<DimensionEdit>,
     selected_dimension: Option<usize>,
@@ -119,6 +134,8 @@ impl Default for SketchUi {
             first: None,
             second: None,
             clockwise_arc: false,
+            tangent: None,
+            line_moved_away: false,
             picks: vec![],
             dimension: None,
             selected_dimension: None,
@@ -137,6 +154,8 @@ impl SketchUi {
         self.hint.clear();
         self.first = None;
         self.second = None;
+        self.tangent = None;
+        self.line_moved_away = false;
         self.picks.clear();
         self.dimension = None;
         self.drag = None;
@@ -180,6 +199,7 @@ impl SketchUi {
             Tool::Circle,
             Tool::ThreePointArc,
             Tool::Arc,
+            Tool::TangentArc,
             Tool::Trim,
             Tool::Dimension,
         ] {
@@ -248,6 +268,18 @@ impl SketchUi {
                         self.pending_relationship = (!self.selected.is_empty()).then_some(name);
                     }
                 }
+                Command::ToggleTangentArc => match self.tool {
+                    Tool::Line => {
+                        self.tool = Tool::TangentArc;
+                        self.tangent = None;
+                    }
+                    Tool::TangentArc => {
+                        self.tool = Tool::Line;
+                        self.tangent = None;
+                        self.line_moved_away = false;
+                    }
+                    _ => (),
+                },
                 Command::Construction => {
                     if self.selected.is_empty() {
                         self.construction = !self.construction;
@@ -566,6 +598,33 @@ impl SketchUi {
                 } else {
                     (a, b)
                 };
+                if let Some(arc) = s
+                    .entities
+                    .iter()
+                    .find(|e| [a.entity, b.entity].contains(&e.id) && e.kind == "arc")
+                    && let Some(circle) = s
+                        .entities
+                        .iter()
+                        .find(|e| [a.entity, b.entity].contains(&e.id) && e.kind == "circle")
+                {
+                    let points = arc.control_points();
+                    let center = circle.control_points()[0];
+                    let index = [1, 2]
+                        .into_iter()
+                        .find(|&i| {
+                            ((points[i][0] - center[0]).hypot(points[i][1] - center[1])
+                                - circle.values[2])
+                                .abs()
+                                < 1e-5
+                        })
+                        .ok_or("Arc tangency requires an endpoint on the circle")?;
+                    c.points = if a.entity == arc.id {
+                        [index, 0]
+                    } else {
+                        [0, index]
+                    };
+                    return Ok(c);
+                }
                 if sketch
                     .entities
                     .iter()
@@ -650,11 +709,25 @@ impl SketchUi {
         if let Some(s) = resolved {
             self.update_resolved(s);
         }
-        let sk = self.last_good.clone().unwrap_or(ResolvedSketch {
+        let mut sk = self.last_good.clone().unwrap_or(ResolvedSketch {
             entities: vec![],
             plane,
             dof: 0,
         });
+        // A just-created chain endpoint can precede its asynchronous Scene.
+        // Resolve only when a tangent gesture needs that new source immediately.
+        if matches!(self.tool, Tool::Line | Tool::TangentArc)
+            && self
+                .first
+                .as_ref()
+                .and_then(|p| p.target)
+                .is_some_and(|p| !sk.entities.iter().any(|e| e.id == p.entity))
+            && let Ok(solved) = Numbers::for_format(vars, format)
+                .and_then(|n| crate::sketch::resolve(sketch, sk.plane.clone(), &n))
+        {
+            self.last_good = Some(solved.clone());
+            sk = solved;
+        }
         let plane = &sk.plane;
         let projector = camera.projector(rect);
         let pointer = response.hover_pos();
@@ -667,7 +740,7 @@ impl SketchUi {
                 pick(&sk, &projector, rect, p)
             }
         });
-        let snap = raw.map(|p| {
+        let mut snap = raw.map(|p| {
             snap(
                 &sk,
                 &projector,
@@ -677,6 +750,87 @@ impl SketchUi {
                 self.first.as_ref(),
             )
         });
+        if self.tool == Tool::Line
+            && self.inference
+            && !ui.input(|i| i.modifiers.shift)
+            && let (Some(first), Some(pointer)) = (&self.first, pointer)
+        {
+            let distance = projector.project(plane.at(first.p), rect).distance(pointer);
+            if distance > 14. {
+                self.line_moved_away = true;
+            }
+            if self.line_moved_away
+                && distance < 7.
+                && !ui.input(|i| i.pointer.any_down())
+                && let Ok(start) = tangent_start(&sk, first, first.target)
+            {
+                self.tool = Tool::TangentArc;
+                self.tangent = Some(start);
+                self.line_moved_away = false;
+            }
+        }
+        if self.tool == Tool::TangentArc
+            && self.tangent.is_none()
+            && let Some(first) = &self.first
+        {
+            match tangent_start(&sk, first, first.target) {
+                Ok(start) => self.tangent = Some(start),
+                Err(error) => self.hint = error,
+            }
+        }
+        // Line continuation snaps to an arc's tangent before adding a persistent
+        // relation. Existing endpoint snaps keep priority over angular inference.
+        if self.tool == Tool::Line
+            && self.inference
+            && !ui.input(|i| i.modifiers.shift)
+            && let (Some(first), Some(end)) = (&self.first, &mut snap)
+            && end.target.is_none()
+            && let Ok(start) = tangent_start(&sk, first, first.target)
+            && sk
+                .entities
+                .iter()
+                .any(|e| e.id == start.source.entity && e.kind == "arc")
+        {
+            let delta = [end.p[0] - first.p[0], end.p[1] - first.p[1]];
+            let d = delta[0] * start.direction[0] + delta[1] * start.direction[1];
+            let p = [
+                first.p[0] + d * start.direction[0],
+                first.p[1] + d * start.direction[1],
+            ];
+            if d > 1e-7
+                && projector
+                    .project(plane.at(p), rect)
+                    .distance(projector.project(plane.at(end.p), rect))
+                    < 6.
+            {
+                *end = Snap {
+                    p,
+                    ..Default::default()
+                };
+            }
+        }
+        if self.tool == Tool::TangentArc
+            && self.tangent.is_none()
+            && response.drag_started_by(egui::PointerButton::Primary)
+            && let Some(press) = ui.input(|i| i.pointer.press_origin())
+            && let Some(p) = camera.plane_point(press, rect, plane)
+        {
+            match tangent_start(
+                &sk,
+                &Snap {
+                    p,
+                    ..Default::default()
+                },
+                pick(&sk, &projector, rect, press),
+            ) {
+                Ok(start) => {
+                    self.first = Some(start.snap.clone());
+                    self.tangent = Some(start);
+                    self.hint.clear();
+                }
+                Err(error) => self.hint = error,
+            }
+        }
         let mut edit = Edit::default();
         if let Some(name) = self.pending_relationship.take() {
             match self.relationships(name, sketch) {
@@ -749,6 +903,22 @@ impl SketchUi {
                     [first.p[0], end.p[1]],
                     first.p,
                 ],
+                Tool::TangentArc => self
+                    .tangent
+                    .as_ref()
+                    .and_then(|start| tangent_arc_values(start, end.p).ok())
+                    .map(|values| {
+                        crate::sketch::ResolvedEntity {
+                            id: 0,
+                            kind: "arc".into(),
+                            curve_identity: None,
+                            values,
+                            construction: false,
+                            fixed: false,
+                        }
+                        .points()
+                    })
+                    .unwrap_or_else(|| vec![first.p, end.p]),
                 Tool::Arc | Tool::ThreePointArc => self
                     .second
                     .as_ref()
@@ -804,7 +974,12 @@ impl SketchUi {
             && let Some(index) = label_hit
         {
             self.edit_dimension(sketch, index);
-        } else if response.clicked() && hover && self.dimension.is_none() {
+        } else if (response.clicked()
+            || (self.tool == Tool::TangentArc
+                && response.drag_stopped_by(egui::PointerButton::Primary)))
+            && hover
+            && self.dimension.is_none()
+        {
             if let Some(index) = label_hit {
                 self.selected_dimension = Some(index);
                 self.selected.clear();
@@ -882,6 +1057,86 @@ impl SketchUi {
                     self.pending_relationship = Some(name);
                 } else {
                     self.clear_selection();
+                }
+            } else if self.tool == Tool::TangentArc {
+                if let Some(end) = snap.clone() {
+                    if let Some(start) = self.tangent.clone() {
+                        let result = Numbers::for_format(vars, format).and_then(|n| {
+                            let values = tangent_arc_values(&start, end.p)?;
+                            let mut candidate = sketch.clone();
+                            seed_from_resolved(&mut candidate, Some(&sk));
+                            candidate.add_arc(
+                                [values[0], values[1]],
+                                [values[2], values[3]],
+                                [values[4], values[5]],
+                                values[6] < 0.,
+                            );
+                            let id = candidate.next_id;
+                            candidate.entities.last_mut().unwrap().construction = self.construction;
+                            if start.circle {
+                                add_relation(
+                                    &mut candidate,
+                                    SketchConstraint {
+                                        kind: "PointOnCircle".into(),
+                                        a: id,
+                                        b: start.source.entity,
+                                        points: [1, 0],
+                                        ..Default::default()
+                                    },
+                                );
+                            } else {
+                                link(&mut candidate, id, 1, &start.snap);
+                            }
+                            link(&mut candidate, id, 2, &end);
+                            add_relation(
+                                &mut candidate,
+                                SketchConstraint {
+                                    kind: "Tangent".into(),
+                                    a: id,
+                                    b: start.source.entity,
+                                    points: [1, start.source.index()],
+                                    value: format!("edge:{}", start.edge),
+                                    ..Default::default()
+                                },
+                            );
+                            let solved = crate::sketch::resolve(&candidate, plane.clone(), &n)?;
+                            seed_from_resolved(&mut candidate, Some(&solved));
+                            Ok((candidate, solved, id))
+                        });
+                        match result {
+                            Ok((candidate, solved, id)) => {
+                                let end = solved
+                                    .entities
+                                    .iter()
+                                    .find(|e| e.id == id)
+                                    .unwrap()
+                                    .control_points()[2];
+                                *sketch = candidate;
+                                self.last_good = Some(solved);
+                                self.first = Some(Snap {
+                                    p: end,
+                                    target: Some(Selection::point(id, 2)),
+                                    ..Default::default()
+                                });
+                                self.tool = Tool::Line;
+                                self.tangent = None;
+                                self.line_moved_away = false;
+                                self.selected.clear();
+                                self.hint.clear();
+                                edit.change(true);
+                            }
+                            Err(error) => self.hint = error,
+                        }
+                    } else {
+                        match tangent_start(&sk, &end, hit) {
+                            Ok(start) => {
+                                self.first = Some(start.snap.clone());
+                                self.tangent = Some(start);
+                                self.hint.clear();
+                            }
+                            Err(error) => self.hint = error,
+                        }
+                    }
                 }
             } else if matches!(self.tool, Tool::Arc | Tool::ThreePointArc) {
                 if let Some(snap) = snap.clone() {
@@ -970,6 +1225,31 @@ impl SketchUi {
                         }
                         if self.tool == Tool::Line {
                             link(sketch, id, 1, &snap);
+                            if self.inference
+                                && !ui.input(|i| i.modifiers.shift)
+                                && let Ok(start) = tangent_start(&sk, &first, first.target)
+                                && sk
+                                    .entities
+                                    .iter()
+                                    .any(|e| e.id == start.source.entity && e.kind == "arc")
+                            {
+                                let d = [snap.p[0] - first.p[0], snap.p[1] - first.p[1]];
+                                if (d[0] * start.direction[1] - d[1] * start.direction[0]).abs()
+                                    < 1e-7 * d[0].hypot(d[1]).max(1.)
+                                {
+                                    add_relation(
+                                        sketch,
+                                        SketchConstraint {
+                                            kind: "Tangent".into(),
+                                            a: id,
+                                            b: start.source.entity,
+                                            points: [0, start.source.index()],
+                                            ..Default::default()
+                                        },
+                                    );
+                                }
+                            }
+                            self.line_moved_away = false;
                             if self.inference
                                 && !ui.input(|i| i.modifiers.shift)
                                 && (first.p[0] - snap.p[0]).abs() < 1e-7
@@ -1112,6 +1392,7 @@ impl SketchUi {
                                     let before = sketch.clone();
                                     seed_from_resolved(sketch, Some(&solved));
                                     if *sketch != before {
+                                        self.last_good = Some(solved);
                                         edit.change(*checkpoint);
                                         edit.live = true;
                                         *checkpoint = false;
@@ -1124,19 +1405,26 @@ impl SketchUi {
                 }
             }
             if let Some(Drag::Box { start, current, .. }) = &self.drag {
-                let color = if current.x >= start.x {
-                    SELECTED
+                let crossing = current.x < start.x;
+                let color = if crossing {
+                    ui.visuals().widgets.hovered.bg_stroke.color
                 } else {
-                    HOVER
+                    ui.visuals().selection.stroke.color
                 };
                 let bounds = Rect::from_two_pos(*start, *current);
                 ui.painter()
                     .rect_filled(bounds, 0., color.gamma_multiply(0.12));
-                ui.painter().rect_stroke(
-                    bounds,
-                    0.,
-                    Stroke::new(1_f32, color),
-                    egui::StrokeKind::Inside,
+                stroke_curve(
+                    ui.painter(),
+                    &[
+                        bounds.left_top(),
+                        bounds.right_top(),
+                        bounds.right_bottom(),
+                        bounds.left_bottom(),
+                        bounds.left_top(),
+                    ],
+                    crossing,
+                    Stroke::new(1.2_f32, color),
                 );
             }
             if response.drag_stopped() {
@@ -1175,7 +1463,7 @@ impl SketchUi {
         }) {
             edit.change(true);
         }
-        let helper = if self.tool == Tool::Trim && !self.hint.is_empty() {
+        let helper = if !self.hint.is_empty() {
             self.hint.as_str()
         } else if self.dimension.is_some() {
             ""
@@ -1203,6 +1491,13 @@ impl SketchUi {
                         "Opposite corner"
                     } else {
                         "First corner"
+                    }
+                }
+                Tool::TangentArc => {
+                    if self.tangent.is_some() {
+                        "Arc endpoint"
+                    } else {
+                        "Choose a line or arc endpoint"
                     }
                 }
                 Tool::Arc | Tool::ThreePointArc => {
@@ -1245,13 +1540,37 @@ impl SketchUi {
             && self.dimension.is_none()
             && let Some(pointer) = pointer
         {
-            ui.painter().text(
-                pointer + Vec2::new(15., 18.),
-                egui::Align2::LEFT_TOP,
-                self.selected.len().to_string(),
+            let points = self
+                .selected
+                .iter()
+                .filter(|s| matches!(s.sub, Sub::Point(_)))
+                .count();
+            let curves = self.selected.len() - points;
+            let count =
+                |n, singular, plural| format!("{n} {}", if n == 1 { singular } else { plural });
+            let mut parts = Vec::new();
+            if curves > 0 {
+                parts.push(count(curves, "curve", "curves"));
+            }
+            if points > 0 {
+                parts.push(count(points, "point", "points"));
+            }
+            let color = ui.visuals().selection.stroke.color;
+            let label = ui.painter().layout_no_wrap(
+                parts.join(", "),
                 egui::FontId::proportional(12.),
-                SELECTED,
+                color,
             );
+            let size = label.size() + Vec2::new(8., 4.);
+            let position = Pos2::new(
+                (pointer.x + 15.).min(rect.right() - size.x),
+                (pointer.y + 18.).min(rect.bottom() - size.y),
+            );
+            let badge = Rect::from_min_size(position, size);
+            ui.painter()
+                .rect_filled(badge, 2., Color32::from_rgb(7, 7, 10));
+            ui.painter()
+                .galley(badge.min + Vec2::new(4., 2.), label, color);
         }
         edit
     }
@@ -1550,6 +1869,175 @@ fn rect_points(values: &[String]) -> Vec<[f64; 2]> {
         [v[0], v[1] + v[3]],
     ]
 }
+fn tangent_start(
+    sk: &ResolvedSketch,
+    snap: &Snap,
+    hit: Option<Selection>,
+) -> Result<TangentStart, String> {
+    let mut selected = hit
+        .or(snap.target)
+        .ok_or("Choose a line or arc endpoint, or a circle rim")?;
+    // The origin wins ordinary snap ties, but cannot supply a tangent.
+    if selected.entity == 0 {
+        selected = sk
+            .entities
+            .iter()
+            .flat_map(|entity| {
+                entity
+                    .control_points()
+                    .into_iter()
+                    .enumerate()
+                    .filter_map(move |(index, p)| {
+                        let endpoint = match entity.kind.as_str() {
+                            "line" | "rectangle" => true,
+                            "arc" => index == 1 || index == 2,
+                            _ => false,
+                        };
+                        (endpoint && p[0].hypot(p[1]) < 1e-7)
+                            .then_some(Selection::point(entity.id, index))
+                    })
+            })
+            .next()
+            .ok_or("Choose a line or arc endpoint, or a circle rim")?;
+    }
+    let entity = sk
+        .entities
+        .iter()
+        .find(|e| e.id == selected.entity)
+        .ok_or("Tangent source is unavailable")?;
+    let points = entity.control_points();
+    let mut edge = 0;
+    let (index, p, direction, circle) = match entity.kind.as_str() {
+        "line" | "rectangle" => {
+            edge = if entity.kind == "rectangle" {
+                match selected.sub {
+                    Sub::Edge(e) => e % 4,
+                    Sub::Point(p) => (p + 3) % 4,
+                }
+            } else {
+                0
+            };
+            let a = if entity.kind == "rectangle" { edge } else { 0 };
+            let b = if entity.kind == "rectangle" {
+                (edge + 1) % 4
+            } else {
+                1
+            };
+            let index = match selected.sub {
+                Sub::Point(i) if i == a || i == b => i,
+                _ => {
+                    if (snap.p[0] - points[a][0]).hypot(snap.p[1] - points[a][1])
+                        < (snap.p[0] - points[b][0]).hypot(snap.p[1] - points[b][1])
+                    {
+                        a
+                    } else {
+                        b
+                    }
+                }
+            };
+            let other = if index == a { b } else { a };
+            (
+                index,
+                points[index],
+                [
+                    points[index][0] - points[other][0],
+                    points[index][1] - points[other][1],
+                ],
+                false,
+            )
+        }
+        "arc" => {
+            let index = match selected.sub {
+                Sub::Point(i) if i == 1 || i == 2 => i,
+                Sub::Edge(_) => {
+                    if (snap.p[0] - points[1][0]).hypot(snap.p[1] - points[1][1])
+                        < (snap.p[0] - points[2][0]).hypot(snap.p[1] - points[2][1])
+                    {
+                        1
+                    } else {
+                        2
+                    }
+                }
+                _ => return Err("Choose an arc endpoint".into()),
+            };
+            let r = [
+                points[index][0] - points[0][0],
+                points[index][1] - points[0][1],
+            ];
+            let sign = entity.values[6] * if index == 2 { 1. } else { -1. };
+            (index, points[index], [-r[1] * sign, r[0] * sign], false)
+        }
+        "circle" if matches!(selected.sub, Sub::Edge(_)) => {
+            let radial = [snap.p[0] - points[0][0], snap.p[1] - points[0][1]];
+            let length = radial[0].hypot(radial[1]);
+            if length < 1e-7 {
+                return Err("Choose the circle rim".into());
+            }
+            let p = [
+                points[0][0] + radial[0] * entity.values[2] / length,
+                points[0][1] + radial[1] * entity.values[2] / length,
+            ];
+            (0, p, [-radial[1], radial[0]], true)
+        }
+        _ => return Err("Choose a line or arc endpoint, or a circle rim".into()),
+    };
+    let length = direction[0].hypot(direction[1]);
+    if length < 1e-7 {
+        return Err("Tangent source is degenerate".into());
+    }
+    let source = if circle {
+        Selection::edge(entity.id, 0)
+    } else {
+        Selection::point(entity.id, index)
+    };
+    Ok(TangentStart {
+        snap: Snap {
+            p,
+            target: (!circle).then_some(source),
+            ..Default::default()
+        },
+        source,
+        direction: direction.map(|v| v / length),
+        edge,
+        circle,
+    })
+}
+fn tangent_arc_values(start: &TangentStart, end: [f64; 2]) -> Result<Vec<f64>, String> {
+    let p = start.snap.p;
+    let delta = [end[0] - p[0], end[1] - p[1]];
+    let length = delta[0].hypot(delta[1]);
+    if length < 1e-7 {
+        return Err("Choose a distinct arc endpoint".into());
+    }
+    let mut t = start.direction;
+    if start.circle && t[0] * delta[0] + t[1] * delta[1] < 0. {
+        t = t.map(|v| -v);
+    }
+    let normal = [-t[1], t[0]];
+    let projection = delta[0] * normal[0] + delta[1] * normal[1];
+    if projection.abs() < 1e-9 * length.max(1.) {
+        return Err("Move away from the tangent line".into());
+    }
+    let signed_radius = length * length / (2. * projection);
+    let center = [
+        p[0] + signed_radius * normal[0],
+        p[1] + signed_radius * normal[1],
+    ];
+    let values = vec![
+        center[0],
+        center[1],
+        p[0],
+        p[1],
+        end[0],
+        end[1],
+        signed_radius.signum(),
+    ];
+    if values.iter().any(|v| !v.is_finite() || v.abs() > 1e8) {
+        return Err("Arc exceeds the modeling range".into());
+    }
+    crate::sketch::arc_geometry(&values)?;
+    Ok(values)
+}
 fn arc_draft(
     tool: Tool,
     first: &Snap,
@@ -1758,7 +2246,108 @@ fn snap(
     snap
 }
 pub fn paint_readonly(ui: &egui::Ui, sk: &ResolvedSketch, projector: &Projector, rect: Rect) {
-    paint_geometry(ui, sk, projector, rect, &[], None, false);
+    paint_curves(ui, sk, projector, rect, &[], None, false);
+}
+fn paint_curves(
+    ui: &egui::Ui,
+    sk: &ResolvedSketch,
+    projector: &Projector,
+    rect: Rect,
+    selected: &[Selection],
+    hover: Option<Selection>,
+    conflict: bool,
+) {
+    let painter = ui.painter().with_clip_rect(rect);
+    let mut curves = Vec::new();
+    for entity in &sk.entities {
+        let points: Vec<_> = entity
+            .points()
+            .into_iter()
+            .map(|p| projector.project(sk.plane.at(p), rect))
+            .collect();
+        let pieces: Vec<_> = if entity.kind == "rectangle" {
+            points
+                .windows(2)
+                .enumerate()
+                .map(|(edge, p)| (edge, p.to_vec()))
+                .collect()
+        } else {
+            vec![(0, points)]
+        };
+        for (edge, points) in pieces {
+            let selection = Selection::edge(entity.id, edge);
+            let layer = if selected.contains(&selection) {
+                2
+            } else if hover == Some(selection) {
+                1
+            } else {
+                0
+            };
+            let color = match layer {
+                2 => ui.visuals().selection.stroke.color,
+                1 => ui.visuals().widgets.hovered.bg_stroke.color,
+                _ if conflict => RED,
+                _ if entity.fixed => WHITE,
+                _ => BLUE,
+            };
+            curves.push((layer, points, entity.construction, color));
+        }
+    }
+    // Interaction highlights must survive coincident geometry drawn later.
+    for layer in 0..=2 {
+        for (_, points, construction, color) in curves.iter().filter(|c| c.0 == layer) {
+            let width: f32 = match layer {
+                2 => 3.2,
+                1 => 2.5,
+                _ => 1.5,
+            };
+            if layer > 0 {
+                stroke_curve(
+                    &painter,
+                    points,
+                    *construction,
+                    Stroke::new(width + 3., Color32::from_rgb(7, 7, 10)),
+                );
+            }
+            stroke_curve(&painter, points, *construction, Stroke::new(width, *color));
+        }
+    }
+}
+fn stroke_curve(painter: &egui::Painter, points: &[Pos2], construction: bool, stroke: Stroke) {
+    if !construction {
+        painter.add(egui::Shape::line(points.to_vec(), stroke));
+        return;
+    }
+    let clip = painter.clip_rect().expand(stroke.width);
+    let mut phase = 0.;
+    for p in points.windows(2) {
+        let start = [f64::from(p[0].x), f64::from(p[0].y)];
+        let delta = [f64::from(p[1].x) - start[0], f64::from(p[1].y) - start[1]];
+        let length = delta[0].hypot(delta[1]);
+        if length < 1e-8 {
+            continue;
+        }
+        if let Some((low, high)) = crate::render::clip_segment(p[0], p[1], clip) {
+            let (low, high) = (low * length, high * length);
+            let point = |distance: f64| {
+                Pos2::new(
+                    (start[0] + delta[0] * distance / length) as f32,
+                    (start[1] + delta[1] * distance / length) as f32,
+                )
+            };
+            // Emit only visible dashes, retaining phase along the original path.
+            // Work and memory must not grow with offscreen distance or zoom.
+            for dash in ((phase + low) / 10.).floor() as i64..=((phase + high) / 10.).floor() as i64
+            {
+                let a = (dash as f64 * 10. - phase).max(low);
+                let b = (dash as f64 * 10. + 6. - phase).min(high);
+                if a < b {
+                    painter.line_segment([point(a), point(b)], stroke);
+                }
+            }
+        }
+        phase = (phase + length) % 10.;
+    }
 }
 fn paint_geometry(
     ui: &egui::Ui,
@@ -1769,98 +2358,58 @@ fn paint_geometry(
     hover: Option<Selection>,
     conflict: bool,
 ) {
+    paint_curves(ui, sk, projector, rect, selected, hover, conflict);
     let painter = ui.painter().with_clip_rect(rect);
-    for e in &sk.entities {
-        let base = if conflict {
-            RED
-        } else if e.fixed {
-            WHITE
-        } else {
-            BLUE
-        };
-        let points = e.points();
-        for (i, p) in points.windows(2).enumerate() {
-            let selection = Selection::edge(e.id, if e.kind == "rectangle" { i } else { 0 });
-            let is_selected = selected.contains(&selection);
-            let color = if is_selected {
-                ui.visuals().selection.stroke.color
-            } else if hover == Some(selection) {
-                ui.visuals().widgets.hovered.bg_stroke.color
+    let points = vertices(sk);
+    for layer in 0..=2 {
+        for (selection, point) in &points {
+            let point_layer = if selected.contains(selection) {
+                2
+            } else if hover == Some(*selection) {
+                1
             } else {
-                base
+                0
             };
-            let segment = [
-                projector.project(sk.plane.at(p[0]), rect),
-                projector.project(sk.plane.at(p[1]), rect),
-            ];
-            if is_selected {
-                painter.line_segment(
-                    segment,
-                    Stroke::new(
-                        6_f32,
-                        ui.visuals().selection.stroke.color.gamma_multiply(0.18),
-                    ),
-                );
+            if layer != point_layer {
+                continue;
             }
-            if e.construction {
-                let d = segment[1] - segment[0];
-                let len = d.length();
-                if len > 0.1 {
-                    let unit = d / len;
-                    for n in 0..(len / 9.).ceil().min(200.) as usize {
-                        let a = segment[0] + unit * n as f32 * 9.;
-                        let b = segment[0] + unit * (n as f32 * 9. + 4.).min(len);
-                        painter.line_segment(
-                            [a, b],
-                            Stroke::new(if is_selected { 2.8_f32 } else { 1. }, color),
-                        );
-                    }
+            let pos = projector.project(sk.plane.at(*point), rect);
+            let color = match layer {
+                2 => ui.visuals().selection.stroke.color,
+                1 => ui.visuals().widgets.hovered.bg_stroke.color,
+                _ if selection.entity == 0 => WHITE,
+                _ if conflict => RED,
+                _ if sk
+                    .entities
+                    .iter()
+                    .any(|e| e.id == selection.entity && e.fixed) =>
+                {
+                    WHITE
                 }
-            } else {
+                _ => BLUE,
+            };
+            if selection.entity == 0 {
                 painter.line_segment(
-                    segment,
-                    Stroke::new(
-                        if is_selected {
-                            2.8_f32
-                        } else if color == ui.visuals().widgets.hovered.bg_stroke.color {
-                            2.2
-                        } else {
-                            1.5
-                        },
-                        color,
-                    ),
+                    [pos - Vec2::new(6., 0.), pos + Vec2::new(6., 0.)],
+                    Stroke::new(1.0_f32, color),
+                );
+                painter.line_segment(
+                    [pos - Vec2::new(0., 6.), pos + Vec2::new(0., 6.)],
+                    Stroke::new(1.0_f32, color),
                 );
             }
-        }
-    }
-    for (s, p) in vertices(sk) {
-        let pos = projector.project(sk.plane.at(p), rect);
-        let color = if selected.contains(&s) {
-            ui.visuals().selection.stroke.color
-        } else if hover == Some(s) {
-            ui.visuals().widgets.hovered.bg_stroke.color
-        } else if s.entity == 0 {
-            WHITE
-        } else if conflict {
-            RED
-        } else {
-            sk.entities
-                .iter()
-                .find(|e| e.id == s.entity)
-                .map_or(BLUE, |e| if e.fixed { WHITE } else { BLUE })
-        };
-        if s.entity == 0 {
-            painter.line_segment(
-                [pos - Vec2::new(6., 0.), pos + Vec2::new(6., 0.)],
-                Stroke::new(1.0f32, color),
-            );
-            painter.line_segment(
-                [pos - Vec2::new(0., 6.), pos + Vec2::new(0., 6.)],
-                Stroke::new(1.0f32, color),
-            );
-            painter.circle_stroke(pos, 4., Stroke::new(1.0f32, color));
-        } else {
-            painter.circle_filled(pos, if selected.contains(&s) { 4. } else { 2.5 }, color);
+            if layer > 0 {
+                painter.circle_filled(pos, 6., Color32::from_rgb(7, 7, 10));
+                painter.circle_stroke(
+                    pos,
+                    if layer == 2 { 4.5 } else { 4. },
+                    Stroke::new(2_f32, color),
+                );
+            } else if selection.entity == 0 {
+                painter.circle_stroke(pos, 4., Stroke::new(1_f32, color));
+            } else {
+                painter.circle_filled(pos, 2.2, color);
+            }
         }
     }
 }
@@ -2052,6 +2601,9 @@ pub fn paint_dimension(
     let galley = painter.layout_no_wrap(text, egui::FontId::proportional(14.), color);
     let bounds = Rect::from_center_size(label, galley.size() + Vec2::new(10., 6.));
     painter.rect_filled(bounds, 3., Color32::from_rgb(12, 12, 15));
+    if selected {
+        painter.rect_stroke(bounds, 3., Stroke::new(1.2_f32, color), egui::StrokeKind::Outside);
+    }
     painter.galley(bounds.center() - galley.size() / 2., galley, color);
     Some(bounds)
 }
@@ -2190,6 +2742,373 @@ mod tests {
                 modifiers,
             }]);
         }
+    }
+    #[test]
+    fn tangent_arc_shift_a_chain_is_exact_parametric_and_reopens() {
+        let mut h = Harness::new();
+        h.key(egui::Key::L);
+        for p in [[-30., -10.], [0., -10.]] {
+            let p = h.screen(p);
+            h.click(p.x, p.y);
+        }
+        let before = h.sketch.clone();
+        let checkpoints = h.checkpoints;
+        h.key_with_modifiers(egui::Key::A, egui::Modifiers::SHIFT);
+        assert_eq!(h.editor.tool, Tool::TangentArc);
+        let p = h.screen([10., 0.]);
+        h.click(p.x, p.y);
+        assert_eq!(h.editor.tool, Tool::Line);
+        assert_eq!(h.checkpoints, checkpoints + 1);
+        assert_eq!(h.sketch.entities[1].kind, "arc");
+        assert!(
+            h.sketch
+                .constraints
+                .iter()
+                .any(|c| c.kind == "Coincident" && c.a == 2 && c.points[0] == 1)
+        );
+        assert!(
+            h.sketch
+                .constraints
+                .iter()
+                .any(|c| c.kind == "Tangent" && c.a == 2 && c.b == 1)
+        );
+        for p in [[10., 20.], [-30., 20.], [-30., -10.]] {
+            let p = h.screen(p);
+            h.click(p.x, p.y);
+        }
+        h.key(egui::Key::Escape);
+        assert!(
+            h.sketch
+                .constraints
+                .iter()
+                .any(|c| c.kind == "Tangent" && c.a == 3 && c.b == 2)
+        );
+        let numbers = Numbers::new(&BTreeMap::new()).unwrap();
+        let resolved =
+            crate::sketch::resolve(&h.sketch, Plane::named("Top", 0.), &numbers).unwrap();
+        let arc = resolved.entities[1].arc().unwrap();
+        assert!((arc.radius - 10.).abs() < 1e-4);
+        let registry = crate::plugins::Registry::builtin().unwrap();
+        let mut doc = crate::model::Document::default();
+        let mut sketch = registry.create("sketch", &mut doc).unwrap();
+        sketch.set_sketch(&h.sketch);
+        doc.features.push(sketch);
+        let mut extrude = registry.create("extrude", &mut doc).unwrap();
+        extrude.params["sketch"] = serde_json::json!("f1");
+        extrude.params["depth"] = serde_json::json!("5");
+        extrude.params["regions"] =
+            serde_json::json!([crate::sketch::regions(&resolved).unwrap()[0].key]);
+        doc.features.push(extrude);
+        let mut runtime = crate::engine::Runtime::new(registry);
+        let output = runtime.evaluate(&doc).unwrap();
+        assert!(output.scene.error.is_none(), "{:?}", output.scene.error);
+        assert!(
+            (output.scene.meshes[0].volume - (1100. + 25. * std::f64::consts::PI) * 5.).abs()
+                < 0.02
+        );
+        let support = output.scene.meshes[0]
+            .faces
+            .iter()
+            .find(|f| f.plane.as_ref().is_some_and(|p| p.normal[1] < -0.99))
+            .unwrap()
+            .key
+            .clone();
+        let rim = output.scene.meshes[0]
+            .edges
+            .iter()
+            .find(|e| e.key.contains("a2["))
+            .unwrap()
+            .key
+            .clone();
+        let mut attached = runtime.registry.create("sketch", &mut doc).unwrap();
+        attached.params["support"] = serde_json::json!(support);
+        let mut attached_profile = Sketch::default();
+        attached_profile.add_circle([1., 1.], 1.);
+        attached.set_sketch(&attached_profile);
+        doc.features.push(attached);
+        let path = std::path::PathBuf::from("target/test-output")
+            .join(format!("tangent-arc-{}.cadpart", std::process::id()));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        doc.save(&path).unwrap();
+        let reopened = crate::model::Document::load(&path).unwrap();
+        let scene = runtime.evaluate(&reopened).unwrap().scene;
+        assert!(scene.error.is_none());
+        let complete = h.sketch.clone();
+        h.sketch = before;
+        h.editor.cancel_gesture();
+        h.frame(vec![]);
+        assert_eq!(h.sketch.entities.len(), 1);
+        h.sketch = complete;
+        h.frame(vec![]);
+        assert_eq!(h.sketch.entities[1].kind, "arc");
+        h.editor.selected = vec![Selection::edge(2, 0)];
+        h.key(egui::Key::D);
+        let label = h.screen([25., -20.]);
+        h.click(label.x, label.y);
+        assert_eq!(
+            h.editor.dimension.as_ref().unwrap().constraint.kind,
+            "Radius"
+        );
+        h.frame(vec![egui::Event::Text("15".into())]);
+        h.key(egui::Key::Enter);
+        assert!(h.editor.dimension.is_none());
+        let changed = crate::sketch::resolve(&h.sketch, Plane::named("Top", 0.), &numbers).unwrap();
+        let arc = changed.entities[1].arc().unwrap();
+        assert!((arc.radius - 15.).abs() < 1e-5);
+        doc.features[0].set_sketch(&h.sketch);
+        doc.save(&path).unwrap();
+        let changed = runtime
+            .evaluate(&crate::model::Document::load(&path).unwrap())
+            .unwrap()
+            .scene;
+        assert!(changed.error.is_none(), "{:?}", changed.error);
+        for radius in [6., 12.5, 20., 15.] {
+            h.sketch
+                .constraints
+                .iter_mut()
+                .find(|c| c.kind == "Radius")
+                .unwrap()
+                .value = radius.to_string();
+            let solved =
+                crate::sketch::resolve(&h.sketch, Plane::named("Top", 0.), &numbers).unwrap();
+            assert!((solved.entities[1].arc().unwrap().radius - radius).abs() < 1e-5);
+            seed_from_resolved(&mut h.sketch, Some(&solved));
+            doc.features[0].set_sketch(&h.sketch);
+            doc.save(&path).unwrap();
+            let scene = runtime
+                .evaluate(&crate::model::Document::load(&path).unwrap())
+                .unwrap()
+                .scene;
+            assert!(scene.error.is_none(), "radius {radius}: {:?}", scene.error);
+            assert!(
+                scene.meshes[0]
+                    .edges
+                    .iter()
+                    .any(|e| crate::model::reference_matches(&e.key, &rim))
+            );
+            let face = scene.meshes[0]
+                .faces
+                .iter()
+                .find(|f| crate::model::reference_matches(&f.key, &support))
+                .unwrap()
+                .plane
+                .as_ref()
+                .unwrap();
+            let attached = &scene.sketches["f3"].plane;
+            assert!(face.normal[1] < -0.99);
+            for (actual, expected) in attached
+                .origin
+                .iter()
+                .chain(&attached.u)
+                .chain(&attached.v)
+                .chain(&attached.normal)
+                .zip(
+                    face.origin
+                        .iter()
+                        .chain(&face.u)
+                        .chain(&face.v)
+                        .chain(&face.normal),
+                )
+            {
+                assert!(
+                    (actual - expected).abs() < 1e-8,
+                    "radius {radius}: {actual} != {expected}"
+                );
+            }
+        }
+    }
+    #[test]
+    fn tangent_arc_auto_transition_and_cancel_do_not_create_geometry() {
+        let mut h = Harness::new();
+        h.key(egui::Key::L);
+        for p in [[-20., 0.], [20., 0.]] {
+            let p = h.screen(p);
+            h.click(p.x, p.y);
+        }
+        let away = h.screen([30., 10.]);
+        h.frame(vec![egui::Event::PointerMoved(away)]);
+        let endpoint = h.screen([20., 0.]);
+        h.frame(vec![egui::Event::PointerMoved(endpoint)]);
+        assert_eq!(h.editor.tool, Tool::TangentArc);
+        let before = h.sketch.clone();
+        h.key(egui::Key::Escape);
+        assert_eq!(h.sketch, before);
+        assert_eq!(h.editor.tool, Tool::Select);
+        h.editor.set_tool(Tool::TangentArc);
+        let start = h.screen([-20., 0.]);
+        h.click(start.x, start.y);
+        let straight = h.screen([-40., 0.]);
+        h.click(straight.x, straight.y);
+        assert_eq!(h.sketch, before);
+        assert!(h.editor.hint.contains("tangent line"));
+        h.key(egui::Key::Escape);
+        assert_eq!(h.sketch, before);
+    }
+    #[test]
+    fn tangent_arc_joins_existing_arc_and_circle_with_persistent_relations() {
+        for circle in [false, true] {
+            let mut h = Harness::new();
+            if circle {
+                h.sketch.add_circle([0., 0.], 10.);
+            } else {
+                h.sketch.add_arc([0., 0.], [10., 0.], [0., 10.], false);
+            }
+            h.sketch.constraints.push(SketchConstraint {
+                kind: "Fix".into(),
+                a: 1,
+                ..Default::default()
+            });
+            h.frame(vec![]);
+            h.editor.set_tool(Tool::TangentArc);
+            let p = h.screen([10., 0.]);
+            h.click(p.x, p.y);
+            let p = h.screen(if circle { [20., 10.] } else { [20., -10.] });
+            h.click(p.x, p.y);
+            assert_eq!(h.sketch.entities.len(), 2, "{}", h.editor.hint);
+            h.editor.selected=vec![Selection::edge(2,0),Selection::edge(1,0)];
+            let relationship=h.editor.relationship("Tangent",&h.sketch,&h.editor.selected).unwrap();
+            assert_eq!(relationship.points[0],1);
+            assert!(
+                h.sketch
+                    .constraints
+                    .iter()
+                    .any(|c| c.kind == "Tangent" && c.a == 2 && c.b == 1)
+            );
+            assert!(h.sketch.constraints.iter().any(|c| c.kind
+                == if circle {
+                    "PointOnCircle"
+                } else {
+                    "Coincident"
+                }));
+            h.key(egui::Key::Escape);
+            h.sketch.constraints.push(SketchConstraint {
+                kind: "Radius".into(),
+                a: 2,
+                value: "15".into(),
+                ..Default::default()
+            });
+            let solved = crate::sketch::resolve(
+                &h.sketch,
+                Plane::named("Top", 0.),
+                &Numbers::new(&BTreeMap::new()).unwrap(),
+            )
+            .unwrap();
+            let a = solved.entities[1].arc().unwrap();
+            assert!((a.radius - 15.).abs() < 1e-5);
+            let p = solved.entities[1].control_points()[1];
+            let r = [p[0] - a.center[0], p[1] - a.center[1]];
+            assert!(
+                (p[0] * r[1] - p[1] * r[0]).abs() < 1e-5,
+                "Tangent radii must stay collinear"
+            );
+        }
+    }
+    #[test]
+    fn tangent_arc_click_drag_has_one_checkpoint_and_supports_construction() {
+        let mut h = Harness::new();
+        h.sketch.add_line([-20., 0.], [0., 0.]);
+        h.frame(vec![]);
+        h.editor.set_tool(Tool::TangentArc);
+        h.key(egui::Key::Q);
+        let start = h.screen([0., 0.]);
+        let end = h.screen([10., 10.]);
+        let checkpoints = h.checkpoints;
+        h.drag_box(start, end, egui::Modifiers::NONE);
+        assert_eq!(h.sketch.entities.len(), 2, "{}", h.editor.hint);
+        assert!(h.sketch.entities[1].construction);
+        assert_eq!(h.checkpoints, checkpoints + 1);
+        assert_eq!(h.editor.tool, Tool::Line);
+    }
+    #[test]
+    fn tangent_arc_profile_has_exact_step_geometry() {
+        let mut sketch = Sketch::default();
+        sketch.add_line([-30., -10.], [0., -10.]);
+        let numbers = Numbers::new(&BTreeMap::new()).unwrap();
+        let resolved = crate::sketch::resolve(&sketch, Plane::named("Top", 0.), &numbers).unwrap();
+        let source = tangent_start(
+            &resolved,
+            &Snap {
+                p: [0., -10.],
+                target: Some(Selection::point(1, 1)),
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap();
+        let values = tangent_arc_values(&source, [10., 0.]).unwrap();
+        sketch.add_arc(
+            [values[0], values[1]],
+            [values[2], values[3]],
+            [values[4], values[5]],
+            values[6] < 0.,
+        );
+        for (a, b) in [
+            ([10., 0.], [10., 20.]),
+            ([10., 20.], [-30., 20.]),
+            ([-30., 20.], [-30., -10.]),
+        ] {
+            sketch.add_line(a, b);
+        }
+        let resolved = crate::sketch::resolve(&sketch, Plane::named("Top", 0.), &numbers).unwrap();
+        let registry = crate::plugins::Registry::builtin().unwrap();
+        let mut doc = crate::model::Document::default();
+        let mut feature = registry.create("sketch", &mut doc).unwrap();
+        feature.set_sketch(&sketch);
+        doc.features.push(feature);
+        let mut feature = registry.create("extrude", &mut doc).unwrap();
+        feature.params["sketch"] = serde_json::json!("f1");
+        feature.params["depth"] = serde_json::json!("5");
+        feature.params["regions"] =
+            serde_json::json!([crate::sketch::regions(&resolved).unwrap()[0].key]);
+        doc.features.push(feature);
+        let mut runtime = crate::engine::Runtime::new(registry);
+        let output = runtime.evaluate(&doc).unwrap();
+        assert!(output.scene.error.is_none(), "{:?}", output.scene.error);
+        let volume = (1100. + 25. * std::f64::consts::PI) * 5.;
+        assert!((output.scene.meshes[0].volume - volume).abs() < 1e-6);
+        #[cfg(feature = "step")]
+        {
+            let folder = std::path::Path::new("target/test-output/geometry-controls");
+            std::fs::create_dir_all(folder).unwrap();
+            doc.save(&folder.join("tangent-arc-profile.cadpart"))
+                .unwrap();
+            output
+                .geometry
+                .export("step", &folder.join("tangent-arc-profile.step"))
+                .unwrap();
+            std::fs::write(folder.join("tangent-arc-profile.json"),serde_json::to_vec_pretty(&serde_json::json!({
+                "case":"tangent-arc-profile","step_exported":true,"expected_solids":[{"volume_mm3":volume,"bounds_mm":[[-30.,-10.,0.],[10.,20.,5.]]}]
+            })).unwrap()).unwrap();
+        }
+    }
+    #[test]
+    fn tangent_arc_math_keeps_outward_direction_for_major_and_clockwise_arcs() {
+        let start = TangentStart {
+            snap: Snap {
+                p: [0., 0.],
+                ..Default::default()
+            },
+            source: Selection::point(1, 1),
+            direction: [1., 0.],
+            edge: 0,
+            circle: false,
+        };
+        for (end, sign, major) in [
+            ([10., 10.], 1., false),
+            ([10., -10.], -1., false),
+            ([-10., 10.], 1., true),
+            ([-10., -10.], -1., true),
+        ] {
+            let v = tangent_arc_values(&start, end).unwrap();
+            let a = crate::sketch::arc_geometry(&v).unwrap();
+            assert_eq!(a.sweep.signum(), sign);
+            assert_eq!(a.sweep.abs() > std::f64::consts::PI, major);
+            let tangent = [-(v[3] - v[1]) * sign, (v[2] - v[0]) * sign];
+            assert!(tangent[0] > 0.);
+            assert!(tangent[1].abs() < 1e-9);
+        }
+        assert!(tangent_arc_values(&start, [10., 0.]).is_err());
+        assert!(tangent_arc_values(&start, [0., 0.]).is_err());
     }
     #[test]
     fn dimension_expressions_use_document_format_and_preserve_invalid_drafts() {

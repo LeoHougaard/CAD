@@ -11,7 +11,15 @@ Intersect retain the first input part identity; Subtract retains each target.
 sketch regions or a planar face and a geometrical axis. Extrude and Revolve share
 the local profile resolver and operation scopes:
 
-- `sketch` identifies an earlier sketch. `regions:null` means the whole sketch;
+- `profiles` is the single Faces and sketch regions input. It accepts an ordered
+  list mixing `{"kind":"region","sketch":"f1","region":"stable key"}` and
+  `{"kind":"face","part":"f2:0","face":"f2:end"}` references. Regions from
+  different sketches and planar faces remain selected together. Adjacent cells
+  from the same sketch merge before solid creation; selected holes remain exact.
+  `{"kind":"sketch","sketch":"f1"}` retains whole-sketch selection semantics.
+  Empty lists reject the operation. The inspector shows removable selections
+  and Clear; viewport clicks add or remove entries without changing input type.
+- Legacy `sketch` identifies an earlier sketch. `regions:null` means the whole sketch;
   an explicit array selects those region identities. An empty array is an error.
 - `profile_face:{"part":"f2:0","face":"f2:end"}` selects one persistent planar
   face, including its exact inner hole wires, and takes precedence over `sketch`.
@@ -23,7 +31,7 @@ the local profile resolver and operation scopes:
   `{"kind":"edge","part":"f2:0","edge":"persistent edge identity"}`.
   Sketch lines supply their direction; circles and arcs supply their center and
   plane normal. Straight and circular edges supply their exact axes. The axis
-  must lie in the profile plane. The older `sketch_line` spelling still works.
+  must lie in every selected profile plane. The older `sketch_line` spelling still works.
 
 Each connected Revolve region must stay on one side of the axis; touching it at
 the boundary is allowed. This is checked using exact straight-edge endpoints and
@@ -42,10 +50,17 @@ cannot supply matching plane or curve names to an earlier part. Arc profiles als
 retain the planar closing-edge provenance, and old explicit source-edge aliases
 still resolve uniquely within the same contributor scope.
 
-Old pinned Extrude 1.0/1.1 and Revolve 1.0 documents retain their original whole
+Old pinned Extrude 1.0/1.1/1.2 and Revolve 1.0/1.1 documents retain their original whole
 sketch and single-target behavior when the new inputs are absent. Compatibility
 recognizes only the exact previous bundled hashes and exact installed builtin
-package. A changed external package requires explicit adoption.
+package. A changed external package requires explicit adoption. Untouched legacy
+profile parameters and pins remain unchanged. Explicit unified-profile edits
+adopt Extrude 1.3 or Revolve 1.2 on commit, preventing old applications from silently
+ignoring the new input. Adoption records the original legacy source and preserves
+its cap references while its connected boundary selection is unchanged. New
+unified profiles use stable source-and-boundary identities for both parts and
+references. Reordering or removing other inputs cannot silently rebind a child to
+a different body; removing its own boundary produces a missing-reference error.
 
 The general blend trimmer and polygon chamfer fail on some planar caps containing
 circular holes. The local exact setback path handles convex straight edges with
@@ -63,10 +78,12 @@ stale scopes, face profiles, all axis families, upstream edits, reopen, coplanar
 part naming, rotated plates, multiple holes, and 1/2 mm blends. It verifies valid
 closed topology and analytical volumes. Fresh STEP exports also undergo
 independent Open CASCADE volume, placement and solid-count checks. The exports
-include a trimmed semicircle extrusion and a bounded ring-torus arc revolution:
+include a trimmed semicircle extrusion, a bounded ring-torus arc revolution,
+and one Extrude mixing two sketch regions with an existing planar face:
 
 ```text
-cargo test --no-default-features --features step --release --test geometry_controls --test sketch_trim --test provenance_revolve
+cargo test --no-default-features --features step --release --test geometry_controls --test sketch_trim --test provenance_revolve --test unified_profiles
+cargo test --release --features step --lib tangent_arc_profile_has_exact_step_geometry
 python tools/verify_geometry_controls_step.py
 ```
 

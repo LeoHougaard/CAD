@@ -3,6 +3,10 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
 pub type Result<T> = std::result::Result<T, String>;
+mod profiles;
+pub use profiles::ProfileReference;
+mod references;
+pub use references::{canonical_reference, reference_matches};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]

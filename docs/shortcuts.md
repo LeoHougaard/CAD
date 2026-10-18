@@ -9,6 +9,7 @@ The defaults follow [Onshape's keyboard map](https://cad.onshape.com/help/Conten
 | Center rectangle | R |
 | Circle | C |
 | 3 point arc | A |
+| Line / tangent arc transition | Shift+A |
 | Trim | M |
 | Dimension | D |
 | Coincident | I |
@@ -20,6 +21,8 @@ The defaults follow [Onshape's keyboard map](https://cad.onshape.com/help/Conten
 | Fix | Shift+J |
 | Construction | Q |
 | Suppress automatic inferences while placing | Hold Shift |
+
+After placing a line, Shift+A starts a tangent arc from its endpoint. Moving away and back near that endpoint also switches to tangent arc. Placing the arc returns to Line; Shift+A can continue with another tangent arc. The standalone Tangent arc tool accepts a line or arc endpoint, or a circle rim.
 
 Press a tool's key again to exit it. Escape cancels the current gesture or tool. Typing in a dimension or other text field does not activate modeling tools. Relationship tools work with preselected geometry or with subsequent clicks. D accepts one curve or two selected entities before placing the dimension. R creates construction diagonals so its center remains constrained when dimensions change.
 

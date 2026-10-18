@@ -1,13 +1,63 @@
 //! Explicit solid scopes and persistent Revolve references.
 use super::*;
+use crate::model::{ProfileReference, canonical_reference, reference_matches};
 struct Profile {
     plane: Plane,
-    source: ResolvedSketch,
+    source: Arc<ResolvedSketch>,
     faces: Vec<FaceId>,
     sides: Vec<(String, [f64; 2], [f64; 2])>,
     edges: Vec<sketch::RegionEdge>,
 }
 impl Geometry {
+    fn resolve_profiles(&mut self, f: &Feature, p: &Value) -> Result<Vec<(String, Profile)>> {
+        if p.get("profiles").is_none_or(Value::is_null) {
+            return Ok(vec![(f.id.clone(), self.resolve_profile(p)?)]);
+        }
+        let references = ProfileReference::from_params(p)?;
+        if references.is_empty() { return Err("Choose at least one face or sketch region".into()); }
+        let mut groups: Vec<(String, Value)> = vec![];
+        for reference in references {
+            let source = reference.source_key();
+            let params = match reference {
+                ProfileReference::Face { part, face } => serde_json::json!({"profile_face":{"part":part,"face":face}}),
+                ProfileReference::Sketch { sketch } => serde_json::json!({"sketch":sketch,"regions":null}),
+                ProfileReference::Region { sketch, region } => serde_json::json!({"sketch":sketch,"regions":[region]}),
+            };
+            if let Some((_, existing)) = groups.iter_mut().find(|(key, _)| key == &source) {
+                let (Some(a), Some(b)) = (existing["regions"].as_array_mut(), params["regions"].as_array()) else {
+                    return Err("Choose either a whole sketch or its individual regions".into());
+                };
+                a.extend(b.iter().cloned());
+            } else { groups.push((source, params)); }
+        }
+        let mut profiles = vec![];
+        for (source, params) in groups {
+            let mut legacy_unchanged = reference_matches(&source, text(p, "legacy_profile_source", ""));
+            if legacy_unchanged && let Some(sketch) = params["sketch"].as_str() {
+                let sk = self.sketches.get(sketch).ok_or("Choose an earlier, unsuppressed sketch")?;
+                let keys = |v: &Value| serde_json::from_value::<Vec<String>>(v.clone()).unwrap_or_default();
+                let normalize = |keys: Vec<String>| keys.into_iter().map(|key| canonical_reference(&key)).collect::<BTreeSet<_>>();
+                legacy_unchanged = normalize(sketch::region_profile_keys(sk, &keys(&params["regions"]))?)
+                    == normalize(sketch::region_profile_keys(sk, &keys(&p["regions"]))?);
+            }
+            if legacy_unchanged {
+                profiles.push((f.id.clone(), self.resolve_profile(p)?));
+            } else if let Some(sketch) = params["sketch"].as_str() {
+                let sk = Arc::new(self.sketches.get(sketch).ok_or("Choose an earlier, unsuppressed sketch")?.clone());
+                let keys: Vec<String> = serde_json::from_value(params["regions"].clone()).unwrap_or_default();
+                let region = sketch::profile_for_regions(&mut self.topo, &sk, &keys)?;
+                for ((face, key), edges) in region.faces.into_iter().zip(region.face_keys).zip(region.face_edges) {
+                    let scope = format!("{}:profile:{}", f.id, crate::plugins::source_hash(&canonical_reference(&format!("{source}:{key}"))));
+                    let sides = edges.iter().filter(|e| e.circle.is_none()).map(|e| (e.key.clone(), e.start, e.end)).collect();
+                    profiles.push((scope, Profile { plane:sk.plane.clone(), source:sk.clone(), faces:vec![face], sides, edges }));
+                }
+            } else {
+                let scope = format!("{}:profile:{}", f.id, crate::plugins::source_hash(&canonical_reference(&source)));
+                profiles.push((scope, self.resolve_profile(&params)?));
+            }
+        }
+        Ok(profiles)
+    }
     fn sketch_profile(&mut self, sk: &ResolvedSketch, p: &Value) -> Result<Profile> {
         let selected = match p.get("regions") {
             None | Some(Value::Null) => None,
@@ -33,7 +83,7 @@ impl Geometry {
         {
             return Ok(Profile {
                 plane: sk.plane.clone(),
-                source: sk.clone(),
+                source: Arc::new(sk.clone()),
                 faces,
                 sides: vec![],
                 edges: sketch::region_edges(sk).unwrap_or_default(),
@@ -43,10 +93,10 @@ impl Geometry {
             sketch::profile_for_regions(&mut self.topo, sk, selected.as_deref().unwrap_or(&[]))?;
         Ok(Profile {
             plane: sk.plane.clone(),
-            source: sk.clone(),
+            source: Arc::new(sk.clone()),
             faces: profile.faces,
-            sides: profile.sides,
-            edges: profile.edges,
+            sides: profile.face_edges.iter().flatten().filter(|e| e.circle.is_none()).map(|e| (e.key.clone(), e.start, e.end)).collect(),
+            edges: profile.face_edges.into_iter().flatten().collect(),
         })
     }
     fn resolve_profile(&mut self, p: &Value) -> Result<Profile> {
@@ -69,7 +119,7 @@ impl Geometry {
         let matches: Vec<_> = self
             .face_keys(self.parts[i].solid)?
             .into_iter()
-            .filter(|(_, k)| k == key)
+            .filter(|(_, k)| reference_matches(k, key))
             .collect();
         if matches.len() != 1 {
             return Err("Profile face is missing or ambiguous; reselect it".into());
@@ -80,10 +130,10 @@ impl Geometry {
         };
         let normal = *normal;
         let d = *d;
-        let plane = if let Some((_, plane)) = self
+        let plane = if let Some((_, plane, _)) = self
             .anchors
             .iter()
-            .find(|(k, plane)| k == key && plane_matches(plane, normal, d))
+            .find(|(k, plane, _)| reference_matches(k, key) && plane_matches(plane, normal, d))
         {
             plane.clone()
         } else {
@@ -108,7 +158,7 @@ impl Geometry {
         let faces: Vec<_> = self
             .face_keys_scoped(copy, Some(&self.parts[i].key))?
             .into_iter()
-            .filter(|(_, k)| k == key)
+            .filter(|(_, k)| reference_matches(k, key))
             .map(|(id, _)| id)
             .collect();
         let edge_keys = self.edge_keys_scoped(copy, Some(&self.parts[i].key))?;
@@ -182,11 +232,11 @@ impl Geometry {
             });
         }
         Ok(Profile {
-            source: ResolvedSketch {
+            source: Arc::new(ResolvedSketch {
                 entities: vec![],
                 plane: plane.clone(),
                 dof: 0,
-            },
+            }),
             plane,
             faces,
             sides,
@@ -279,21 +329,26 @@ impl Geometry {
         Ok((origin, direction))
     }
     pub(super) fn execute_revolve(&mut self, f: &Feature, ordinal: usize, p: &Value) -> Result<()> {
-        let profile = self.resolve_profile(p)?;
-        let (origin, axis) = self.resolve_in_plane_axis(p, &profile.plane)?;
+        let profiles = self.resolve_profiles(f, p)?;
+        let (origin, axis) = self.resolve_in_plane_axis(p, &profiles[0].1.plane)?;
         let angle = num(p, "angle", 360.);
         if angle <= 0. || angle > 360. {
             return Err("Revolve angle must be between 0 and 360 degrees".into());
         }
         let mut solids = vec![];
-        for &face in &profile.faces {
-            self.validate_revolve_profile(face, origin, axis, &profile.plane)?;
-            solids.push(
-                ops::revolve::revolve(&mut self.topo, face, origin, axis, angle.to_radians())
-                    .map_err(err)?,
-            );
+        for (source, profile) in profiles {
+            if axis.dot(v3(profile.plane.normal)).abs() > 1e-7
+                || (origin - p3(profile.plane.origin)).dot(v3(profile.plane.normal)).abs() > 1e-6 {
+                return Err("Revolve axis must lie in every selected profile plane".into());
+            }
+            let mut created = vec![];
+            for &face in &profile.faces {
+                self.validate_revolve_profile(face, origin, axis, &profile.plane)?;
+                created.push(ops::revolve::revolve(&mut self.topo, face, origin, axis, angle.to_radians()).map_err(err)?);
+            }
+            self.register_revolve_references(&source, &profile, &created, origin, axis, angle)?;
+            solids.extend(created.into_iter().map(|solid| (solid, source.clone())));
         }
-        self.register_revolve_references(f, &profile, &solids, origin, axis, angle)?;
         self.apply_profile_solids(f, ordinal, p, solids)
     }
     fn validate_revolve_profile(
@@ -354,7 +409,7 @@ impl Geometry {
     }
     fn register_revolve_references(
         &mut self,
-        f: &Feature,
+        source: &str,
         profile: &Profile,
         solids: &[SolidId],
         origin: brepkit_math::vec::Point3,
@@ -379,7 +434,7 @@ impl Geometry {
                     sides
                         .entry(key.clone())
                         .or_default()
-                        .insert(format!("{}:region-side:{}", f.id, edge.key));
+                        .insert(format!("{}:region-side:{}", source, edge.key));
                 }
             }
             if edge.circle.is_none() && (b - a).dot(axis).abs() < 1e-7 {
@@ -405,7 +460,7 @@ impl Geometry {
                             continue;
                         };
                         self.anchors.push((
-                            format!("{}:region-side:{}", f.id, edge.key),
+                            format!("{}:region-side:{}", source, edge.key),
                             Plane {
                                 origin: [a.x(), a.y(), a.z()],
                                 u: [u.x(), u.y(), u.z()],
@@ -415,6 +470,7 @@ impl Geometry {
                                 },
                                 normal: [normal.x(), normal.y(), normal.z()],
                             },
+                            source.into(),
                         ));
                     }
                 }
@@ -446,7 +502,8 @@ impl Geometry {
                 let b = self.topo.vertex(edge.end()).map_err(err)?.point();
                 let (lo, hi) = edge.curve().domain_with_endpoints(a, b);
                 self.edge_anchors.push(EdgeAnchor {
-                    key: format!("{}:revolve-vertex:{key}", f.id),
+                    source: source.into(),
+                    key: format!("{}:revolve-vertex:{key}", source),
                     side: sides
                         .get(key)
                         .filter(|v| v.len() == 1)
@@ -466,7 +523,13 @@ impl Geometry {
         Ok(())
     }
     pub(super) fn execute_extrude(&mut self, f: &Feature, ordinal: usize, p: &Value) -> Result<()> {
-        let profile = self.resolve_profile(p)?;
+        let mut solids = vec![];
+        for (source, profile) in self.resolve_profiles(f, p)? {
+            solids.extend(self.extrude_profile(&source, profile, f, p)?.into_iter().map(|solid| (solid, source.clone())));
+        }
+        self.apply_profile_solids(f, ordinal, p, solids)
+    }
+    fn extrude_profile(&mut self, source: &str, profile: Profile, f: &Feature, p: &Value) -> Result<Vec<SolidId>> {
         let sk = &profile.source;
         let mut depth = num(p, "depth", 10.);
         if let Some(value) = f.params.get("context_up_to").filter(|v| !v.is_null()) {
@@ -495,7 +558,7 @@ impl Geometry {
         } else {
             0.
         };
-        self.register_profile_edges(f, sk, &profile.edges, start, start + direction * depth);
+        self.register_profile_edges(source, sk, &profile.edges, start, start + direction * depth);
         let mut solids = vec![];
         for face in profile.faces {
             if start != 0. {
@@ -517,8 +580,7 @@ impl Geometry {
                 .map_err(err)?,
             );
         }
-        self.apply_profile_solids(f, ordinal, p, solids)?;
-        self.register_extrude_anchors(f, sk, start, start + direction * depth);
+        self.register_extrude_anchors(source, sk, start, start + direction * depth, source == f.id);
         for (key, a, b) in profile.sides {
             let origin = sk.plane.at(a);
             let mut u = sub(sk.plane.at(b), origin);
@@ -528,18 +590,42 @@ impl Geometry {
             }
             u = u.map(|x| x / length);
             self.anchors.push((
-                format!("{}:region-side:{key}", f.id),
+                format!("{source}:region-side:{key}"),
                 Plane {
                     origin,
                     u,
                     v: sk.plane.normal,
                     normal: cross(u, sk.plane.normal),
                 },
+                source.into(),
             ));
+        }
+        Ok(solids)
+    }
+    fn apply_profile_solids(
+        &mut self, f: &Feature, ordinal: usize, p: &Value, solids: Vec<(SolidId, String)>,
+    ) -> Result<()> {
+        self.merge_profile_solids(f, ordinal, p, solids.iter().map(|(solid, _)| *solid).collect())?;
+        let outputs = &self.outputs[&f.id];
+        for part in self.parts.iter_mut().filter(|part| outputs.contains(&part.key)) {
+            if text(p, "mode", "New") == "New" {
+                let sources: BTreeSet<_> = solids.iter().filter(|(solid, _)| *solid == part.solid).map(|(_, scope)| scope.clone()).collect();
+                if !sources.is_empty() {
+                    if let Some(source) = sources.iter().next().filter(|source| *source != &f.id) {
+                        part.key = format!("{source}:0");
+                    }
+                    part.reference_sources = sources;
+                }
+            } else {
+                part.reference_sources.extend(solids.iter().map(|(_, scope)| scope.clone()));
+            }
+        }
+        if text(p, "mode", "New") == "New" {
+            self.outputs.insert(f.id.clone(), self.parts.iter().filter(|part| part.feature == f.id).map(|part| part.key.clone()).collect());
         }
         Ok(())
     }
-    fn apply_profile_solids(
+    fn merge_profile_solids(
         &mut self,
         f: &Feature,
         ordinal: usize,
@@ -613,6 +699,7 @@ impl Geometry {
                         .collect::<Result<Vec<_>>>()?,
                     f,
                 );
+                self.parts[index].reference_sources = self.contributing_references(&targets.iter().map(|key| self.target(key)).collect::<Result<Vec<_>>>()?);
                 self.parts
                     .retain(|part| part.key == first || !targets.contains(&part.key));
                 self.record_output(f, vec![first]);
@@ -670,6 +757,9 @@ impl Geometry {
             )
             .collect()
     }
+    fn contributing_references(&self, parts: &[usize]) -> BTreeSet<String> {
+        parts.iter().flat_map(|&i| self.parts[i].reference_sources.iter().cloned()).collect()
+    }
     pub(super) fn execute_boolean(&mut self, f: &Feature, p: &Value) -> Result<()> {
         let mode = text(p, "mode", "Union");
         let tools = self.part_scope(p, "tools")?;
@@ -684,6 +774,7 @@ impl Geometry {
             }
             let mut outputs = vec![];
             let tools_sources = self.contributing_sources(&tools, f);
+            let tools_references = self.contributing_references(&tools);
             for index in targets {
                 let mut solid =
                     ops::copy::copy_solid(&mut self.topo, self.parts[index].solid).map_err(err)?;
@@ -703,6 +794,7 @@ impl Geometry {
                 self.parts[index]
                     .source_features
                     .extend(tools_sources.iter().cloned());
+                self.parts[index].reference_sources.extend(tools_references.iter().cloned());
                 outputs.push(self.parts[index].key.clone());
             }
             if !keep {
@@ -724,6 +816,7 @@ impl Geometry {
             }
             let first = tools[0];
             let source_features = self.contributing_sources(&tools, f);
+            let reference_sources = self.contributing_references(&tools);
             let mut solid =
                 ops::copy::copy_solid(&mut self.topo, self.parts[first].solid).map_err(err)?;
             for &tool in &tools[1..] {
@@ -739,6 +832,7 @@ impl Geometry {
                     solid,
                     feature: f.id.clone(),
                     source_features,
+                    reference_sources,
                 });
                 key
             } else {
@@ -746,6 +840,7 @@ impl Geometry {
                 self.parts[first].solid = solid;
                 self.parts[first].feature = f.id.clone();
                 self.parts[first].source_features = source_features;
+                self.parts[first].reference_sources = reference_sources;
                 let remove: BTreeSet<_> = tools[1..]
                     .iter()
                     .map(|&i| self.parts[i].key.clone())

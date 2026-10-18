@@ -16,7 +16,7 @@ impl Geometry {
                 let i = self.target(part)?;
                 let faces = self.face_keys_scoped(self.parts[i].solid, Some(&self.parts[i].key))?;
                 let mut resolved: Option<Plane> = None;
-                for (id, _) in faces.iter().filter(|(_, k)| k == key) {
+                for (id, _) in faces.iter().filter(|(_, k)| reference_matches(k, key)) {
                     let face = self.topo.face(*id).map_err(err)?;
                     let FaceSurface::Plane { normal, d } = face.surface() else {
                         return Err("Choose a planar face for the construction plane".into());
@@ -32,8 +32,8 @@ impl Geometry {
                     let plane = self
                         .anchors
                         .iter()
-                        .find_map(|(k, p)| {
-                            (k == key
+                        .find_map(|(k, p, _)| {
+                            (reference_matches(k, key)
                                 && dot(p.normal, n) > 1. - 1e-7
                                 && plane_matches(p, *normal, *d))
                             .then(|| p.clone())

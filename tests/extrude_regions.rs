@@ -262,7 +262,7 @@ fn divided_region_side_support_follows_parameter_edits() {
         .geometry
         .anchors
         .iter()
-        .find(|(key, plane)| {
+        .find(|(key, plane, _)| {
             key.contains(":region-side:")
                 && (plane.origin[0] - 5.).abs() < 1e-7
                 && plane.normal[0] > 0.9

@@ -502,31 +502,32 @@ pub fn pick_edges(
 }
 
 fn segment_crosses_rect(a: egui::Pos2, b: egui::Pos2, rect: egui::Rect) -> bool {
-    if rect.contains(a) || rect.contains(b) {
-        return true;
-    }
-    let delta = b - a;
-    let mut low = 0.0f32;
-    let mut high = 1.0f32;
-    for (start, d, min, max) in [
-        (a.x, delta.x, rect.left(), rect.right()),
-        (a.y, delta.y, rect.top(), rect.bottom()),
+    clip_segment(a, b, rect).is_some()
+}
+pub(crate) fn clip_segment(a: egui::Pos2, b: egui::Pos2, rect: egui::Rect) -> Option<(f64, f64)> {
+    let mut low = 0.0_f64;
+    let mut high = 1.0_f64;
+    for (start, end, min, max) in [
+        (a.x, b.x, rect.left(), rect.right()),
+        (a.y, b.y, rect.top(), rect.bottom()),
     ] {
-        if d.abs() < 1e-8 {
-            if start < min || start > max {
-                return false;
+        let start = f64::from(start);
+        let delta = f64::from(end) - start;
+        if delta.abs() < 1e-8 {
+            if start < f64::from(min) || start > f64::from(max) {
+                return None;
             }
         } else {
-            let p = (min - start) / d;
-            let q = (max - start) / d;
+            let p = (f64::from(min) - start) / delta;
+            let q = (f64::from(max) - start) / delta;
             low = low.max(p.min(q));
             high = high.min(p.max(q));
             if low > high {
-                return false;
+                return None;
             }
         }
     }
-    true
+    Some((low, high))
 }
 pub(crate) fn triangle_crosses_rect(points: [egui::Pos2; 3], rect: egui::Rect) -> bool {
     if (0..3).any(|i| segment_crosses_rect(points[i], points[(i + 1) % 3], rect)) {

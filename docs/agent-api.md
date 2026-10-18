@@ -56,7 +56,20 @@ New Part Studio documents use `format: 2` for the shared [numeric expression lan
 
 Fields with kind `bodies` take distinct persistent part IDs, not `@last`.
 Extrude and Revolve use an explicit `targets` scope for Add, Remove and Intersect;
-an empty scope is an error. `profile_face` is null or `{"part":"f2:0","face":"f2:end"}`.
+an empty scope is an error. Their `profiles` field has kind `profiles` and takes one
+ordered list mixing `{"kind":"region","sketch":"f1","region":"stable region key"}`
+and `{"kind":"face","part":"f2:0","face":"f2:end"}`. Whole-sketch references use
+`{"kind":"sketch","sketch":"f1"}`. Select regions from several sketches or combine
+them with planar faces in the same feature. An empty list is an explicit error;
+null/missing retains legacy `sketch`/`regions`/`profile_face` inputs. Those legacy
+inputs remain available for older documents, but cannot be edited while an
+explicit unified list is active. Writing that list adopts the current package
+identity so older apps reject the unsupported package rather than ignore it.
+New unified outputs have part and reference identities derived from their source
+and connected boundary, so list reorder/removal cannot redirect a saved reference
+to another body. `legacy_profile_source` is hidden migration metadata, set when
+adopting an older package; leave it unchanged. Schema entries marked `hidden` are
+compatibility inputs omitted from the GUI.
 Revolve's `axis_ref` is null for its legacy sketch axis, or an origin, sketch entity
 or solid edge reference. Inspect the installed field schema and see
 [geometry controls](geometry-controls.md) for the exact shapes and compatibility.

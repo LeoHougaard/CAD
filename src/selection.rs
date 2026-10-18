@@ -9,6 +9,22 @@ pub enum Target {
     Region { sketch: String, key: String },
 }
 
+impl Target {
+    pub fn matches(&self, other: &Self) -> bool {
+        use crate::model::reference_matches;
+        match (self, other) {
+            (Self::Face { part: a, key: x }, Self::Face { part: b, key: y })
+            | (Self::Edge { part: a, key: x }, Self::Edge { part: b, key: y }) => {
+                a == b && reference_matches(x, y)
+            }
+            (Self::Region { sketch: a, key: x }, Self::Region { sketch: b, key: y }) => {
+                a == b && reference_matches(x, y)
+            }
+            _ => self == other,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Filter {
     #[default]
@@ -46,10 +62,10 @@ impl Selection {
         &self.items
     }
     pub fn contains(&self, item: &Target) -> bool {
-        self.items.contains(item)
+        self.items.iter().any(|x| x.matches(item))
     }
     pub fn toggle(&mut self, item: Target) {
-        if let Some(index) = self.items.iter().position(|x| x == &item) {
+        if let Some(index) = self.items.iter().position(|x| x.matches(&item)) {
             self.items.remove(index);
         } else {
             self.items.push(item);
@@ -61,7 +77,7 @@ impl Selection {
         }
     }
     pub fn remove(&mut self, item: &Target) {
-        self.items.retain(|x| x != item);
+        self.items.retain(|x| !x.matches(item));
     }
     pub fn clear(&mut self) {
         self.items.clear();
@@ -125,5 +141,36 @@ mod tests {
         assert_eq!(s.edges().collect::<Vec<_>>(), vec![("two", "edge")]);
         s.retain(|x| matches!(x, Target::Part(_)));
         assert_eq!(s.part(), Some("one"));
+    }
+    #[test]
+    fn saved_contact_aliases_toggle_without_duplicates_or_cross_part_matches() {
+        let old = "a2[a2:1,l1:1>a2:2,l3:0]";
+        let new = "a2[a2:1,l1:1,xa2&l1#0>a2:2,l3:0]";
+        for kind in 0..3 {
+            let target = |owner: &str, key: &str| match kind {
+                0 => Target::Region {
+                    sketch: owner.into(),
+                    key: key.into(),
+                },
+                1 => Target::Face {
+                    part: owner.into(),
+                    key: key.into(),
+                },
+                _ => Target::Edge {
+                    part: owner.into(),
+                    key: key.into(),
+                },
+            };
+            let mut selection = Selection::default();
+            selection.add(target("one", old));
+            selection.add(target("one", new));
+            assert_eq!(selection.items().len(), 1);
+            assert!(!selection.contains(&target("two", new)));
+            selection.toggle(target("one", new));
+            assert!(selection.items().is_empty());
+            selection.add(target("one", new));
+            selection.remove(&target("one", old));
+            assert!(selection.items().is_empty());
+        }
     }
 }

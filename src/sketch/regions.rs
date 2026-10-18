@@ -442,9 +442,37 @@ fn intersections(a: &Curve, b: &Curve) -> Result<Vec<[f64; 2]>> {
     }
 }
 
+// The endpoint is a known root, so the other root needs no discriminant.
+fn contact_line_circle(line: &Curve, circle: &Curve, p: [f64; 2]) -> Vec<[f64; 2]> {
+    let (Curve::Line { a, b }, Curve::Circle { center, .. }) = (*line, *circle) else {
+        unreachable!()
+    };
+    let d = sub(b, a);
+    let t = -2. * dot(sub(p, center), d) / dot(d, d);
+    let q = [p[0] + t * d[0], p[1] + t * d[1]];
+    let mut points = vec![p];
+    if (-EPS..=1. + EPS).contains(&line.parameter(q)) {
+        points.push(q);
+    }
+    points.sort_by(|&p, &q| line.parameter(p).total_cmp(&line.parameter(q)));
+    points
+}
+
 fn source_intersections(a: &Source, b: &Source) -> Result<Vec<[f64; 2]>> {
     let coincident = matches!((a.curve,b.curve), (Curve::Circle {center:p,radius:r}, Curve::Circle {center:q,radius:s}) if distance(p,q)<EPS && (r-s).abs()<EPS);
-    let points = if coincident {
+    // Factor intersections around a known common endpoint. The ordinary
+    // quadratic loses precision at tangency and can invent two nearby roots.
+    let ends = match (a.curve, a.arc) {
+        (Curve::Line { a, b }, _) => Some([a, b]),
+        (_, Some((lo, hi))) => Some([a.curve.at(lo), a.curve.at(hi)]),
+        _ => None,
+    };
+    let contacts: Vec<_> = ends
+        .into_iter()
+        .flatten()
+        .filter(|&p| b.endpoint(p))
+        .collect();
+    let mut points = if coincident {
         let (Some((lo, hi)), Some((u, v))) = (a.arc, b.arc) else {
             return Err("Duplicate circular sketch boundaries are ambiguous".into());
         };
@@ -460,9 +488,38 @@ fn source_intersections(a: &Source, b: &Source) -> Result<Vec<[f64; 2]>> {
             return Err("Overlapping circular sketch arcs are ambiguous".into());
         }
         vec![a.curve.at(lo), a.curve.at(hi), b.curve.at(u), b.curve.at(v)]
+    } else if let Some(&p) = contacts.first() {
+        match (a.curve, b.curve) {
+            (Curve::Line { .. }, Curve::Circle { .. }) => {
+                contact_line_circle(&a.curve, &b.curve, p)
+            }
+            (Curve::Circle { .. }, Curve::Line { .. }) => {
+                contact_line_circle(&b.curve, &a.curve, p)
+            }
+            (Curve::Circle { center: u, .. }, Curve::Circle { center: v, .. }) => {
+                let d = sub(v, u);
+                let delta = sub(p, u);
+                let projection = dot(delta, d) / dot(d, d);
+                let q = [
+                    2. * (u[0] + projection * d[0]) - p[0],
+                    2. * (u[1] + projection * d[1]) - p[1],
+                ];
+                if cross(d, delta) >= 0. {
+                    vec![p, q]
+                } else {
+                    vec![q, p]
+                }
+            }
+            _ => intersections(&a.curve, &b.curve)?,
+        }
     } else {
         intersections(&a.curve, &b.curve)?
     };
+    for p in contacts {
+        if !points.iter().any(|&q| distance(p, q) < EPS) {
+            points.push(p);
+        }
+    }
     let mut result = Vec::new();
     for p in points {
         let (Some(u), Some(v)) = (a.parameter(p), b.parameter(p)) else {
@@ -894,19 +951,22 @@ struct Cell {
     component: usize,
     depth: usize,
 }
-fn cell_key(graph: &Graph, cell: &Cell) -> String {
-    let mut holes: Vec<_> = cell
-        .holes
-        .iter()
-        .map(|ids| graph.boundary(ids).key())
-        .collect();
+fn boundary_key(boundary: &Boundary, holes: &[Boundary]) -> String {
+    let mut holes: Vec<_> = holes.iter().map(Boundary::key).collect();
     holes.sort();
-    format!(
-        "region:{}|{}",
-        graph.boundary(&cell.outer).key(),
-        holes.join("|")
+    format!("region:{}|{}", boundary.key(), holes.join("|"))
+}
+fn cell_key(graph: &Graph, cell: &Cell) -> String {
+    boundary_key(
+        &graph.boundary(&cell.outer),
+        &cell
+            .holes
+            .iter()
+            .map(|ids| graph.boundary(ids))
+            .collect::<Vec<_>>(),
     )
 }
+
 fn cells(graph: &Graph) -> Result<Vec<Cell>> {
     let mut components = vec![usize::MAX; graph.vertices.len()];
     let mut component = 0;
@@ -1002,15 +1062,7 @@ pub fn regions(sketch: &ResolvedSketch) -> Result<Vec<ResolvedRegion>> {
         let boundary = graph.boundary(&cell.outer);
         let mut inner: Vec<_> = cell.holes.iter().map(|ids| graph.boundary(ids)).collect();
         inner.sort_by_key(Boundary::key);
-        let key = format!(
-            "region:{}|{}",
-            boundary.key(),
-            inner
-                .iter()
-                .map(Boundary::key)
-                .collect::<Vec<_>>()
-                .join("|")
-        );
+        let key = boundary_key(&boundary, &inner);
         let mut region = ResolvedRegion {
             key,
             outer: boundary.sample(),
@@ -1040,9 +1092,10 @@ pub fn faces_for_regions(
 
 pub(crate) struct RegionProfile {
     pub faces: Vec<FaceId>,
-    pub sides: Vec<(String, [f64; 2], [f64; 2])>,
-    pub edges: Vec<RegionEdge>,
+    pub face_keys: Vec<String>,
+    pub face_edges: Vec<Vec<RegionEdge>>,
 }
+#[derive(Clone)]
 pub(crate) struct RegionEdge {
     pub key: String,
     pub start_key: String,
@@ -1082,6 +1135,11 @@ pub(crate) fn region_edges(sketch: &ResolvedSketch) -> Result<Vec<RegionEdge>> {
         })
         .collect())
 }
+pub(crate) fn region_profile_keys(sketch: &ResolvedSketch, keys: &[String]) -> Result<Vec<String>> {
+    Ok(selected_boundaries(sketch, keys)?.iter()
+        .map(|(boundary, holes)| boundary_key(boundary, holes)).collect())
+}
+
 pub(crate) fn profile_for_regions(
     topo: &mut Topology,
     sketch: &ResolvedSketch,
@@ -1091,18 +1149,16 @@ pub(crate) fn profile_for_regions(
     let n = sketch.plane.normal;
     let d = dot3(n, sketch.plane.origin);
     let mut faces = vec![];
-    let mut sides = vec![];
-    let mut edges = vec![];
+    let mut face_keys = vec![];
+    let mut face_edges = vec![];
     for (boundary, holes) in outer {
-        for b in std::iter::once(&boundary).chain(&holes) {
-            for edge in &b.segments {
-                let metadata = RegionEdge::from(edge);
-                if metadata.circle.is_none() {
-                    sides.push((metadata.key.clone(), metadata.start, metadata.end));
-                }
-                edges.push(metadata);
-            }
-        }
+        face_keys.push(boundary_key(&boundary, &holes));
+        face_edges.push(
+            std::iter::once(&boundary)
+                .chain(&holes)
+                .flat_map(|b| b.segments.iter().map(RegionEdge::from))
+                .collect(),
+        );
         let outer = boundary.wire(topo, &sketch.plane)?;
         let inner = holes
             .iter()
@@ -1119,10 +1175,11 @@ pub(crate) fn profile_for_regions(
     }
     Ok(RegionProfile {
         faces,
-        sides,
-        edges,
+        face_keys,
+        face_edges,
     })
 }
+
 fn selected_boundaries(
     sketch: &ResolvedSketch,
     keys: &[String],
@@ -1135,11 +1192,18 @@ fn selected_boundaries(
         return Err("Extrude exceeds 4096 selected regions".into());
     }
     for key in keys {
-        if !selected.insert(key.clone()) {
+        let resolved = if let Some(exact) = available.get(key) {
+            exact
+        } else {
+            let mut matches = available.iter().filter(|candidate| crate::model::reference_matches(candidate, key));
+            let first = matches.next();
+            if first.is_none() || matches.next().is_some() {
+                return Err("A selected sketch region changed or no longer exists. Select the intended regions again.".into());
+            }
+            first.unwrap()
+        };
+        if !selected.insert(resolved.clone()) {
             return Err("Extrude contains a duplicate sketch region selection".into());
-        }
-        if !available.contains(key) {
-            return Err("A selected sketch region changed or no longer exists. Select the intended regions again.".into());
         }
     }
     let mut allowed = BTreeSet::new();
@@ -1352,6 +1416,11 @@ mod arc_tests {
             assert!(cells[0].contains(p));
         }
         assert!(!cells[0].contains([14., 4.]));
+        let old_key = crate::model::canonical_reference(&cells[0].key);
+        assert_ne!(old_key, cells[0].key);
+        let mut topo = Topology::new();
+        assert_eq!(faces_for_regions(&mut topo, &sk, std::slice::from_ref(&old_key)).unwrap().len(), 1);
+        assert!(faces_for_regions(&mut topo, &sk, &[old_key, cells[0].key.clone()]).is_err());
     }
     #[test]
     fn complementary_arcs_close_one_circle_and_overlaps_reject() {

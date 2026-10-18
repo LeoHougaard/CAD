@@ -3,7 +3,7 @@ use cad::{
     dimensions,
     engine::{Evaluation, Runtime},
     file_lock::FileLock,
-    model::{Document, Feature, Plane, PlaneReference},
+    model::{Document, Feature, Plane, PlaneReference, ProfileReference},
     plugins::{Field, Numbers, Registry},
 };
 use serde::Deserialize;
@@ -221,6 +221,8 @@ fn field_value(field: &Field, value: &Value) -> cad::model::Result<()> {
         }
         "plane_ref" => serde_json::from_value::<PlaneReference>(value.clone())
             .is_ok_and(|reference| reference.validate().is_ok()),
+        "profiles" => value.is_null() || (value.is_array()
+            && ProfileReference::from_params(&json!({"profiles":value})).is_ok()),
         "axis" => {
             value.is_null()
                 || value
@@ -484,6 +486,10 @@ fn apply(
                 ..
             } => {
                 let f = feature_mut(document, &feature)?;
+                if f.params.get("profiles").is_some_and(Value::is_array)
+                    && matches!(key.as_str(), "sketch" | "regions" | "profile_face") {
+                    return Err(input("Edit the unified 'profiles' list to change faces or sketch regions"));
+                }
                 let plugin = registry
                     .plugins
                     .get(&f.plugin)
@@ -500,6 +506,7 @@ fn apply(
                     })?;
                 field_value(field, &value).map_err(input)?;
                 f.params[&key] = value;
+                if key == "profiles" { plugin.adopt_profile_input(f); }
             }
             Edit::SetDimension {
                 feature,
@@ -617,6 +624,7 @@ fn validate(document: &Document, registry: &Registry) -> cad::model::Result<()> 
                 numbers.value(value)?;
             }
             if (field.kind == "sketch" || field.kind == "sketches")
+                && !(field.key == "sketch" && feature.params.get("profiles").is_some_and(Value::is_array))
                 && !(field.key == "sketch"
                     && feature
                         .params
@@ -717,7 +725,7 @@ fn schemas(registry: &Registry) -> Value {
     json!(registry.plugins.values().map(|p| json!({
         "id":p.manifest.id,"name":p.manifest.name,"version":p.manifest.version,"hash":p.hash,
         "category":p.manifest.category,"editor":p.manifest.editor,
-        "fields":p.manifest.fields.iter().map(|f| json!({"key":f.key,"label":f.label,"kind":f.kind,"default":f.default,"options":f.options})).collect::<Vec<_>>()
+        "fields":p.manifest.fields.iter().map(|f| json!({"key":f.key,"label":f.label,"kind":f.kind,"default":f.default,"options":f.options,"hidden":f.hidden})).collect::<Vec<_>>()
     })).collect::<Vec<_>>())
 }
 fn successful(evaluation: &Evaluation) -> Result<()> {
@@ -750,7 +758,11 @@ fn run(request: Request) -> Result<Value> {
     registry.engine.on_print(|_| {});
     registry.engine.on_debug(|_, _, _| {});
     let mut runtime = Runtime::new(registry);
-    if let Action::Create { document } = request.action {
+    if let Action::Create { mut document } = request.action {
+        for feature in &mut document.features {
+            if let Some(plugin) = runtime.registry.plugins.get(&feature.plugin)
+                && feature.plugin_version != plugin.manifest.version { plugin.adopt_profile_input(feature); }
+        }
         let path = output_path(&request.path)?;
         let _lock = lock(&path)?;
         if path.exists() {

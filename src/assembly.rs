@@ -714,13 +714,14 @@ fn connector_frame(
             .find(|p| p.key == instance.part)
             .ok_or("Missing source part")?;
         let edges = source.geometry.edge_keys(part.solid)?;
-        if edges.iter().filter(|(_, k)| k == key).count() != 1 {
+        let matches: Vec<_> = edges.iter().filter(|(_, k)| crate::model::reference_matches(k, key)).collect();
+        if matches.len() != 1 {
             return Err(format!(
                 "Mate edge {key} is missing or ambiguous on {}",
                 instance.id
             ));
         }
-        let frame=source.edge_frames.get(&(instance.part.clone(),key.to_owned())).ok_or("Mate edge connectors require a stable circular edge; straight edges are not supported")?;
+        let frame=source.edge_frames.get(&(instance.part.clone(),matches[0].1.clone())).ok_or("Mate edge connectors require a stable circular edge; straight edges are not supported")?;
         Ok(frame.compose(c.frame))
     } else if let Some(key) = &c.face {
         let key = source_key(&c.instance, key)?;
@@ -730,7 +731,7 @@ fn connector_frame(
             .iter()
             .find(|p| p.part == instance.part)
             .ok_or("Missing source part")?;
-        let matches: Vec<_> = mesh.faces.iter().filter(|f| f.key == key).collect();
+        let matches: Vec<_> = mesh.faces.iter().filter(|f| crate::model::reference_matches(&f.key, key)).collect();
         if matches.len() != 1 {
             return Err(format!(
                 "Mate face {key} is missing or ambiguous on {}",
@@ -739,7 +740,7 @@ fn connector_frame(
         }
         let frame = sources[&instance.source]
             .face_frames
-            .get(&(instance.part.clone(), key.to_owned()))
+            .get(&(instance.part.clone(), matches[0].key.clone()))
             .ok_or("Mate connectors currently require a planar face or an explicit frame")?;
         Ok(frame.compose(c.frame))
     } else {
@@ -1013,6 +1014,7 @@ impl AssemblyEvaluation {
                 solid,
                 feature: format!("{}::{}", instance.id, part.feature),
                 source_features: part.source_features.clone(),
+                reference_sources: part.reference_sources.clone(),
             });
         }
         Ok(geometry)

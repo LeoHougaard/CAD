@@ -1,16 +1,17 @@
 //! Selection belongs to one active feature input, never every compatible field.
 use super::*;
+use crate::model::{ProfileReference, reference_matches};
 
 pub(super) fn selectable(kind: &str) -> bool {
     matches!(
         kind,
-        "regions" | "profile_face" | "plane_ref" | "axis" | "edges" | "faces" | "body" | "bodies"
+        "profiles" | "regions" | "profile_face" | "plane_ref" | "axis" | "edges" | "faces" | "body" | "bodies"
     )
 }
 
 pub(super) fn visible(field: &Field, feature: &Feature) -> bool {
     let p = &feature.params;
-    !((feature.plugin == "plane"
+    !field.hidden && !((feature.plugin == "plane"
         && match field.key.as_str() {
             "second" | "flip_alignment" => p["mode"] != "Midplane",
             "axis_ref" | "angle" => p["mode"] != "Angle",
@@ -40,6 +41,7 @@ fn input<'a>(edit: &Editor, registry: &'a Registry) -> Option<&'a Field> {
         })
         .or_else(|| {
             [
+                "profiles",
                 "regions",
                 "profile_face",
                 "plane_ref",
@@ -71,7 +73,8 @@ pub(super) fn referenced_sketches<'a>(feature: &'a Feature, registry: &Registry)
     if let Some(plugin) = registry.plugins.get(&feature.plugin) {
         for field in &plugin.manifest.fields {
             match field.kind.as_str() {
-                "sketch" => ids.extend(p[&field.key].as_str().filter(|s| !s.is_empty())),
+                "profiles" => ids.extend(p[&field.key].as_array().into_iter().flatten().filter_map(|profile| profile["sketch"].as_str())),
+                "sketch" if !p["profiles"].is_array() => ids.extend(p[&field.key].as_str().filter(|s| !s.is_empty())),
                 "sketches" => ids.extend(
                     p[&field.key]
                         .as_array()
@@ -259,6 +262,13 @@ pub(super) fn seed(feature: &mut Feature, targets: &[Target], scene: &Scene) -> 
         feature.params["targets"] = json!(selected_parts);
         feature.params["target"] = json!("");
     }
+    if feature.params.get("profiles").is_some() {
+        let picked = profiles_from_targets(targets, scene);
+        feature.params["profiles"] = if picked.is_empty() {
+            serde_json::to_value(ProfileReference::from_params(&feature.params).unwrap_or_default()).unwrap()
+        } else { json!(picked) };
+        return Some("profiles".into());
+    }
     if feature.params.get("profile_face").is_some() {
         if let Some(Target::Region { sketch, .. }) = targets
             .iter()
@@ -280,7 +290,7 @@ pub(super) fn seed(feature: &mut Feature, targets: &[Target], scene: &Scene) -> 
             .rev()
             .find(|t| matches!(t, Target::Face { .. }))
             && scene.meshes.iter().any(|m| {
-                &m.part == part && m.faces.iter().any(|f| &f.key == key && f.plane.is_some())
+                &m.part == part && m.faces.iter().any(|f| reference_matches(&f.key, key) && f.plane.is_some())
             })
         {
             feature.params["profile_face"] = json!({"part":part,"face":key});
@@ -322,13 +332,132 @@ fn plane_value(target: &Target, scene: &Scene) -> Option<Value> {
         }
         Target::Face { part, key }
             if scene.meshes.iter().any(|m| {
-                &m.part == part && m.faces.iter().any(|f| &f.key == key && f.plane.is_some())
+                &m.part == part && m.faces.iter().any(|f| reference_matches(&f.key, key) && f.plane.is_some())
             }) =>
         {
             Some(json!({"kind":"face","part":part,"face":key}))
         }
         _ => None,
     }
+}
+
+pub(super) fn profile_input(edit: &Editor, registry: &Registry) -> bool {
+    input(edit, registry).is_some_and(|f| f.kind == "profiles")
+}
+pub(super) fn profile_candidates(
+    scene: &Scene, camera: &Camera, pointer: (egui::Pos2, Rect, Filter, bool),
+    hidden: &BTreeSet<String>, sketches: &[(&str, &crate::sketch::ResolvedSketch)],
+    referenced: &[&str],
+) -> Vec<Target> {
+    let (pos, rect, filter, through) = pointer;
+    let faces = render::picks(scene, camera, pos, rect, hidden);
+    let depth = faces.first().map(|f| f.distance);
+    let mut result = vec![];
+    if matches!(filter, Filter::All | Filter::Regions) {
+        let (origin, direction) = camera.ray(pos, rect);
+        let mut regions = vec![];
+        for &(id, sketch) in sketches {
+            let Some(point) = camera.plane_point(pos, rect, &sketch.plane) else { continue; };
+            let world = glam::Vec3::from_array(sketch.plane.at(point).map(|v| v as f32));
+            let distance = (world - origin).dot(direction);
+            if distance < 0. || (!through && !referenced.contains(&id)
+                && depth.is_some_and(|d| distance > d + camera.span / rect.height() * 2.)) { continue; }
+            for region in scene.regions.get(id).into_iter().flatten().filter(|r| r.contains(point)) {
+                regions.push((distance, Target::Region { sketch: id.into(), key: region.key.clone() }));
+            }
+        }
+        regions.sort_by(|a, b| a.0.total_cmp(&b.0));
+        result.extend(regions.into_iter().map(|(_, target)| target));
+    }
+    if matches!(filter, Filter::All | Filter::Faces) {
+        result.extend(faces.into_iter().take(if through { usize::MAX } else { 1 })
+            .filter(|f| f.plane.is_some() && !f.face.contains("untracked:"))
+            .map(|f| Target::Face { part: f.part, key: f.face }));
+    }
+    result
+}
+fn profiles_from_targets(targets: &[Target], scene: &Scene) -> Vec<ProfileReference> {
+    let mut profiles: Vec<ProfileReference> = vec![];
+    for target in targets {
+        let profile = match target {
+            Target::Region { sketch, key } => Some(ProfileReference::Region { sketch: sketch.clone(), region: key.clone() }),
+            Target::Face { part, key } if scene.meshes.iter().any(|m| m.part == *part
+                && m.faces.iter().any(|f| reference_matches(&f.key, key) && f.plane.is_some())) =>
+                Some(ProfileReference::Face { part: part.clone(), face: key.clone() }),
+            Target::Feature(sketch) if scene.sketches.contains_key(sketch) => Some(ProfileReference::Sketch { sketch: sketch.clone() }),
+            _ => None,
+        };
+        if let Some(profile) = profile && !profiles.iter().any(|p| p.matches(&profile)) { profiles.push(profile); }
+    }
+    expanded_profiles(profiles, scene)
+}
+fn expanded_profiles(profiles: Vec<ProfileReference>, scene: &Scene) -> Vec<ProfileReference> {
+    let mut result: Vec<ProfileReference> = vec![];
+    for profile in profiles {
+        if let ProfileReference::Sketch { sketch } = &profile
+            && let Some(regions) = scene.regions.get(sketch) {
+            for region in regions.iter().filter(|r| r.legacy_selected) {
+                let item = ProfileReference::Region { sketch: sketch.clone(), region: region.key.clone() };
+                if !result.iter().any(|p| p.matches(&item)) { result.push(item); }
+            }
+        } else if !result.iter().any(|p| p.matches(&profile)) { result.push(profile); }
+    }
+    result
+}
+fn field_profiles(params: &Value, field: &Field) -> crate::model::Result<Vec<ProfileReference>> {
+    if field.key == "profiles" { ProfileReference::from_params(params) }
+    else { ProfileReference::from_params(&json!({"profiles":params.get(&field.key).unwrap_or(&field.default)})) }
+}
+pub(super) fn profiles_ui(ui: &mut egui::Ui, field: &Field, params: &mut Value, scene: &Scene, document: &Document) -> bool {
+    let before = params.get(&field.key).cloned();
+    let Ok(selected) = field_profiles(params, field) else {
+        ui.colored_label(RED, "Invalid profile reference");
+        if ui.small_button("Clear").clicked() { params[&field.key] = json!([]); }
+        return before != params.get(&field.key).cloned();
+    };
+    let mut selected = expanded_profiles(selected, scene);
+    let name = |id: &str| document.features.iter().find(|f| f.id == id).map_or_else(|| id.to_owned(), |f| f.name.clone());
+    let label = |profile: &ProfileReference| match profile {
+        ProfileReference::Region { sketch, region } => format!("{} / Region {}", name(sketch), scene.regions.get(sketch).and_then(|r| r.iter().position(|r| reference_matches(&r.key, region))).map_or_else(|| "missing".into(), |i| (i + 1).to_string())),
+        ProfileReference::Sketch { sketch } => format!("{} / Whole sketch", name(sketch)),
+        ProfileReference::Face { part, face } => scene.meshes.iter().find(|m| &m.part == part).map_or_else(|| "Missing face".into(), |m| format!("{} / Face {}", m.name, m.faces.iter().position(|f| reference_matches(&f.key, face)).map_or_else(|| "missing".into(), |i| (i+1).to_string()))),
+    };
+    let mut changed = false;
+    egui::ScrollArea::vertical().id_salt("profiles_selected").max_height(130.).show(ui, |ui| {
+        selected.retain(|profile| {
+            let mut keep = true;
+            ui.horizontal(|ui| { ui.label(label(profile)); if ui.small_button("Remove").clicked() { keep = false; changed = true; } });
+            keep
+        });
+    });
+    ui.horizontal(|ui| {
+        ui.menu_button("Add", |ui| {
+            for (sketch, regions) in &scene.regions {
+                for region in regions {
+                    let profile = ProfileReference::Region { sketch: sketch.clone(), region: region.key.clone() };
+                    if ui.selectable_label(selected.iter().any(|p| p.matches(&profile)), label(&profile)).clicked() {
+                        let whole = ProfileReference::Sketch { sketch: sketch.clone() };
+                        if selected.contains(&whole) {
+                            selected.retain(|p| p != &whole);
+                            selected.extend(regions.iter().filter(|r| r.legacy_selected).map(|r| ProfileReference::Region { sketch: sketch.clone(), region: r.key.clone() }));
+                        }
+                        if selected.iter().any(|p| p.matches(&profile)) { selected.retain(|p| !p.matches(&profile)); } else { selected.push(profile); }
+                        changed = true;
+                    }
+                }
+            }
+            for mesh in &scene.meshes { for face in mesh.faces.iter().filter(|f| f.plane.is_some() && !f.key.contains("untracked:")) {
+                let profile = ProfileReference::Face { part: mesh.part.clone(), face: face.key.clone() };
+                if ui.selectable_label(selected.iter().any(|p| p.matches(&profile)), label(&profile)).clicked() {
+                    if selected.iter().any(|p| p.matches(&profile)) { selected.retain(|p| !p.matches(&profile)); } else { selected.push(profile); }
+                    changed = true;
+                }
+            }}
+        });
+        if ui.small_button("Clear").clicked() { selected.clear(); changed = true; }
+    });
+    if changed { params[&field.key] = json!(selected); }
+    before != params.get(&field.key).cloned()
 }
 
 fn apply_selection(params: &mut Value, field: &Field, targets: &[Target], scene: &Scene) {
@@ -338,12 +467,13 @@ fn apply_selection(params: &mut Value, field: &Field, targets: &[Target], scene:
             | ("regions", Target::Region { .. })
             | ("faces", Target::Face { .. })
             | ("edges", Target::Edge { .. }) => true,
+            ("profiles", _) => !profiles_from_targets(std::slice::from_ref(t), scene).is_empty(),
             ("plane_ref", t) => plane_value(t, scene).is_some(),
             ("profile_face", Target::Face { part, key }) => scene.meshes.iter().any(|m| {
-                &m.part == part && m.faces.iter().any(|f| &f.key == key && f.plane.is_some())
+                &m.part == part && m.faces.iter().any(|f| reference_matches(&f.key, key) && f.plane.is_some())
             }),
             ("axis", Target::Edge { part, key }) => scene.meshes.iter().any(|m| {
-                &m.part == part && m.edges.iter().any(|e| &e.key == key && e.axis.is_some())
+                &m.part == part && m.edges.iter().any(|e| reference_matches(&e.key, key) && e.axis.is_some())
             }),
             _ => false,
         })
@@ -351,6 +481,7 @@ fn apply_selection(params: &mut Value, field: &Field, targets: &[Target], scene:
         return;
     }
     params[&field.key] = match field.kind.as_str() {
+        "profiles" => json!(profiles_from_targets(targets, scene)),
         "bodies" => json!(parts(targets)),
         "body" => json!(parts(targets).last().cloned().unwrap_or_default()),
         "edges" => json!(
@@ -385,7 +516,7 @@ fn apply_selection(params: &mut Value, field: &Field, targets: &[Target], scene:
                 Target::Face { part, key }
                     if scene.meshes.iter().any(|m| {
                         &m.part == part
-                            && m.faces.iter().any(|f| &f.key == key && f.plane.is_some())
+                            && m.faces.iter().any(|f| reference_matches(&f.key, key) && f.plane.is_some())
                     }) =>
                 {
                     Some(json!({"part":part,"face":key}))
@@ -399,7 +530,7 @@ fn apply_selection(params: &mut Value, field: &Field, targets: &[Target], scene:
             .find_map(|t| match t {
                 Target::Edge { part, key }
                     if scene.meshes.iter().any(|m| {
-                        &m.part == part && m.edges.iter().any(|e| &e.key == key && e.axis.is_some())
+                        &m.part == part && m.edges.iter().any(|e| reference_matches(&e.key, key) && e.axis.is_some())
                     }) =>
                 {
                     Some(json!({"kind":"edge","part":part,"edge":key}))
@@ -484,23 +615,23 @@ impl CadApp {
                 .and_then(|m| {
                     m.edges
                         .iter()
-                        .find(|e| Some(e.key.as_str()) == reference["edge"].as_str())
+                        .find(|e| reference["edge"].as_str().is_some_and(|key| reference_matches(&e.key, key)))
                 })
                 .and_then(|e| {
                     e.axis
                         .map(|(a, d)| (a, std::array::from_fn(|n| a[n] + d[n])))
                 }),
-            _ => scene
-                .sketches
-                .get(p["sketch"].as_str().unwrap_or_default())
-                .map(|sk| {
-                    let offset = Numbers::for_document(&self.document)
-                        .and_then(|n| n.eval(p["axis_offset"].as_str().unwrap_or("0")))
-                        .unwrap_or(0.);
+            _ => ProfileReference::from_params(p).ok().and_then(|profiles| profiles.first().and_then(|profile| match profile {
+                ProfileReference::Region { sketch, .. } | ProfileReference::Sketch { sketch } => scene.sketches.get(sketch).map(|s| s.plane.clone()),
+                ProfileReference::Face { part, face } => scene.meshes.iter().find(|m| &m.part == part).and_then(|m| m.faces.iter().find(|f| reference_matches(&f.key, face))).and_then(|f| f.plane.clone()),
+            })).map(|plane| {
+                    let expression = p["axis_offset"].as_str().unwrap_or("0");
+                    let offset = p["axis_offset"].as_f64().or_else(|| expression.parse().ok())
+                        .unwrap_or_else(|| Numbers::for_document(&self.document).and_then(|n| n.eval(expression)).unwrap_or(0.));
                     if p["axis"] == "U" {
-                        (sk.plane.at([0., offset]), sk.plane.at([1., offset]))
+                        (plane.at([0., offset]), plane.at([1., offset]))
                     } else {
-                        (sk.plane.at([offset, 0.]), sk.plane.at([offset, 1.]))
+                        (plane.at([offset, 0.]), plane.at([offset, 1.]))
                     }
                 }),
         };
@@ -548,6 +679,7 @@ impl CadApp {
             edit.undo.push(before);
             edit.redo.clear();
             edit.changed = true;
+            if field.kind == "profiles" { self.restore_feature_selection(); }
             self.schedule(ctx);
         }
     }
@@ -568,6 +700,15 @@ impl CadApp {
                 .filter_map(Value::as_str)
         };
         match field.kind.as_str() {
+            "profiles" => {
+                for profile in expanded_profiles(field_profiles(&edit.feature.params, field).unwrap_or_default(), scene) {
+                    match profile {
+                        ProfileReference::Region { sketch, region } => self.selection.add(Target::Region { sketch, key: region }),
+                        ProfileReference::Face { part, face } => self.selection.add(Target::Face { part, key: face }),
+                        ProfileReference::Sketch { sketch } => self.selection.add(Target::Feature(sketch)),
+                    }
+                }
+            }
             "body" => {
                 if let Some(part) = value.as_str().filter(|s| !s.is_empty()) {
                     self.selection.add(Target::Part(part.into()));
@@ -625,7 +766,7 @@ impl CadApp {
                 if let Some(regions) = scene.regions.get(sketch) {
                     for r in regions.iter().filter(|r| {
                         value.as_array().map_or(r.legacy_selected, |a| {
-                            a.iter().any(|v| v.as_str() == Some(&r.key))
+                            a.iter().any(|v| v.as_str().is_some_and(|key| reference_matches(key, &r.key)))
                         })
                     }) {
                         self.selection.add(Target::Region {
@@ -638,12 +779,12 @@ impl CadApp {
             "edges" | "faces" => {
                 for mesh in &scene.meshes {
                     for key in strings() {
-                        if field.kind == "edges" && mesh.edges.iter().any(|e| e.key == key) {
+                        if field.kind == "edges" && mesh.edges.iter().any(|e| reference_matches(&e.key, key)) {
                             self.selection.add(Target::Edge {
                                 part: mesh.part.clone(),
                                 key: key.into(),
                             });
-                        } else if field.kind == "faces" && mesh.faces.iter().any(|f| f.key == key) {
+                        } else if field.kind == "faces" && mesh.faces.iter().any(|f| reference_matches(&f.key, key)) {
                             self.selection.add(Target::Face {
                                 part: mesh.part.clone(),
                                 key: key.into(),
@@ -702,7 +843,7 @@ impl CadApp {
                         m.part == edge.part
                             && m.edges
                                 .iter()
-                                .any(|e| e.key == edge.key && e.axis.is_some())
+                                .any(|e| reference_matches(&e.key, &edge.key) && e.axis.is_some())
                     })
             })
         {
@@ -726,6 +867,69 @@ impl CadApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn profile_editor(feature: Feature) -> Editor {
+        Editor {
+            workspace: EditWorkspace {
+                camera: Camera::default(), scene: Arc::new(Scene::default()), hidden: BTreeSet::new(),
+                hidden_sketches: BTreeSet::new(), selected_plane: None, selected_feature: None,
+                selection: vec![], selection_filter: Filter::All, show_planes: true, show_sketches: false,
+            },
+            index: 0, is_new: false, feature, sketch: None, changed: false,
+            input_field: Some("profile_face".into()), undo: vec![], redo: vec![],
+        }
+    }
+    fn profile_scene() -> (Document, Scene, Feature, Registry) {
+        let registry = Registry::builtin().unwrap(); let mut doc = Document::default();
+        let mut sketch = Sketch::default(); sketch.add_rect([0.,0.],[6.,4.]); sketch.add_rect([10.,0.],[14.,4.]);
+        let mut feature = registry.create("sketch", &mut doc).unwrap(); feature.set_sketch(&sketch); doc.features.push(feature);
+        let mut feature = registry.create("extrude", &mut doc).unwrap(); feature.params["sketch"] = json!("f1"); feature.params["depth"] = json!("2"); doc.features.push(feature);
+        let mut sketch = Sketch::default(); sketch.add_circle([24.,2.],2.);
+        let mut feature = registry.create("sketch", &mut doc).unwrap(); feature.set_sketch(&sketch); doc.features.push(feature);
+        let result = Runtime::new(Registry::builtin().unwrap()).evaluate(&doc).unwrap(); assert!(result.scene.error.is_none());
+        let feature = registry.create("extrude", &mut doc).unwrap();
+        (doc, (*result.scene).clone(), feature, registry)
+    }
+    #[test]
+    fn face_seed_clear_then_viewport_region_click_uses_the_same_unified_input() {
+        let (_, scene, mut feature, registry) = profile_scene();
+        let face = scene.meshes[0].faces.iter().find(|f| f.key == "f2:end").unwrap();
+        let target = Target::Face { part: face.part.clone(), key: face.key.clone() };
+        assert_eq!(seed(&mut feature, &[target], &scene), Some("profiles".into()));
+        let mut edit = profile_editor(feature);
+        assert_eq!(active_key(&edit, &registry), Some("profiles"));
+        assert_eq!(filter(&edit, &registry), Filter::All);
+        for legacy in registry.plugins["extrude"].manifest.fields.iter().filter(|f| matches!(f.key.as_str(), "profile_face" | "sketch" | "regions")) { assert!(!visible(legacy, &edit.feature)); }
+        apply_selection(&mut edit.feature.params, &field("profiles", "profiles"), &[], &scene);
+        assert_eq!(edit.feature.params["profiles"], json!([]));
+        let mut camera = Camera::default(); camera.align(&Plane::named("Top", 0.));
+        let rect = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.,700.));
+        let point = camera.project([3.,2.,0.], rect);
+        let sketches: Vec<_> = scene.sketches.iter().map(|(id,s)| (id.as_str(),s)).collect();
+        let picked = profile_candidates(&scene, &camera, (point,rect,Filter::All,false), &BTreeSet::new(), &sketches, &["f1"]);
+        assert!(matches!(picked.first(), Some(Target::Region { sketch, .. }) if sketch == "f1"), "{picked:?}");
+        apply_selection(&mut edit.feature.params, &field("profiles", "profiles"), &picked[..1], &scene);
+        assert_eq!(edit.feature.params["profiles"][0]["kind"], "region");
+        assert_eq!(active_key(&edit, &registry), Some("profiles"));
+        assert!(profile_input(&edit, &registry));
+    }
+    #[test]
+    fn mixed_profile_picks_preserve_other_sketches_and_face_entries_until_removed() {
+        let (_, scene, mut feature, _) = profile_scene();
+        let a = scene.regions["f1"].iter().find(|r| r.contains([3.,2.])).unwrap().key.clone();
+        let b = scene.regions["f3"][0].key.clone();
+        let mut selected = Selection::default();
+        let face = Target::Face { part: "f2:0".into(), key: "f2:end".into() };
+        for target in [Target::Region {sketch:"f1".into(),key:a}, Target::Region {sketch:"f3".into(),key:b}, face.clone()] {
+            selected.toggle(target);
+            apply_selection(&mut feature.params, &field("profiles", "profiles"), selected.items(), &scene);
+            assert_eq!(feature.params["profiles"].as_array().unwrap().len(), selected.items().len());
+        }
+        assert_eq!(referenced_sketches(&feature, &Registry::builtin().unwrap()), vec!["f1", "f3"]);
+        selected.toggle(face);
+        apply_selection(&mut feature.params, &field("profiles", "profiles"), selected.items(), &scene);
+        assert_eq!(feature.params["profiles"].as_array().unwrap().len(), 2);
+        assert!(feature.params["profiles"].as_array().unwrap().iter().all(|p|p["kind"] == "region"));
+    }
     fn field(key: &str, kind: &str) -> Field {
         Field {
             key: key.into(),
@@ -733,6 +937,7 @@ mod tests {
             kind: kind.into(),
             default: Value::Null,
             options: vec![],
+            hidden: false,
         }
     }
     #[test]

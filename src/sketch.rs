@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod regions;
 mod trim;
-pub(crate) use regions::{RegionEdge, profile_for_regions, region_edges};
+pub(crate) use regions::{RegionEdge, profile_for_regions, region_edges, region_profile_keys};
 pub use regions::{ResolvedRegion, TrimPiece, faces_for_regions, regions, trim_entity};
 pub use trim::{TrimEdit, apply_trim, set_construction};
 
@@ -463,6 +463,26 @@ pub fn resolve_with_targets(
                     .map(|v| v.parse::<usize>().map_err(|_| "Invalid tangent edge"))
                     .transpose()?
                     .unwrap_or(0);
+                if let Some(&circle) = circles.get(&other) {
+                    let endpoint = if arc_id == c.a {
+                        c.points[0]
+                    } else {
+                        c.points[1]
+                    };
+                    if ![1, 2].contains(&endpoint) {
+                        return Err("Arc-circle tangency needs an arc endpoint".into());
+                    }
+                    let join = point(arc_id, endpoint)?;
+                    constrain(&mut sys, Constraint::PointOnCircle(join, circle))?;
+                    let arc_radius = sys
+                        .add_line(point(arc_id, 0)?, join)
+                        .map_err(|e| e.to_string())?;
+                    let circle_radius = sys
+                        .add_line(point(other, 0)?, join)
+                        .map_err(|e| e.to_string())?;
+                    constrain(&mut sys, Constraint::Parallel(arc_radius, circle_radius))?;
+                    continue;
+                }
                 let other_indices = if arcs.contains_key(&other) {
                     vec![1, 2]
                 } else if points[&other].len() == 4 {

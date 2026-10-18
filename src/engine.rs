@@ -4,7 +4,7 @@ mod edge_setback;
 mod feature_controls;
 mod sweep_loft;
 use crate::{
-    model::{Document, Feature, Plane, Result},
+    model::{reference_matches, Document, Feature, Plane, Result},
     plugins::{Numbers, Registry},
     sketch::{self, ResolvedSketch, p3, v3},
 };
@@ -83,6 +83,8 @@ pub struct Part {
     pub feature: String,
     /// Only actual contributors may supply persistent geometric references.
     pub source_features: BTreeSet<String>,
+    /// Exact profile namespaces; these are separate from feature dependencies.
+    pub reference_sources: BTreeSet<String>,
 }
 #[derive(Clone)]
 pub struct Geometry {
@@ -90,7 +92,8 @@ pub struct Geometry {
     pub parts: Vec<Part>,
     pub sketches: BTreeMap<String, ResolvedSketch>,
     pub planes: BTreeMap<String, Plane>,
-    pub anchors: Vec<(String, Plane)>,
+    /// Persistent key, analytical frame and owning reference namespace.
+    pub anchors: Vec<(String, Plane, String)>,
     pub outputs: BTreeMap<String, Vec<String>>,
     edge_anchors: Vec<EdgeAnchor>,
 }
@@ -110,6 +113,7 @@ impl Default for Geometry {
 
 #[derive(Clone)]
 struct EdgeAnchor {
+    source: String,
     key: String,
     /// Source profile side for curved-face naming; vertical edges have none.
     side: Option<String>,
@@ -395,6 +399,7 @@ impl Geometry {
                 solid,
                 feature: f.id.clone(),
                 source_features: BTreeSet::from([f.id.clone()]),
+                reference_sources: BTreeSet::from([f.id.clone()]),
             });
             self.outputs.entry(f.id.clone()).or_default().push(key);
         } else {
@@ -411,6 +416,7 @@ impl Geometry {
             self.parts[i].solid = result;
             self.parts[i].feature = f.id.clone();
             self.parts[i].source_features.insert(f.id.clone());
+            self.parts[i].reference_sources.insert(f.id.clone());
             self.record_output(f, vec![self.parts[i].key.clone()]);
         }
         Ok(())
@@ -433,7 +439,7 @@ impl Geometry {
         let anchor = self
             .anchors
             .iter()
-            .find(|(key, _)| key == support)
+            .find(|(key, _, _)| reference_matches(key, support))
             .ok_or_else(|| {
                 format!("Sketch support '{support}' is missing. Select a new plane or face.")
             })?;
@@ -441,7 +447,7 @@ impl Geometry {
         let mut conflicting_orientation = false;
         for part in &self.parts {
             for (id, key) in self.face_keys(part.solid)? {
-                if key != support {
+                if !reference_matches(&key, support) {
                     continue;
                 }
                 let face = self.topo.face(id).map_err(err)?;
@@ -469,7 +475,7 @@ impl Geometry {
         // their common oriented plane, while its original frame stays stable.
         Ok(anchor.1.shifted(offset))
     }
-    fn register_extrude_anchors(&mut self, f: &Feature, sk: &ResolvedSketch, start: f64, end: f64) {
+    fn register_extrude_anchors(&mut self, source: &str, sk: &ResolvedSketch, start: f64, end: f64, legacy: bool) {
         let sign = if end > start { 1. } else { -1. };
         let mut a = sk.plane.shifted(start);
         a.normal = a.normal.map(|v| -sign * v);
@@ -477,9 +483,9 @@ impl Geometry {
         let mut b = sk.plane.shifted(end);
         b.normal = b.normal.map(|v| sign * v);
         b.v = cross(b.normal, b.u);
-        self.anchors.push((format!("{}:start", f.id), a));
-        self.anchors.push((format!("{}:end", f.id), b));
-        if let Ok(loops) = sketch::loops(sk) {
+        self.anchors.push((format!("{}:start", source), a, source.into()));
+        self.anchors.push((format!("{}:end", source), b, source.into()));
+        if legacy && let Ok(loops) = sketch::loops(sk) {
             for l in loops {
                 if let sketch::RegionLoop::Polygon { entity, points } = l {
                     for i in 0..points.len() {
@@ -493,13 +499,14 @@ impl Geometry {
                         u = u.map(|x| x / length);
                         let n = cross(u, sk.plane.normal);
                         self.anchors.push((
-                            format!("{}:side:{entity}:{i}", f.id),
+                            format!("{}:side:{entity}:{i}", source),
                             Plane {
                                 origin,
                                 u,
                                 v: sk.plane.normal,
                                 normal: n,
                             },
+                            source.into(),
                         ));
                     }
                 }
@@ -508,7 +515,7 @@ impl Geometry {
     }
     fn register_profile_edges(
         &mut self,
-        f: &Feature,
+        source: &str,
         sk: &ResolvedSketch,
         edges: &[sketch::RegionEdge],
         start: f64,
@@ -518,10 +525,11 @@ impl Geometry {
         let b = sk.plane.shifted(end);
         let mut vertices = BTreeSet::new();
         for edge in edges {
-            let side = format!("{}:region-side:{}", f.id, edge.key);
+            let side = format!("{}:region-side:{}", source, edge.key);
             for (cap, plane) in [("start", &a), ("end", &b)] {
                 self.edge_anchors.push(EdgeAnchor {
-                    key: format!("{}:profile:{}:{cap}", f.id, edge.key),
+                    source: source.into(),
+                    key: format!("{}:profile:{}:{cap}", source, edge.key),
                     side: edge.circle.map(|_| side.clone()),
                     start: p3(plane.at(edge.start)),
                     end: p3(plane.at(edge.end)),
@@ -543,7 +551,8 @@ impl Geometry {
                 let pa = p3(a.at(point));
                 let pb = p3(b.at(point));
                 self.edge_anchors.push(EdgeAnchor {
-                    key: format!("{}:region-vertex:{key}", f.id),
+                    source: source.into(),
+                    key: format!("{}:region-vertex:{key}", source),
                     side: None,
                     start: pa,
                     end: pb,
@@ -697,7 +706,7 @@ impl Geometry {
                 let faces = keys
                     .iter()
                     .map(|k| {
-                        let hits: Vec<_> = available.iter().filter(|(_, key)| key == k).collect();
+                        let hits: Vec<_> = available.iter().filter(|(_, key)| reference_matches(key, k)).collect();
                         if hits.len() != 1 {
                             Err("Shell face reference is missing or ambiguous".into())
                         } else {
@@ -716,6 +725,7 @@ impl Geometry {
             "mirror" | "pattern" | "transform" => {
                 let i = self.target(text(p, "target", ""))?;
                 let original = self.parts[i].clone();
+                let reference_sources = original.reference_sources.clone();
                 let mut source_features = original.source_features.clone();
                 source_features.insert(f.id.clone());
                 let mut produced = vec![];
@@ -736,6 +746,7 @@ impl Geometry {
                             solid: result,
                             feature: f.id.clone(),
                             source_features: source_features.clone(),
+                            reference_sources: reference_sources.clone(),
                         });
                         produced.push(key);
                     } else {
@@ -778,6 +789,7 @@ impl Geometry {
                             solid: result,
                             feature: f.id.clone(),
                             source_features: source_features.clone(),
+                            reference_sources: reference_sources.clone(),
                         });
                         produced.push(key);
                     }
@@ -798,6 +810,7 @@ impl Geometry {
                             solid: result,
                             feature: f.id.clone(),
                             source_features: source_features.clone(),
+                            reference_sources: reference_sources.clone(),
                         });
                         produced.push(key);
                     } else {
@@ -832,9 +845,8 @@ impl Geometry {
         let prefix = owner.map(|key| format!("{}:", key.split(':').next().unwrap_or(key)));
         let sources = owner
             .and_then(|key| self.parts.iter().find(|part| part.key == key))
-            .map(|part| &part.source_features);
-        let allowed =
-            |key: &str| sources.is_some_and(|s| s.contains(key.split(':').next().unwrap_or(key)));
+            .map(|part| &part.reference_sources);
+        let allowed = |source: &str| sources.is_some_and(|s| s.contains(source));
         solid_faces(&self.topo, solid)
             .map_err(err)?
             .into_iter()
@@ -844,11 +856,11 @@ impl Geometry {
                     FaceSurface::Plane { normal, d } => self
                         .anchors
                         .iter()
-                        .filter(|(key, p)| allowed(key) && plane_matches(p, *normal, *d))
-                        .min_by_key(|(key, _)| {
+                        .filter(|(_, p, source)| allowed(source) && plane_matches(p, *normal, *d))
+                        .min_by_key(|(key, _, _)| {
                             usize::from(!prefix.as_ref().is_some_and(|p| key.starts_with(p)))
                         })
-                        .map(|(key, _)| key.clone())
+                        .map(|(key, _, _)| key.clone())
                         .unwrap_or_else(|| {
                             format!(
                                 "untracked:plane:{:.7}:{:.7}:{:.7}:{:.7}",
@@ -863,7 +875,7 @@ impl Geometry {
                         for edge in face_edges(&self.topo, id).map_err(err)? {
                             for anchor in &self.edge_anchors {
                                 if let Some(side) = &anchor.side
-                                    && allowed(side)
+                                    && allowed(&anchor.source)
                                     && anchor.matches(&self.topo, edge)
                                 {
                                     sources.insert(side.clone());
@@ -907,15 +919,15 @@ impl Geometry {
     ) -> Result<EdgeId> {
         let mut hits: BTreeSet<_> = available
             .iter()
-            .filter(|(_, k)| k == key)
+            .filter(|(_, k)| reference_matches(k, key))
             .map(|(id, _)| *id)
             .collect();
         // A formerly untracked adjacent face may acquire its correct source name.
         // Retain old explicit source-edge aliases, bounded by the same contributors.
         if hits.is_empty() && !key.contains("untracked:") {
-            let sources = &self.parts[self.target(owner)?].source_features;
+            let sources = &self.parts[self.target(owner)?].reference_sources;
             for anchor in self.edge_anchors.iter().filter(|a| {
-                a.key == key && sources.contains(a.key.split(':').next().unwrap_or(&a.key))
+                reference_matches(&a.key, key) && sources.contains(&a.source)
             }) {
                 for id in solid_edges(&self.topo, solid).map_err(err)? {
                     if anchor.matches(&self.topo, id) {
@@ -940,7 +952,7 @@ impl Geometry {
         let faces = self.face_keys_scoped(solid, owner)?;
         let sources = owner
             .and_then(|key| self.parts.iter().find(|part| part.key == key))
-            .map(|part| &part.source_features);
+            .map(|part| &part.reference_sources);
         let mut adjacent: HashMap<EdgeId, Vec<String>> = HashMap::new();
         for (id, key) in faces {
             for edge in face_edges(&self.topo, id).map_err(err)? {
@@ -969,9 +981,7 @@ impl Geometry {
                         .edge_anchors
                         .iter()
                         .filter(|a| {
-                            sources.is_some_and(|s| {
-                                s.contains(a.key.split(':').next().unwrap_or(&a.key))
-                            })
+                            sources.is_some_and(|s| s.contains(&a.source))
                         })
                         .filter(|a| a.matches(&self.topo, edge))
                         .map(|a| a.key.clone())
@@ -1041,8 +1051,8 @@ impl Geometry {
                 } else {
                     self.anchors
                         .iter()
-                        .find(|(k, _)| k == &key)
-                        .map(|(_, p)| p.clone())
+                        .find(|(k, _, _)| reference_matches(k, &key))
+                        .map(|(_, p, _)| p.clone())
                 };
                 faces.push(FaceView {
                     key,

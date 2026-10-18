@@ -12,6 +12,8 @@ pub struct Field {
     pub default: Value,
     #[serde(default)]
     pub options: Vec<String>,
+    #[serde(default)]
+    pub hidden: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -35,6 +37,24 @@ pub struct Plugin {
     ast: AST,
 }
 impl Plugin {
+    pub fn adopt_profile_input(&self, feature: &mut Feature) {
+        if self.manifest.fields.iter().any(|field| field.kind == "profiles"
+            && feature.params.get(&field.key).is_some_and(Value::is_array))
+            && self.matches(feature)
+        {
+            if feature.plugin_hash != self.hash
+                && feature.params.get("legacy_profile_source").and_then(Value::as_str).unwrap_or("").is_empty() {
+                let mut legacy = feature.params.clone();
+                legacy["profiles"] = Value::Null;
+                if let Ok(items) = crate::model::ProfileReference::from_params(&legacy)
+                    && let Some(item) = items.first() {
+                    feature.params["legacy_profile_source"] = json!(item.source_key());
+                }
+            }
+            feature.plugin_version = self.manifest.version.clone();
+            feature.plugin_hash = self.hash.clone();
+        }
+    }
     /// Additive builtin inputs preserve old region, profile and scope semantics.
     /// Compatibility applies only to these exact bundled package identities.
     pub fn matches(&self, feature: &Feature) -> bool {
@@ -43,9 +63,11 @@ impl Plugin {
                 && ((feature.plugin_version == "1.0.0"
                     && feature.plugin_hash == "b3447843f1693770")
                     || (feature.plugin_version == "1.1.0"
-                        && feature.plugin_hash == "094953e2178e0cde"))
+                        && feature.plugin_hash == "094953e2178e0cde")
+                    || (feature.plugin_version == "1.2.0"
+                        && feature.plugin_hash == "0d4a61c8cdf65c59"))
                 && self.manifest.id == "extrude"
-                && self.manifest.version == "1.2.0"
+                && self.manifest.version == "1.3.0"
                 && self.hash
                     == source_hash(
                         &[
@@ -55,10 +77,10 @@ impl Plugin {
                         .concat(),
                     ))
             || (feature.plugin == "revolve"
-                && feature.plugin_version == "1.0.0"
-                && feature.plugin_hash == "967fd7d645e4df99"
+                && ((feature.plugin_version == "1.0.0" && feature.plugin_hash == "967fd7d645e4df99")
+                    || (feature.plugin_version == "1.1.0" && feature.plugin_hash == "50aaf7062e8e6eca"))
                 && self.manifest.id == "revolve"
-                && self.manifest.version == "1.1.0"
+                && self.manifest.version == "1.2.0"
                 && self.hash
                     == source_hash(
                         &[

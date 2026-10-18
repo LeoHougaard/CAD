@@ -1,25 +1,35 @@
 {
   "id": "extrude",
   "name": "Extrude",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "category": "feature",
   "editor": "",
   "script": "extrude.rhai",
   "fields": [
+    {"key":"legacy_profile_source","label":"Legacy profile source","kind":"text","default":"","hidden":true},
+    {
+      "key": "profiles",
+      "label": "Faces and sketch regions",
+      "kind": "profiles",
+      "default": null
+    },
     {
       "key": "profile_face",
+      "hidden": true,
       "label": "Planar face",
       "kind": "profile_face",
       "default": null
     },
     {
       "key": "sketch",
+      "hidden": true,
       "label": "Sketch",
       "kind": "sketch",
       "default": ""
     },
     {
       "key": "regions",
+      "hidden": true,
       "label": "Faces and sketch regions",
       "kind": "regions",
       "default": null

@@ -107,7 +107,7 @@ fn native_crossing_axis_semicircle_is_rejected_without_changing_earlier_exact_pa
             e.geometry
                 .anchors
                 .iter()
-                .all(|(k, _)| !k.starts_with(&format!("{rev}:")))
+                .all(|(k, _, _)| !k.starts_with(&format!("{rev}:")))
         );
     }
 }
