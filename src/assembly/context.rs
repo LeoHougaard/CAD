@@ -84,6 +84,36 @@ impl Context {
         }
         Ok(())
     }
+    fn validate_binding_ownership(
+        &self,
+        document: &Document,
+        replacing: Option<&ContextBinding>,
+    ) -> Result<()> {
+        for binding in &self.bindings {
+            if replacing.is_some_and(|b| b.feature == binding.feature && b.kind == binding.kind) {
+                continue;
+            }
+            let reference = document
+                .features
+                .iter()
+                .find(|f| f.id == binding.feature)
+                .and_then(|f| f.params.get("context_ref"));
+            let expected = json!({"context":self.id,"instance":binding.instance,"face":binding.face,"kind":binding.kind});
+            if reference.is_none_or(|reference| {
+                ["context", "instance", "face", "kind"]
+                    .iter()
+                    .any(|key| reference.get(*key) != expected.get(*key))
+                    || reference.get("offset").and_then(serde_json::Value::as_f64)
+                        != Some(binding.offset)
+            }) {
+                return Err(format!(
+                    "Feature {} reference no longer belongs to context {}; it was detached or rebound",
+                    binding.feature, self.id
+                ));
+            }
+        }
+        Ok(())
+    }
     pub fn is_stale(&self, assembly: &AssemblyDocument) -> bool {
         self.assembly_revision != state_revision(assembly).unwrap_or_default()
     }
@@ -227,6 +257,7 @@ impl AssemblyRuntime {
         document: &mut Document,
         binding: ContextBinding,
     ) -> Result<()> {
+        context.validate_binding_ownership(document, Some(&binding))?;
         let mut candidate = context.clone();
         candidate
             .bindings
@@ -251,27 +282,7 @@ impl AssemblyRuntime {
             .iter()
             .find(|s| s.id == old.primary_source)
             .ok_or("Missing context primary source")?;
-        for binding in &old.bindings {
-            let reference = primary
-                .document
-                .features
-                .iter()
-                .find(|f| f.id == binding.feature)
-                .and_then(|f| f.params.get("context_ref"));
-            let expected = json!({"context":old.id,"instance":binding.instance,"face":binding.face,"kind":binding.kind});
-            if reference.is_none_or(|reference| {
-                ["context", "instance", "face", "kind"]
-                    .iter()
-                    .any(|key| reference.get(*key) != expected.get(*key))
-                    || reference.get("offset").and_then(serde_json::Value::as_f64)
-                        != Some(binding.offset)
-            }) {
-                return Err(format!(
-                    "Feature {} reference no longer belongs to context {}; it was detached or rebound",
-                    binding.feature, old.id
-                ));
-            }
-        }
+        old.validate_binding_ownership(&primary.document, None)?;
         let mut context = self.capture_context(document, &old.primary_instance)?;
         context.id = old.id;
         context.name = old.name;

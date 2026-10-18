@@ -2932,6 +2932,9 @@ impl CadApp {
     }
 
     fn open_settings(&mut self) {
+        if self.settings_open {
+            return;
+        }
         self.settings.shaded_edges = self.shaded_edges;
         self.settings.tree_open = self.tree_open;
         self.settings.space_mouse.enabled = self.space_mouse.options.enabled;

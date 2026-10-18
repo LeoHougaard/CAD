@@ -550,12 +550,33 @@ fn updating_old_context_cannot_restore_detached_or_rebound_feature_references() 
     let mut newer = runtime.capture_context(&document, "instance0").unwrap();
     let mut part = document.sources[0].document.clone();
     runtime
-        .bind_context(&mut newer, &mut part, binding)
+        .bind_context(&mut newer, &mut part, binding.clone())
         .unwrap();
     runtime
         .update_source(&mut document, "source", part)
         .unwrap();
     document.contexts.push(newer);
+    let mut old = document.contexts[0].clone();
+    let old_before = old.clone();
+    let mut part = document.sources[0].document.clone();
+    let part_before = part.clone();
+    let error = runtime
+        .bind_context(
+            &mut old,
+            &mut part,
+            ContextBinding {
+                feature: "f1".into(),
+                kind: BindingKind::SketchPlane,
+                ..binding.clone()
+            },
+        )
+        .unwrap_err();
+    assert!(error.contains("no longer belongs"), "{error}");
+    assert_eq!(old, old_before);
+    assert_eq!(part, part_before);
+    // Explicitly rebinding this same feature is allowed.
+    runtime.bind_context(&mut old, &mut part, binding).unwrap();
+    assert_eq!(part.features[1].params["context_ref"]["context"], id);
     let before = document.clone();
     let error = runtime.update_context(&mut document, &id).unwrap_err();
     assert!(error.contains("no longer belongs"), "{error}");
