@@ -246,6 +246,32 @@ impl AssemblyRuntime {
             .find(|c| c.id == id)
             .ok_or("Missing assembly context")?
             .clone();
+        let primary = document
+            .sources
+            .iter()
+            .find(|s| s.id == old.primary_source)
+            .ok_or("Missing context primary source")?;
+        for binding in &old.bindings {
+            let reference = primary
+                .document
+                .features
+                .iter()
+                .find(|f| f.id == binding.feature)
+                .and_then(|f| f.params.get("context_ref"));
+            let expected = json!({"context":old.id,"instance":binding.instance,"face":binding.face,"kind":binding.kind});
+            if reference.is_none_or(|reference| {
+                ["context", "instance", "face", "kind"]
+                    .iter()
+                    .any(|key| reference.get(*key) != expected.get(*key))
+                    || reference.get("offset").and_then(serde_json::Value::as_f64)
+                        != Some(binding.offset)
+            }) {
+                return Err(format!(
+                    "Feature {} reference no longer belongs to context {}; it was detached or rebound",
+                    binding.feature, old.id
+                ));
+            }
+        }
         let mut context = self.capture_context(document, &old.primary_instance)?;
         context.id = old.id;
         context.name = old.name;

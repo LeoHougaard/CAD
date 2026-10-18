@@ -128,6 +128,18 @@ struct FileDialog {
     filename: String,
     error: Option<String>,
 }
+impl FileDialog {
+    fn target_path(&self) -> PathBuf {
+        let mut path = self.directory.join(self.filename.trim());
+        if path.extension().is_none() {
+            path.set_extension(match &self.action {
+                FileAction::Export(format) => format.as_str(),
+                _ => "cadpart",
+            });
+        }
+        path
+    }
+}
 
 pub struct CadApp {
     assembly_workspace: Option<crate::assembly_ui::AssemblyUi>,
@@ -456,6 +468,7 @@ impl CadApp {
             && edit.sketch.is_some()
         {
             let before = edit.feature.params.clone();
+            if let Some(params)=edit.feature.params.as_object_mut(){params.remove("context_plane");params.remove("context_ref");}
             edit.feature.params["plane"] = json!(name);
             edit.feature.params["support"] = json!("");
             if edit.feature.params != before {
@@ -2386,13 +2399,14 @@ impl CadApp {
                         }
                     });
                     ui.separator();
-                    self.context_reference_controls(ui, &edit);
+                    changed |= self.context_reference_controls(ui, &mut edit);
                     if let Some(m) = &manifest {
                         egui::ScrollArea::vertical()
                             .id_salt("feature_properties")
                             .max_height((ui.available_height() - 70.).max(150.))
                             .show(ui, |ui| {
                                 for field in &m.fields {
+                                    if (edit.feature.params.get("context_plane").is_some_and(|v|!v.is_null()) && matches!(field.key.as_str(),"plane"|"support")) || (edit.feature.params.get("context_up_to").is_some_and(|v|!v.is_null()) && matches!(field.key.as_str(),"depth"|"symmetric")) {continue;}
                                     if field.kind == "support"
                                         && edit
                                             .feature
@@ -2695,7 +2709,10 @@ impl CadApp {
                             if hit.plane.is_some()
                                 && let Some(edit) = &mut self.editor
                             {
+                                let before=edit.feature.params.clone();
+                                if let Some(params)=edit.feature.params.as_object_mut(){params.remove("context_plane");params.remove("context_ref");}
                                 edit.feature.params["support"] = json!(hit.face);
+                                if edit.feature.params!=before {edit.undo.push(before);edit.redo.clear();edit.changed=true;}
                                 self.choosing_plane = false;
                                 self.align_when_ready = true;
                                 self.rebuild();
@@ -3153,7 +3170,7 @@ impl CadApp {
                                     let dir = path.is_dir();
                                     if !dir
                                         && matches!(dialog.action, FileAction::Open)
-                                        && path.extension().is_none_or(|e| e != "cadpart")
+                                        && path.extension().is_none_or(|e| !e.eq_ignore_ascii_case("cadpart"))
                                     {
                                         continue;
                                     }
@@ -3196,7 +3213,7 @@ impl CadApp {
                     if let Some(e) = &dialog.error {
                         ui.colored_label(RED, e);
                     }
-                    let exists = dialog.directory.join(&dialog.filename).is_file();
+                    let exists = dialog.target_path().is_file();
                     let label = match &dialog.action {
                         FileAction::Open => "Open",
                         FileAction::Save => {
@@ -3230,13 +3247,7 @@ impl CadApp {
                     });
                 });
             if accept {
-                let mut path = dialog.directory.join(dialog.filename.trim());
-                if path.extension().is_none() {
-                    path.set_extension(match &dialog.action {
-                        FileAction::Export(f) => f.as_str(),
-                        _ => "cadpart",
-                    });
-                }
+                let path = dialog.target_path();
                 let result = match &dialog.action {
                     FileAction::Open => {
                         Document::load(&path).map(|d| self.queue_load(d, Some(path.clone())))
@@ -3835,6 +3846,21 @@ fn parameter_ui(
 #[cfg(test)]
 mod save_tests {
     use super::*;
+    #[test]
+    fn extensionless_save_and_export_names_detect_the_existing_destination() {
+        let directory = PathBuf::from("output").join(format!("dialog-target-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        for (action, filename, extension) in [
+            (FileAction::Save, " existing-part ", "cadpart"),
+            (FileAction::Export("step".into()), "existing-part", "step"),
+        ] {
+            let destination = directory.join(format!("existing-part.{extension}"));
+            std::fs::write(&destination, b"preserve this file").unwrap();
+            let dialog = FileDialog { action, directory: directory.clone(), directory_text: String::new(), filename: filename.into(), error: None };
+            assert_eq!(dialog.target_path(), destination);
+            assert!(dialog.target_path().is_file(), "The dialog must offer explicit replacement");
+        }
+    }
     #[test]
     fn desktop_save_preserves_an_external_edit_and_honors_the_shared_lock() {
         let dir = std::path::PathBuf::from("output")

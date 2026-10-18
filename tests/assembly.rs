@@ -520,3 +520,58 @@ fn circular_edge_mates_use_exact_axis_centers_and_survive_radius_edits() {
             .contains("circular edge")
     );
 }
+
+#[test]
+fn updating_old_context_cannot_restore_detached_or_rebound_feature_references() {
+    let r = registry();
+    let mut document = assembly(&r, 2);
+    document.instances[1].fixed = true;
+    document.instances[1].transform = Transform::translated([0., 0., 20.]);
+    let mut runtime = AssemblyRuntime::new(r);
+    let mut original = runtime.capture_context(&document, "instance0").unwrap();
+    let mut part = document.sources[0].document.clone();
+    let binding = ContextBinding {
+        feature: "f2".into(),
+        instance: "instance1".into(),
+        face: "f2:end".into(),
+        kind: BindingKind::ExtrudeUpToFace,
+        offset: 0.,
+    };
+    runtime
+        .bind_context(&mut original, &mut part, binding.clone())
+        .unwrap();
+    runtime
+        .update_source(&mut document, "source", part)
+        .unwrap();
+    let id = original.id.clone();
+    document.contexts.push(original);
+    let bound = document.clone();
+
+    let mut newer = runtime.capture_context(&document, "instance0").unwrap();
+    let mut part = document.sources[0].document.clone();
+    runtime
+        .bind_context(&mut newer, &mut part, binding)
+        .unwrap();
+    runtime
+        .update_source(&mut document, "source", part)
+        .unwrap();
+    document.contexts.push(newer);
+    let before = document.clone();
+    let error = runtime.update_context(&mut document, &id).unwrap_err();
+    assert!(error.contains("no longer belongs"), "{error}");
+    assert_eq!(document, before);
+
+    let mut document = bound;
+    let mut part = document.sources[0].document.clone();
+    let params = part.features[1].params.as_object_mut().unwrap();
+    params.remove("context_ref");
+    params.remove("context_up_to");
+    params.insert("depth".into(), json!("6"));
+    runtime
+        .update_source(&mut document, "source", part)
+        .unwrap();
+    let before = document.clone();
+    let error = runtime.update_context(&mut document, &id).unwrap_err();
+    assert!(error.contains("no longer belongs"), "{error}");
+    assert_eq!(document, before);
+}

@@ -27,7 +27,17 @@ Mate operations also have plugin packages in the `mate` category. Bundled packag
 
 A context binding identifies the context, source instance, stable face and edited feature. Sketch-plane bindings attach a sketch to an external planar face. Extrude bindings terminate an extrusion at a parallel external plane. These become real parametric feature inputs, saved as `context_plane` or `context_up_to`, together with their reference metadata. An up-to-face extrusion currently rejects a symmetric extrusion, a nonparallel target, or a target behind its direction.
 
-Editing an assembly source or moving an instance does not silently change a frozen reference. Update context captures the current assembly and rebuilds every bound primary feature. The new snapshot, primary source revision and resulting geometry commit together after validation. A missing face or failed rebuild preserves the previous snapshot and primary source. Saved Part Studios retain their frozen feature inputs and can rebuild independently of the assembly file.
+Editing an assembly source or moving an instance does not silently change a frozen reference. Update context captures the current assembly and rebuilds every bound primary feature. The new snapshot, primary source revision and resulting geometry commit together after validation. A missing face or failed rebuild preserves the previous snapshot and primary source. Updating an older context also rejects features that have since been detached or rebound, preserving their current ownership. Saved Part Studios retain their frozen feature inputs and can rebuild independently of the assembly file.
+
+## Desktop workflow
+
+Switch to Assembly in the header. Insert opens a Part Studio and places selected source parts as instances. Select an instance to change its placement or fixed state. Select two planar faces or circular rims, press M, choose an installed mate operation and apply it. J shows the mate connector frames. Ordinary clicks add or remove selections; selection filters remain available above the viewport.
+
+Edit in context opens the selected instance's source against translucent frozen surroundings. Reentering a saved context reuses its snapshot. New context captures a separate snapshot. Sketch plane and up-to-face controls can pick a reference face in the surrounding geometry. Bound features show the referenced instance instead of inactive ordinary plane or depth controls. Detach reference preserves the current sketch plane or converts the current up-to extent into a numeric depth. Choose new plane replaces a detached frozen sketch plane only after a new plane is selected.
+
+Save during context editing commits the edited source snapshot and returns to the assembly. Cancel restores the previous Part Studio. Update sources and Update context are separate explicit actions. The original standalone Part Studio is preserved across the edit.
+
+The assembly toolbar's Export menu lists installed exporters. STEP preserves exact placed solids; STL exports their display tessellation. File dialogs add the selected format's extension before checking whether the destination exists, and require an explicit replacement action for an existing file. Export runs on the worker and preserves the document if it fails.
 
 ## Agent interface
 

@@ -7,7 +7,7 @@ use crate::{
     },
     engine::Scene,
     model::{Document, Result},
-    plugins::Registry,
+    plugins::{Numbers, Registry},
     render::{self, Camera, Renderer},
     selection::{Filter, Selection, Target},
     settings::Settings,
@@ -43,6 +43,7 @@ enum Work {
     Bind(Context, Document, ContextBinding),
     Commit(AssemblyDocument, Context, Document),
     UpdateContext(AssemblyDocument, String),
+    Export(AssemblyDocument, String, PathBuf),
 }
 struct Job {
     serial: u64,
@@ -69,6 +70,7 @@ enum Payload {
     Ready(Ready),
     Context(Context, Document, Arc<Scene>),
     Bound(Context, Document),
+    Exported(PathBuf),
 }
 struct Reply {
     serial: u64,
@@ -221,6 +223,12 @@ fn ready(
 fn execute(runtime: &mut AssemblyRuntime, work: Work) -> Result<Payload> {
     match work {
         Work::Evaluate(document) => ready(runtime, document, false),
+        Work::Export(document, format, path) => {
+            runtime
+                .evaluate(&document)?
+                .export(&document, &format, &path)?;
+            Ok(Payload::Exported(path))
+        }
         Work::LoadSource(mut document, path) => {
             let source = Document::load(&path)?;
             let id = document.allocate_id("source");
@@ -313,6 +321,7 @@ enum FileKind {
     Open,
     Save,
     Insert,
+    Export,
 }
 struct FileDialog {
     kind: FileKind,
@@ -320,6 +329,23 @@ struct FileDialog {
     directory_text: String,
     filename: String,
     error: Option<String>,
+    format: String,
+}
+impl FileDialog {
+    fn extension(&self) -> &str {
+        match self.kind {
+            FileKind::Insert => "cadpart",
+            FileKind::Export => &self.format,
+            _ => "cadasm",
+        }
+    }
+    fn target_path(&self) -> PathBuf {
+        let mut path = self.directory.join(self.filename.trim());
+        if path.extension().is_none() {
+            path.set_extension(self.extension());
+        }
+        path
+    }
 }
 #[derive(Clone)]
 struct MateEditor {
@@ -363,6 +389,7 @@ pub struct AssemblyUi {
     show_mates: bool,
     poses: BTreeMap<String, Transform>,
     applying_mate: Option<MateEditor>,
+    exported: Option<PathBuf>,
 }
 impl AssemblyUi {
     pub fn new(ctx: &egui::Context, registry: Arc<Registry>) -> Self {
@@ -402,6 +429,7 @@ impl AssemblyUi {
             show_mates: false,
             poses: BTreeMap::new(),
             applying_mate: None,
+            exported: None,
         }
     }
     pub fn dirty(&self) -> bool {
@@ -488,6 +516,10 @@ impl AssemblyUi {
                         document,
                         ghosts,
                     })
+                }
+                Ok(Payload::Exported(path)) => {
+                    self.exported = Some(path);
+                    self.error = None;
                 }
                 Ok(Payload::Bound(context, document)) => {
                     actions.push(Action::BoundContext { context, document })
@@ -577,8 +609,34 @@ impl AssemblyUi {
                 String::new()
             },
             kind,
+            format: String::new(),
             error: None,
         });
+    }
+    fn exporter(&mut self, id: &str) {
+        let result = (|| {
+            let feature = self.registry.create(id, &mut Document::default())?;
+            let plan = self
+                .registry
+                .evaluate(&feature, &Numbers::new(&BTreeMap::new())?)?;
+            if plan["op"].as_str() != Some("export") {
+                return Err("Exporter must return an export operation".into());
+            }
+            plan["format"]
+                .as_str()
+                .filter(|s| s.chars().all(|c| c.is_ascii_alphanumeric()) && !s.is_empty())
+                .map(str::to_owned)
+                .ok_or_else(|| "Exporter did not declare a format".into())
+        })();
+        match result {
+            Ok(format) => {
+                self.file(FileKind::Export);
+                let dialog = self.files.as_mut().unwrap();
+                dialog.format = format;
+                dialog.filename = format!("{}.{}", self.document.name, dialog.format);
+            }
+            Err(error) => self.error = Some(error),
+        }
     }
     fn save(&mut self) {
         if self.busy {
@@ -835,7 +893,7 @@ impl AssemblyUi {
                     ));
                     if ui
                         .button("Search")
-                        .on_hover_text("Search commands, instances and mates · S")
+                        .on_hover_text("Search commands, instances and mates \u{00b7} S")
                         .clicked()
                     {
                         self.search_open = true;
@@ -901,6 +959,27 @@ impl AssemblyUi {
                         if ui.button("Save as").clicked() {
                             self.file(FileKind::Save);
                         }
+                        ui.menu_button("Export", |ui| {
+                            let exporters: Vec<_> = self
+                                .registry
+                                .plugins
+                                .values()
+                                .filter(|p| p.manifest.category == "exporter")
+                                .map(|p| (p.manifest.id.clone(), p.manifest.name.clone()))
+                                .collect();
+                            for (id, name) in exporters {
+                                if ui
+                                    .add_enabled(
+                                        !self.document.instances.is_empty(),
+                                        egui::Button::new(name),
+                                    )
+                                    .clicked()
+                                {
+                                    self.exporter(&id);
+                                    ui.close();
+                                }
+                            }
+                        });
                         if ui
                             .add_enabled(!self.past.is_empty(), egui::Button::new("Undo"))
                             .clicked()
@@ -918,8 +997,21 @@ impl AssemblyUi {
                 if let Some(error) = &self.error {
                     ui.colored_label(Color32::from_rgb(220, 137, 150), error);
                 }
+                if let Some(path) = self.exported.clone() {
+                    ui.horizontal(|ui| {
+                        ui.weak(format!(
+                            "Exported {}",
+                            path.file_name().unwrap_or_default().to_string_lossy()
+                        ));
+                        if ui.small_button("Dismiss").clicked() {
+                            self.exported = None;
+                        }
+                    });
+                }
             });
-        self.sidebar(ctx);
+        if host.settings.tree_open {
+            self.sidebar(ctx);
+        }
         if let Some(value) = self.canvas(ctx, &mut host) {
             actions.push(Action::VisibleEdges(value));
         }
@@ -1147,7 +1239,11 @@ impl AssemblyUi {
                                 format!(
                                     "{}{}",
                                     instance.name,
-                                    if instance.fixed { " · Fixed" } else { "" }
+                                    if instance.fixed {
+                                        " \u{00b7} Fixed"
+                                    } else {
+                                        ""
+                                    }
                                 ),
                             )
                             .clicked()
@@ -1169,7 +1265,7 @@ impl AssemblyUi {
                             "{:?}{}",
                             mate.kind,
                             if mate.suppressed {
-                                " · Suppressed"
+                                " \u{00b7} Suppressed"
                             } else {
                                 ""
                             }
@@ -1206,7 +1302,7 @@ impl AssemblyUi {
                             let q = glam::DQuat::from_array(instance.transform.rotation);
                             let (x, y, z) = q.to_euler(glam::EulerRot::XYZEx);
                             let mut degrees = [x.to_degrees(), y.to_degrees(), z.to_degrees()];
-                            if coordinates(ui, "Rotation °", &mut degrees) {
+                            if coordinates(ui, "Rotation deg", &mut degrees) {
                                 let mut transform = Transform::from_euler_degrees(degrees);
                                 transform.translation = instance.transform.translation;
                                 instance.transform = transform;
@@ -1226,7 +1322,7 @@ impl AssemblyUi {
                             "{}{}",
                             context.name,
                             if self.stale_contexts.contains(&context.id) {
-                                " · Update available"
+                                " \u{00b7} Update available"
                             } else {
                                 ""
                             }
@@ -1690,7 +1786,7 @@ impl AssemblyUi {
                     }
                 }
                 ui.label(format!(
-                    "{} → {}",
+                    "{} / {}",
                     editor.mate.a.instance, editor.mate.b.instance
                 ));
                 coordinates(ui, "Connector offset", &mut editor.mate.offset.translation);
@@ -1714,7 +1810,7 @@ impl AssemblyUi {
                     if angular[axis] {
                         motion_axis(
                             ui,
-                            format!("{} °", ["X", "Y", "Z"][axis]),
+                            format!("{} deg", ["X", "Y", "Z"][axis]),
                             &mut editor.mate.rotation_deg[axis],
                             &mut editor.mate.rotation_limits[axis],
                         );
@@ -1752,6 +1848,7 @@ impl AssemblyUi {
             FileKind::Open => "Open assembly",
             FileKind::Save => "Save assembly",
             FileKind::Insert => "Open Part Studio",
+            FileKind::Export => "Export assembly",
         })
         .id(egui::Id::new("assembly_files"))
         .open(&mut open)
@@ -1789,12 +1886,11 @@ impl AssemblyUi {
                         });
                         for path in paths {
                             let directory = path.is_dir();
-                            let extension = if matches!(dialog.kind, FileKind::Insert) {
-                                "cadpart"
-                            } else {
-                                "cadasm"
-                            };
-                            if !directory && path.extension().is_none_or(|e| e != extension) {
+                            if !directory
+                                && path
+                                    .extension()
+                                    .is_none_or(|e| !e.eq_ignore_ascii_case(dialog.extension()))
+                            {
                                 continue;
                             }
                             let name = path.file_name().unwrap_or_default().to_string_lossy();
@@ -1809,7 +1905,11 @@ impl AssemblyUi {
                                     dialog.filename = name.into_owned();
                                 }
                             }
-                            if response.double_clicked() && !directory && !self.busy {
+                            if response.double_clicked()
+                                && !directory
+                                && !self.busy
+                                && matches!(dialog.kind, FileKind::Open | FileKind::Insert)
+                            {
                                 accept = true;
                             }
                         }
@@ -1823,18 +1923,22 @@ impl AssemblyUi {
             if let Some(error) = &dialog.error {
                 ui.colored_label(Color32::from_rgb(220, 137, 150), error);
             }
-            let exists = dialog.directory.join(dialog.filename.trim()).exists();
+            let exists = dialog.target_path().exists();
             ui.horizontal(|ui| {
                 if ui
                     .add_enabled(
                         !dialog.filename.trim().is_empty() && !self.busy,
-                        egui::Button::new(if matches!(dialog.kind, FileKind::Save) && exists {
-                            "Replace existing file"
-                        } else if matches!(dialog.kind, FileKind::Save) {
-                            "Save"
-                        } else {
-                            "Open"
-                        }),
+                        egui::Button::new(
+                            if matches!(dialog.kind, FileKind::Save | FileKind::Export) && exists {
+                                "Replace existing file"
+                            } else if matches!(dialog.kind, FileKind::Save) {
+                                "Save"
+                            } else if matches!(dialog.kind, FileKind::Export) {
+                                "Export"
+                            } else {
+                                "Open"
+                            },
+                        ),
                     )
                     .clicked()
                 {
@@ -1844,14 +1948,7 @@ impl AssemblyUi {
             });
         });
         if accept {
-            let mut path = dialog.directory.join(dialog.filename.trim());
-            if path.extension().is_none() {
-                path.set_extension(if matches!(dialog.kind, FileKind::Insert) {
-                    "cadpart"
-                } else {
-                    "cadasm"
-                });
-            }
+            let path = dialog.target_path();
             let result = match dialog.kind {
                 FileKind::Open => {
                     self.open(path);
@@ -1865,6 +1962,13 @@ impl AssemblyUi {
                     Ok(())
                 }
                 FileKind::Save => self.save_as(path),
+                FileKind::Export => {
+                    self.send(
+                        Work::Export(self.document.clone(), dialog.format.clone(), path),
+                        None,
+                    );
+                    Ok(())
+                }
             };
             match result {
                 Ok(()) => open = false,
@@ -1932,7 +2036,7 @@ impl AssemblyUi {
                 for mate in &self.document.mates {
                     if format!("{:?}", mate.kind).to_lowercase().contains(&query)
                         && ui
-                            .button(format!("{:?} · {}", mate.kind, mate.id))
+                            .button(format!("{:?} \u{00b7} {}", mate.kind, mate.id))
                             .clicked()
                     {
                         self.mate_editor = Some(MateEditor {
@@ -1980,8 +2084,9 @@ fn pick_target(
         let edge = render::pick_edges(scene, camera, pos, rect, hidden)
             .into_iter()
             .find(|edge| {
-                face.as_ref()
-                    .is_none_or(|face| edge.distance <= face.distance + camera.span * 1e-4)
+                face.as_ref().is_none_or(|face| {
+                    edge.distance <= face.distance + camera.span / rect.height() * 5.
+                })
             });
         if let Some(edge) = edge {
             return Some(Target::Edge {
@@ -2138,6 +2243,131 @@ mod tests {
             pick_target(&scene, &camera, inside, rect, Filter::All, &hidden),
             Some(Target::Face { .. })
         ));
+    }
+    #[test]
+    fn oblique_circular_rims_use_the_same_five_pixel_depth_tolerance_as_part_studio() {
+        let registry = Arc::new(Registry::builtin().unwrap());
+        let mut doc = fixture(&registry);
+        doc.instances.truncate(1);
+        let mut sketch = Sketch::default();
+        sketch.add_circle([0., 0.], 10.);
+        sketch.add_circle([0., 0.], 3.);
+        doc.sources[0].document.features[0].set_sketch(&sketch);
+        doc.sources[0].refresh_revision().unwrap();
+        let mut runtime = AssemblyRuntime::new(registry);
+        let scene = runtime.evaluate(&doc).unwrap().scene;
+        let rect = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800., 600.));
+        let mut camera = Camera::default();
+        camera.fit_with_rect(&scene, rect);
+        let hidden = BTreeSet::new();
+        let mut samples = 0;
+        for edge in scene
+            .meshes
+            .iter()
+            .flat_map(|m| &m.edges)
+            .filter(|e| !e.seam)
+        {
+            for pair in edge.points.windows(2) {
+                let point = std::array::from_fn(|n| f64::from((pair[0][n] + pair[1][n]) * 0.5));
+                let projected = camera.project(point, rect);
+                for delta in [
+                    egui::vec2(2., 0.),
+                    egui::vec2(-2., 0.),
+                    egui::vec2(0., 2.),
+                    egui::vec2(0., -2.),
+                ] {
+                    let pos = projected + delta;
+                    let Some(face) = render::pick(&scene, &camera, pos, rect, &hidden) else {
+                        continue;
+                    };
+                    let edges = render::pick_edges(&scene, &camera, pos, rect, &hidden);
+                    if edges.iter().any(|e| {
+                        e.distance > face.distance + camera.span * 1e-4
+                            && e.distance <= face.distance + camera.span / rect.height() * 5.
+                    }) {
+                        assert!(matches!(
+                            pick_target(&scene, &camera, pos, rect, Filter::All, &hidden),
+                            Some(Target::Edge { .. })
+                        ));
+                        samples += 1;
+                    }
+                }
+            }
+        }
+        assert!(
+            samples > 0,
+            "Oblique circular rim must exercise screen-space depth tolerance"
+        );
+    }
+    #[test]
+    fn file_dialog_normalizes_default_extension_before_replacement_check() {
+        let mut dialog = FileDialog {
+            kind: FileKind::Save,
+            directory: std::env::temp_dir(),
+            directory_text: String::new(),
+            filename: "assembly".into(),
+            error: None,
+            format: String::new(),
+        };
+        assert_eq!(
+            dialog.target_path(),
+            std::env::temp_dir().join("assembly.cadasm")
+        );
+        dialog.kind = FileKind::Export;
+        dialog.format = "step".into();
+        assert_eq!(
+            dialog.target_path(),
+            std::env::temp_dir().join("assembly.step")
+        );
+        dialog.filename = "assembly.STEP".into();
+        assert_eq!(
+            dialog.target_path(),
+            std::env::temp_dir().join("assembly.STEP")
+        );
+    }
+    #[test]
+    fn desktop_export_worker_writes_exact_instances_and_preserves_workspace_on_error() {
+        let registry = Arc::new(Registry::builtin().unwrap());
+        let mut runtime = AssemblyRuntime::new(registry.clone());
+        let doc = fixture(&registry);
+        let before = doc.clone();
+        let directory = std::env::temp_dir().join(format!(
+            "cad-ui-export-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("assembly.step");
+        let Payload::Exported(exported) = execute(
+            &mut runtime,
+            Work::Export(doc.clone(), "step".into(), path.clone()),
+        )
+        .unwrap() else {
+            panic!()
+        };
+        assert_eq!(exported, path);
+        let step = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(step.matches("MANIFOLD_SOLID_BREP").count(), 2);
+        assert!(
+            execute(
+                &mut runtime,
+                Work::Export(
+                    doc.clone(),
+                    "invalid-format".into(),
+                    directory.join("bad.file")
+                )
+            )
+            .is_err()
+        );
+        assert_eq!(doc, before);
+        assert!(!directory.join("bad.file").exists());
+        for entry in std::fs::read_dir(&directory).unwrap() {
+            std::fs::remove_file(entry.unwrap().path()).unwrap();
+        }
+        std::fs::remove_dir(directory).unwrap();
     }
     #[test]
     fn context_reentry_preserves_frozen_external_pose_until_explicit_new_context() {

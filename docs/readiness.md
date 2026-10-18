@@ -23,6 +23,10 @@ The reference baseline is commit `6ff8ac2`. Its Windows and Linux CI passed. Lat
 | View fitting | Selected-region preview cropped the rest of the sketch | Fit the preview and the full input sketch together | Projection regression and native Pixel check passed |
 | Region classification | Horizontal ray through a circle intersection misclassified a cell | Consistent half-open endpoint rule | Dense independent region-classification regressions passed |
 | Resource use | Whole-program LTO linked every optimized test harness | Disable LTO for tests only, retain shipping release profile | Baseline CI passed both operating systems |
+| Circular rim picking | Oblique rims lost to the face under the pointer | Match Part Studio's screen-space depth tolerance | Regression covers displaced rim clicks; final native verification recorded separately |
+| In-context feature controls | Bound extents still showed inactive ordinary depth inputs | Show reference status and a geometry-preserving detach action | Plane and extent detach regression; final native verification recorded separately |
+| Export file replacement | Extensionless names checked the wrong destination | Normalize the target path before displaying replacement controls | Part Studio and Assembly file-dialog regressions |
+| Context ownership | Updating an older context overwrote a newer binding or restored a detached reference | Reject an update unless each feature still belongs to that saved binding | Regression checks both cases and an unchanged assembly on rejection |
 
 Pending entries are updated from results, not from a successful compile.
 

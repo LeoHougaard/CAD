@@ -359,9 +359,68 @@ impl CadApp {
             .as_ref()
             .is_some_and(|s| s.picking.is_some())
     }
-    pub(super) fn context_reference_controls(&mut self, ui: &mut egui::Ui, edit: &Editor) {
+    pub(super) fn context_reference_controls(
+        &mut self,
+        ui: &mut egui::Ui,
+        edit: &mut Editor,
+    ) -> bool {
+        let mut changed = false;
+        let bound = edit
+            .feature
+            .params
+            .get("context_ref")
+            .filter(|v| !v.is_null())
+            .cloned();
+        let frozen_plane = edit
+            .feature
+            .params
+            .get("context_plane")
+            .is_some_and(|v| !v.is_null());
+        let extent = edit
+            .feature
+            .params
+            .get("context_up_to")
+            .is_some_and(|v| !v.is_null());
+        if bound.is_some() || frozen_plane || extent {
+            let name = bound
+                .as_ref()
+                .and_then(|r| r["instance"].as_str())
+                .map(|id| {
+                    self.assembly_context
+                        .as_ref()
+                        .and_then(|s| s.context.instances.iter().find(|i| i.id == id))
+                        .map(|i| i.name.as_str())
+                        .unwrap_or(id)
+                });
+            ui.label(match (extent, name) {
+                (true, Some(name)) => format!("Up to face: {name}"),
+                (true, None) => "Frozen up-to face".into(),
+                (false, Some(name)) => format!("Plane on: {name}"),
+                _ => "Frozen plane".into(),
+            });
+            if bound.is_some() || extent {
+                if ui
+                    .small_button("Detach reference")
+                    .on_hover_text("Keep the current geometry and remove the assembly dependency")
+                    .clicked()
+                {
+                    let plane = edit.feature.params["sketch"]
+                        .as_str()
+                        .and_then(|id| self.scene.sketches.get(id))
+                        .map(|s| &s.plane);
+                    match detach_reference(&mut edit.feature.params, plane) {
+                        Ok(()) => changed = true,
+                        Err(error) => self.notice = error,
+                    }
+                }
+            } else if frozen_plane && ui.small_button("Choose new plane").clicked() {
+                self.choosing_plane = true;
+                self.show_planes = true;
+            }
+            ui.separator();
+        }
         let Some(session) = &mut self.assembly_context else {
-            return;
+            return changed;
         };
         let kind = if edit.sketch.is_some() {
             Some(BindingKind::SketchPlane)
@@ -371,7 +430,6 @@ impl CadApp {
             None
         };
         if let Some(kind) = kind {
-            ui.separator();
             let busy = self
                 .assembly_workspace
                 .as_ref()
@@ -400,6 +458,7 @@ impl CadApp {
                 }
             }
         }
+        changed
     }
     pub(super) fn pick_context_reference(&mut self, pos: egui::Pos2, rect: Rect) {
         let Some(session) = &self.assembly_context else {
@@ -480,5 +539,47 @@ impl CadApp {
             .as_ref()
             .map(|s| s.ghost_parts.clone())
             .unwrap_or_default()
+    }
+}
+
+fn detach_reference(params: &mut Value, sketch_plane: Option<&Plane>) -> crate::model::Result<()> {
+    if let Some(value) = params.get("context_up_to").filter(|v| !v.is_null()) {
+        let target: Plane = serde_json::from_value(value.clone()).map_err(|e| e.to_string())?;
+        let sketch = sketch_plane.ok_or("Rebuild this feature before detaching its up-to face")?;
+        let depth = (0..3)
+            .map(|n| (target.origin[n] - sketch.origin[n]) * sketch.normal[n])
+            .sum::<f64>()
+            * if params["reverse"].as_bool().unwrap_or(false) {
+                -1.
+            } else {
+                1.
+            };
+        if !depth.is_finite() || depth <= 1e-7 {
+            return Err(
+                "The current up-to extent cannot be preserved; repair the feature first".into(),
+            );
+        }
+        params["depth"] = json!(depth.to_string());
+    }
+    if let Some(object) = params.as_object_mut() {
+        object.remove("context_ref");
+        object.remove("context_up_to");
+    }
+    Ok(())
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn detach_preserves_explicit_sketch_plane_and_converts_extent_to_current_depth() {
+        let plane = Plane::named("Top", 23.);
+        let mut params = json!({"context_plane":plane,"context_ref":{"context":"c"}});
+        detach_reference(&mut params, None).unwrap();
+        assert_eq!(params["context_plane"], json!(plane));
+        assert!(params.get("context_ref").is_none());
+        let mut params = json!({"depth":"5","context_up_to":Plane::named("Top",23.),"context_ref":{"context":"c"}});
+        detach_reference(&mut params, Some(&Plane::named("Top", 3.))).unwrap();
+        assert_eq!(params["depth"], "20");
+        assert!(params.get("context_up_to").is_none());
     }
 }
