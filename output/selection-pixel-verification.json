@@ -1,0 +1,75 @@
+{
+  "scope": "Selection, Onshape shortcuts, sketch regions, and navigation baseline before the subsequent settings/assembly work",
+  "platform": "Pixel native Debian ARM64 Linux desktop, using the existing pixel-gpu launcher",
+  "display_pixels": [1080, 2286],
+  "source_fingerprint_sha256": "05f3b61f790fd2a178fac65aa793e30d3c98897a4c33dd7ad67ab5107e6e2192",
+  "source_consistency": "Windows source and extracted Pixel source fingerprints matched before the final baseline build",
+  "binary_sha256": {
+    "cad": "016cfdb4e35652c5dedb8db8a43db5c27e7eabd5aaee99d835ba187dac2d399f",
+    "cad-agent": "49cdf1882ff10a2f18bb651d0a32141c98afd7f304d58ebbb028bb893e8d39af"
+  },
+  "tests": {
+    "initial_full_release_workspace": {"passed": 188, "failed": 0, "log": "selection-initial-pixel-tests.txt"},
+    "final_baseline_release_focused": {"passed": 59, "failed": 0, "log": "selection-final-pixel-tests.txt", "suites": ["lib", "agent_regions", "extrude_regions", "region_picking", "region_references"]}
+  },
+  "native_gui_verified": [
+    "Plain clicks accumulate faces; another click removes the target; Space clears",
+    "Faces, edges, and parts filters select the intended target types",
+    "Muted turquoise selection and purple hover remain distinct over a black viewport; count badge has a dark background",
+    "Filter labels remain on one line, including Sketch regions",
+    "S opens focused command search; typing fillet then Enter starts Fillet",
+    "Shift+1, Shift+5, and Shift+7 select Front, Top, and Isometric",
+    "N aligns a hovered planar solid face and repeats to its opposite normal",
+    "With no selection, N aligns a hovered read-only sketch and Y hides that sketch",
+    "Extrude editor opening and Fit include the complete input sketch, including unselected regions",
+    "Region checkboxes and viewport clicks add/remove individual regions; adjacent selected cells regenerate as one solid",
+    "Clearing regions disables Apply and Enter; selecting a region recovers the preview",
+    "Lens curved and vertical boundary edges are selectable; a rim Fillet of radius0.2 previews, applies, and saves",
+    "G draws a corner rectangle; R draws a center rectangle; C draws circles",
+    "Two circles select without modifiers; E adds Equal and reduces sketch DOF14 to13",
+    "D places a driving diameter2; both Equal circles update and DOF13 reduces to12",
+    "Shift+E finishes the sketch and opens Extrude with its four regions; Enter applies and Ctrl+S saves",
+    "Closing during an unsaved sketch edit shows the guard; Keep editing preserves the edit; Cancel reverts that temporary edit",
+    "The saved native-designed document stayed byte-identical after the close/keep/cancel test"
+  ],
+  "native_designed_document": {
+    "path": "selection-native-designed.cadpart",
+    "sha256": "0fa997329bc99421649c235b053ee2f3c0fbc80c78295f3a63a3736faa322d96",
+    "features": 2,
+    "parts": 4,
+    "sketch_degrees_of_freedom": 12,
+    "description": "Corner rectangle, center rectangle, two circles with Equal and diameter2, then depth10 Extrude"
+  },
+  "saved_lens_fillet_document": "selection-native-lens-fillet.cadpart",
+  "idle_resources": {
+    "document": "Reyes housing,29 features",
+    "elapsed_s": 10.00212196004577,
+    "app_cpu_s": 0.0,
+    "one_core_percent": 0.0,
+    "rss_kib": 122984,
+    "pss_kib": 112021,
+    "private_kib": 106304,
+    "swap_kib": 0,
+    "raw_report": "selection-pixel-resources.json",
+    "limits": "App process only. Shared graphics server is excluded. No displayed FPS or comparison with Onshape was measured."
+  },
+  "final_baseline_screenshots": [
+    "selection-multiple-faces.png",
+    "selection-hover-and-selected.png",
+    "selection-lens-edge.png",
+    "selection-lens-fillet.png",
+    "selection-lens-fillet-applied.png",
+    "selection-extrude-profile-fit.png",
+    "selection-extrude-regions.png",
+    "selection-extrude-empty.png",
+    "selection-normal-hover-sketch.png",
+    "selection-hide-hover-sketch.png",
+    "selection-housing-final.png"
+  ],
+  "limitations": [
+    "Physical SpaceMouse smoothness cannot be assessed through automated mouse input;9 deterministic timing and mapping tests passed",
+    "Linux SpaceMouse input remains unimplemented",
+    "Earlier sketch/drawing and guard screenshots use the previous brighter palette; final baseline palette is shown in final_baseline_screenshots",
+    "This report describes the frozen selection baseline, not subsequent settings, tutorial, or assembly changes"
+  ]
+}

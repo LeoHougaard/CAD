@@ -36,15 +36,19 @@ The arrow collapses the feature tree. The properties panel appears only while ed
 
 SpaceMouse support on Windows uses foreground Raw Input in object mode, with six-axis navigation, a dead zone, and a Fit button. Reports are integrated at their timestamps with a short exponential response, so motion does not depend on irregular redraw timing. Rotation uses the visible model's volume center when it fits, or the surface near the view center in a close-up. The View menu shows device detection and speed/reversal controls. Sketch editing keeps the camera aligned while allowing pan and zoom. The user confirmed the corrected axis mapping; the latest smoothing still needs physical feedback. Linux SpaceMouse input is not implemented yet.
 
+[Settings and search](docs/settings-and-search.md) provide local preferences and keyboard search across commands, history and parts. The toolbar shows installed tools directly, with overflow for narrow windows.
+
 Selection uses ordinary additive clicks in the tree, viewport and sketch. Choose faces, edges, parts or sketch regions from the compact Select menu. The grave accent key opens Select other for obscured geometry; press it again to cycle, Shift+grave to reverse, and Enter to select. Drag right to enclose geometry or left to select across it. Ctrl-drag removes box hits. Selected solids keep depth-tested turquoise highlights, while the hovered candidate is purple. The background and panels are nearly black.
 
 ## Current scope
 
 The initial solid tools include extrusion, revolve, sweep, ruled loft, fillet, chamfer, shell, linear part patterns, mirror, and translation. Fillet and chamfer accept selected edges or an explicit All edges choice. Pattern and mirror currently create separate parts. [Sweep and loft](docs/sweep-loft.md) documents their supported path/profile combinations and current limits.
 
-Sketches support lines, rectangles, circles, dimensions, construction geometry, coincidence, horizontal/vertical, parallel/perpendicular, equality, concentricity, line-circle tangency, and fixing geometry. Arcs, splines, trim/extend, offset, cross-sketch projection, advanced constraint diagnostics, assemblies, and Onshape FeatureScript are not implemented yet.
+Sketches support lines, rectangles, circles, dimensions, construction geometry, coincidence, horizontal/vertical, parallel/perpendicular, equality, concentricity, line-circle tangency, and fixing geometry. Arcs, splines, trim/extend, offset, cross-sketch projection, advanced constraint diagnostics, and Onshape FeatureScript are not implemented yet.
 
 Persistent face references cover generated extrusion planes. Curved faces and new blend faces are not stable sketch supports yet. Missing or ambiguous references report an error instead of choosing an arbitrary face. Complex blends and booleans can still fail. Earlier valid parts are preserved when a feature fails; exporting a failed model is blocked in the app.
+
+[Assemblies](docs/assemblies.md) use offline source snapshots, repeated part instances, six mate types, and explicit in-context references. Planar faces and analytic circular edges supply mate connectors. Sketch planes and parallel up-to-face extrusions can reference frozen external geometry. Context updates rebuild those relationships only when requested. General articulated loops, nested subassemblies, collision detection, and arbitrary up-to-surface extents remain unsupported.
 
 ## Feature packages
 
@@ -58,7 +62,7 @@ Scripts compose the available Rust kernel operations. Adding a kernel operation,
 
 `cad-agent` provides a local JSON interface to inspect solved geometry, preview edits, change dimensions and parameters, create separate designs, and export. Agents can edit separate files or submit guarded changes to the same document. Disjoint changes can merge; conflicting changes are rejected. Each request runs once and exits, with no background service.
 
-The desktop app shares the CLI's file lock and refuses to overwrite changes made since its last load or save. Ctrl+R reloads external edits. Save as preserves a separate copy of unsaved work. See [the agent API](docs/agent-api.md) for the protocol, concurrency rules, and validated Pixel workflow.
+The desktop app shares the CLI's file lock and refuses to overwrite changes made since its last load or save. Ctrl+R reloads external edits. Save as preserves a separate copy of unsaved work. `cad-assembly-agent` provides revision-guarded assembly edits, context updates and exact placed STEP exports. See [assemblies](docs/assemblies.md) and [the part agent API](docs/agent-api.md) for the protocol, concurrency rules, and validated Pixel workflow.
 
 ## Build and verify
 
@@ -73,11 +77,11 @@ cargo run --release --bin cad-check -- --bench
 
 The tests cover solved sketch geometry and degrees of freedom, analytic volumes, topology validation, upstream regeneration, missing references, bounded script execution, failed-feature transactions, interrupted writes, and save/reopen/export. `tools/verify_step.py` optionally checks exported test fixtures using Gmsh/Open CASCADE as an independent verifier. That verifier is a development tool and is not used or shipped by the app.
 
-[Tutorial verification](docs/tutorial-verification.md) records five source-based modeling cases and their adaptations. The largest tested housing has 29 history entries, 13 fully constrained sketches, and 75 faces. Six upstream size changes, rollback, suppression, reordering, save/reopen, and independent STEP checks are covered. Some source finishing operations remain blocked, including an ambiguous fillet edge reference and a perpendicular-cylinder boolean. These failures have saved reproductions; the application rejects them rather than accepting approximate solids.
+[Ten practice projects](docs/end-user-projects.md) cover dimensioned brackets, a bearing block, a pulley, an enclosure, a cable comb, mirrored clevises, patterned standoffs, a swept handle, a reducer and a hollow lofted duct. Each is checked after an upstream edit and save/reopen. All twenty baseline/edited STEP exports passed independent Open CASCADE volume and bounds checks. Three failed feature orders have saved reproductions and explicit rejection tests.
 
-The previous release suite passed 152 checks on both Windows and native ARM64 Linux. Seventeen sweep/loft STEP fixtures also passed independent Open CASCADE volume and bounds checks. [Release verification](output/release-verification.json) records that build's hashes, native UI checks and remaining limits.
+[Earlier tutorial verification](docs/tutorial-verification.md) includes a 29-feature housing with 13 fully constrained sketches and 75 faces. It also records incomplete source workflows and their limitations.
 
-An earlier navigation build passed 120 release checks on both platforms, plus eight independent STEP imports. Pixel desktop checks covered orbit pivots before and after pan, face pivots, cube labels, zoomed circular holes, extrusion editing and undo. Its 42-feature, 6,336-triangle panel measured 275 ms median full rebuild and 296 ms median last-feature edit over 12 samples. The four-feature model used about 105 MiB resident memory and 91 MiB private memory; a 15-second idle sample recorded 0.00 CPU seconds. These process-memory figures exclude the shared graphics server. Results and selected screenshots are in `output/`.
+[Readiness checks](docs/readiness.md) distinguish native application testing, automated geometry checks, performance measurements and remaining limits. Benchmarks include rebuild times for all ten projects and cached pose updates for 24 moderately detailed assembly instances. These local measurements are not a comparison against Onshape. The independent Open CASCADE verifier is a development tool and is not used or shipped by the app.
 
 ## Implementation and license
 

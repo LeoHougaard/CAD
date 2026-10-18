@@ -1,0 +1,9 @@
+{
+  "id": "mate-revolute",
+  "name": "Revolute",
+  "version": "1.0.0",
+  "category": "mate",
+  "script": "mate-revolute.rhai",
+  "fields": [],
+  "description": "Revolute mate using two local connector frames."
+}

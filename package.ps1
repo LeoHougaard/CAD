@@ -19,7 +19,7 @@ try {
     $binaries = @()
     try {
         # Stage every binary before moving an existing executable, including one in use.
-        foreach ($name in @('CAD.exe', 'cad-agent.exe')) {
+        foreach ($name in @('CAD.exe', 'cad-agent.exe', 'cad-assembly-agent.exe')) {
             $source = Get-WorkspacePath "target/release/$name"
             $binary = [pscustomobject]@{
                 Target = Get-WorkspacePath "dist/$name"

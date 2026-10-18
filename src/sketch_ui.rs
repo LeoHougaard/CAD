@@ -9,10 +9,10 @@ use crate::{
 use eframe::egui::{self, Color32, Pos2, Rect, Stroke, Vec2};
 use std::collections::BTreeMap;
 
-const BLUE: Color32 = Color32::from_rgb(72, 166, 190);
+const BLUE: Color32 = Color32::from_rgb(104,147,169);
 const WHITE: Color32 = Color32::from_rgb(221, 230, 240);
-const SELECTED: Color32 = Color32::from_rgb(49, 231, 219);
-const HOVER: Color32 = Color32::from_rgb(191, 137, 255);
+const SELECTED: Color32 = Color32::from_rgb(126,195,192);
+const HOVER: Color32 = Color32::from_rgb(170,145,196);
 const ORANGE: Color32 = HOVER;
 const RED: Color32 = Color32::from_rgb(247, 119, 132);
 const MUTED: Color32 = Color32::from_rgb(144, 159, 180);
@@ -1497,9 +1497,9 @@ fn paint_geometry(
             let selection = Selection::edge(e.id, if e.kind == "rectangle" { i } else { 0 });
             let is_selected = selected.contains(&selection);
             let color = if is_selected {
-                SELECTED
+                ui.visuals().selection.stroke.color
             } else if hover == Some(selection) {
-                HOVER
+                ui.visuals().widgets.hovered.bg_stroke.color
             } else {
                 base
             };
@@ -1508,7 +1508,7 @@ fn paint_geometry(
                 projector.project(sk.plane.at(p[1]), rect),
             ];
             if is_selected {
-                painter.line_segment(segment, Stroke::new(6_f32, SELECTED.gamma_multiply(0.18)));
+                painter.line_segment(segment, Stroke::new(6_f32, ui.visuals().selection.stroke.color.gamma_multiply(0.18)));
             }
             if e.construction {
                 let d = segment[1] - segment[0];
@@ -1530,7 +1530,7 @@ fn paint_geometry(
                     Stroke::new(
                         if is_selected {
                             2.8_f32
-                        } else if color == HOVER {
+                        } else if color == ui.visuals().widgets.hovered.bg_stroke.color {
                             2.2
                         } else {
                             1.5
@@ -1544,9 +1544,9 @@ fn paint_geometry(
     for (s, p) in vertices(sk) {
         let pos = projector.project(sk.plane.at(p), rect);
         let color = if selected.contains(&s) {
-            SELECTED
+            ui.visuals().selection.stroke.color
         } else if hover == Some(s) {
-            HOVER
+            ui.visuals().widgets.hovered.bg_stroke.color
         } else if s.entity == 0 {
             WHITE
         } else if conflict {
@@ -1623,7 +1623,7 @@ pub fn paint_dimension(
     let position = dimensions::label_position(sk, c);
     let label = projector.project(sk.plane.at(position), rect);
     let color = override_color.unwrap_or(if selected {
-        SELECTED
+        ui.visuals().selection.stroke.color
     } else if c.reference {
         MUTED
     } else {
@@ -1754,7 +1754,7 @@ pub fn paint_dimension(
     };
     let galley = painter.layout_no_wrap(text, egui::FontId::proportional(14.), color);
     let bounds = Rect::from_center_size(label, galley.size() + Vec2::new(10., 6.));
-    painter.rect_filled(bounds, 3., Color32::from_rgb(17, 23, 32));
+    painter.rect_filled(bounds, 3., Color32::from_rgb(12,12,15));
     painter.galley(bounds.center() - galley.size() / 2., galley, color);
     Some(bounds)
 }

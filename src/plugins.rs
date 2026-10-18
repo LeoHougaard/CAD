@@ -143,6 +143,12 @@ impl Registry {
                 include_str!("../plugins/stl.json"),
                 include_str!("../plugins/stl.rhai"),
             ),
+            (include_str!("../plugins/mate-fastened.json"), include_str!("../plugins/mate-fastened.rhai")),
+            (include_str!("../plugins/mate-revolute.json"), include_str!("../plugins/mate-revolute.rhai")),
+            (include_str!("../plugins/mate-slider.json"), include_str!("../plugins/mate-slider.rhai")),
+            (include_str!("../plugins/mate-cylindrical.json"), include_str!("../plugins/mate-cylindrical.rhai")),
+            (include_str!("../plugins/mate-planar.json"), include_str!("../plugins/mate-planar.rhai")),
+            (include_str!("../plugins/mate-ball.json"), include_str!("../plugins/mate-ball.rhai")),
         ] {
             r.add(manifest, script)?;
         }

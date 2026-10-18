@@ -167,8 +167,8 @@ pub fn show(
     if let Some(points) = highlight {
         ui.painter().add(egui::Shape::convex_polygon(
             points,
-            Color32::from_rgb(43, 115, 133),
-            Stroke::new(1_f32, Color32::from_rgb(96, 210, 228)),
+            Color32::from_rgb(49, 77, 82),
+            Stroke::new(1_f32, Color32::from_rgb(112, 184, 190)),
         ));
     }
     for f in &visible {

@@ -68,6 +68,37 @@ pub enum Command {
     Construction,
 }
 
+/// Shift can turn a logical number/slash into punctuation on native backends.
+/// Normalize only these physical shortcut keys; letters retain the user's layout.
+pub fn command_for_event(
+    key: Key,
+    physical_key: Option<Key>,
+    modifiers: Modifiers,
+    context: Context,
+) -> Option<Command> {
+    let logical_letter = key.name().len() == 1 && key.name().as_bytes()[0].is_ascii_alphabetic();
+    let key = if modifiers.shift
+        && !logical_letter
+        && matches!(
+            physical_key,
+            Some(
+                Key::Num1
+                    | Key::Num2
+                    | Key::Num3
+                    | Key::Num4
+                    | Key::Num5
+                    | Key::Num6
+                    | Key::Num7
+                    | Key::Slash
+            )
+        ) {
+        physical_key.unwrap()
+    } else {
+        key
+    };
+    command_for(key, modifiers, context)
+}
+
 pub fn command_for(key: Key, modifiers: Modifiers, context: Context) -> Option<Command> {
     use Command::*;
     if modifiers.command || modifiers.ctrl || modifiers.mac_cmd {
@@ -229,6 +260,48 @@ pub fn command_for(key: Key, modifiers: Modifiers, context: Context) -> Option<C
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_shift_punctuation_uses_physical_view_and_help_keys_only() {
+        assert_eq!(
+            command_for_event(
+                Key::Exclamationmark,
+                Some(Key::Num1),
+                Modifiers::SHIFT,
+                Context::PartStudio
+            ),
+            Some(Command::View(View::Front))
+        );
+        assert_eq!(
+            command_for_event(
+                Key::Questionmark,
+                Some(Key::Slash),
+                Modifiers::SHIFT,
+                Context::PartStudio
+            ),
+            Some(Command::Help)
+        );
+        assert_eq!(
+            command_for_event(
+                Key::Num1,
+                Some(Key::Num1),
+                Modifiers::NONE,
+                Context::PartStudio
+            ),
+            None
+        );
+        assert_eq!(
+            command_for_event(Key::C, Some(Key::Q), Modifiers::ALT, Context::PartStudio),
+            Some(Command::SearchTools)
+        );
+        assert_eq!(
+            command_for_event(Key::L, Some(Key::Q), Modifiers::NONE, Context::Sketch),
+            Some(Command::SketchTool(SketchTool::Line))
+        );
+        assert_eq!(
+            command_for_event(Key::L, Some(Key::Slash), Modifiers::SHIFT, Context::Sketch),
+            Some(Command::Relationship("Perpendicular"))
+        );
+    }
     #[test]
     fn sketch_keys_do_not_collide_with_part_studio_tools_or_typing_modifiers() {
         assert_eq!(

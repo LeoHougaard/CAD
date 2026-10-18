@@ -67,7 +67,9 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          for folder in (Path('target/test-output'), Path('target/test-output/regions'), Path('output/sweep-loft')):
+          folders = [Path('target/test-output'), Path('target/test-output/regions'), Path('target/test-output/assembly-performance'), Path('output/sweep-loft')]
+          folders.extend(Path('target/test-output/end-user-projects').glob('*'))
+          for folder in folders:
               for path in folder.glob('*'):
                   if path.suffix in {'.step', '.json'}:
                       path.unlink()
@@ -109,3 +111,11 @@ jobs:
       - name: Verify selected sketch region STEP exports with Open CASCADE
         if: runner.os == 'Linux'
         run: .tools/ci-python/bin/python tools/verify_regions_step.py
+
+      - name: Verify ten modeling projects and their upstream edits with Open CASCADE
+        if: runner.os == 'Linux'
+        run: .tools/ci-python/bin/python tools/verify_projects_step.py
+
+      - name: Verify exact assembly STEP exports with Open CASCADE
+        if: runner.os == 'Linux'
+        run: .tools/ci-python/bin/python tools/verify_assembly_step.py

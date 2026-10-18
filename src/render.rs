@@ -84,6 +84,22 @@ impl Camera {
         );
     }
     pub fn fit_with_rect(&mut self, scene: &Scene, rect: egui::Rect) {
+        self.fit_scene_profile(scene, None, rect);
+    }
+    pub fn fit_with_profile(
+        &mut self,
+        scene: &Scene,
+        sketch: &crate::sketch::ResolvedSketch,
+        rect: egui::Rect,
+    ) {
+        self.fit_scene_profile(scene, Some(sketch), rect);
+    }
+    fn fit_scene_profile(
+        &mut self,
+        scene: &Scene,
+        sketch: Option<&crate::sketch::ResolvedSketch>,
+        rect: egui::Rect,
+    ) {
         let mut lo = Vec3::splat(f32::INFINITY);
         let mut hi = Vec3::splat(f32::NEG_INFINITY);
         let inverse = self.rotation.conjugate();
@@ -96,6 +112,16 @@ impl Camera {
                         lo = lo.min(p);
                         hi = hi.max(p);
                     }
+                }
+            }
+        }
+        if let Some(sketch) = sketch {
+            for entity in &sketch.entities {
+                for p in entity.points() {
+                    let world = sketch.plane.at(p);
+                    let p = inverse * Vec3::from_array(world.map(|v| v as f32));
+                    lo = lo.min(p);
+                    hi = hi.max(p);
                 }
             }
         }
@@ -331,11 +357,7 @@ pub fn pick_edges(
     let (origin, ray) = camera.ray(pos, rect);
     let mut result = vec![];
     for mesh in scene.meshes.iter().filter(|m| !hidden.contains(&m.part)) {
-        for edge in mesh
-            .edges
-            .iter()
-            .filter(|e| !e.seam && !e.key.contains("untracked:"))
-        {
+        for edge in mesh.edges.iter().filter(|e| !e.seam) {
             let mut best: Option<(f32, f32)> = None;
             for segment in edge.points.windows(2) {
                 let a = projector.project(segment[0].map(f64::from), rect);
@@ -466,11 +488,7 @@ pub fn box_targets(
             }
         }
         if filter == Filter::Edges {
-            for e in mesh
-                .edges
-                .iter()
-                .filter(|e| !e.seam && !e.key.contains("untracked:"))
-            {
+            for e in mesh.edges.iter().filter(|e| !e.seam) {
                 let points: Vec<_> = e
                     .points
                     .iter()
@@ -534,6 +552,9 @@ pub struct View {
     pub selected_edges: Vec<(String, String)>,
     pub hovered_edges: Vec<(String, String)>,
     pub shaded_edges: bool,
+    pub selection_color: [f32; 3],
+    pub hover_color: [f32; 3],
+    pub ghost_parts: BTreeSet<String>,
 }
 
 pub struct Renderer {
@@ -545,7 +566,9 @@ pub struct Renderer {
     tri_count: i32,
     line_count: i32,
     revision: u64,
+    scene_identity: usize,
     face_ranges: BTreeMap<usize, (i32, i32)>,
+    part_ranges: BTreeMap<String, (i32, i32)>,
     edge_ranges: BTreeMap<(String, String), (i32, i32)>,
 }
 impl Renderer {
@@ -595,16 +618,20 @@ in vec3 v_normal;
 flat in float v_face;
 in vec3 v_color;
 uniform int highlight;
+uniform vec3 selection_color;
+uniform vec3 hover_color;
 uniform bool lines;
+uniform float opacity;
+uniform bool ghost;
 out vec4 color;
 void main(){
- vec3 base=v_color;
- if(highlight==1)base=vec3(0.12,0.91,0.88);
- if(highlight==2)base=vec3(0.69,0.43,0.98);
- if(lines){color=vec4(base,1.0);return;}
+ vec3 base=ghost?vec3(0.55,0.57,0.62):v_color;
+ if(highlight==1)base=selection_color;
+ if(highlight==2)base=hover_color;
+ if(lines){color=vec4(base,opacity);return;}
  vec3 n=normalize(v_normal);
  float shade=0.48+0.39*abs(dot(n,normalize(vec3(0.35,-0.5,0.9))))+0.13*abs(n.z);
- color=vec4(base*(highlight==0?shade:0.55+0.45*shade),1.0);
+ color=vec4(base*(highlight==0?shade:0.55+0.45*shade),opacity);
 }
 "#,
             );
@@ -631,7 +658,9 @@ void main(){
                 tri_count: 0,
                 line_count: 0,
                 revision: u64::MAX,
+                scene_identity: 0,
                 face_ranges: BTreeMap::new(),
+                part_ranges: BTreeMap::new(),
                 edge_ranges: BTreeMap::new(),
             })
         }
@@ -655,6 +684,7 @@ void main(){
         let mut triangles = vec![];
         let mut lines = vec![];
         self.face_ranges.clear();
+        self.part_ranges.clear();
         self.edge_ranges.clear();
         let palette = [
             [0.68, 0.74, 0.81],
@@ -667,6 +697,7 @@ void main(){
                 continue;
             }
             let color = palette[index % palette.len()];
+            let part_start = triangles.len() as i32;
             for face in &mesh.faces {
                 self.face_ranges.insert(
                     face.global_id,
@@ -688,6 +719,7 @@ void main(){
                     }
                 }
             }
+            self.part_ranges.insert(mesh.part.clone(), (part_start, triangles.len() as i32 - part_start));
             for edge in mesh.edges.iter().filter(|e| !e.seam) {
                 self.edge_ranges.insert(
                     (edge.part.clone(), edge.key.clone()),
@@ -733,9 +765,11 @@ void main(){
         revision: u64,
         view: View,
     ) {
-        if revision != self.revision {
+        let identity = scene as *const Scene as usize;
+        if revision != self.revision || identity != self.scene_identity {
             self.upload(gl, scene, hidden);
             self.revision = revision;
+            self.scene_identity = identity;
         }
         unsafe {
             gl.enable(glow::DEPTH_TEST);
@@ -750,13 +784,25 @@ void main(){
                 false,
                 &view.matrix.to_cols_array(),
             );
+            gl.uniform_3_f32_slice(gl.get_uniform_location(self.program, "selection_color").as_ref(), &view.selection_color);
+            gl.uniform_3_f32_slice(gl.get_uniform_location(self.program, "hover_color").as_ref(), &view.hover_color);
+            let opacity = gl.get_uniform_location(self.program, "opacity");
+            let ghost = gl.get_uniform_location(self.program, "ghost");
+            gl.uniform_1_f32(opacity.as_ref(), 1.);
+            gl.uniform_1_i32(ghost.as_ref(), 0);
             let highlight = gl.get_uniform_location(self.program, "highlight");
             gl.uniform_1_i32(highlight.as_ref(), 0);
             gl.uniform_1_i32(gl.get_uniform_location(self.program, "lines").as_ref(), 0);
             gl.enable(glow::POLYGON_OFFSET_FILL);
             gl.polygon_offset(1., 1.);
             gl.bind_vertex_array(Some(self.vao));
-            gl.draw_arrays(glow::TRIANGLES, 0, self.tri_count);
+            if view.ghost_parts.is_empty() {
+                gl.draw_arrays(glow::TRIANGLES, 0, self.tri_count);
+            } else {
+                Self::draw_ranges(gl, glow::TRIANGLES, scene.meshes.iter()
+                    .filter(|m| !view.ghost_parts.contains(&m.part))
+                    .filter_map(|m| self.part_ranges.get(&m.part).copied()));
+            }
             for (ids, color) in [(&view.hovered, 2), (&view.selected, 1)] {
                 gl.uniform_1_i32(highlight.as_ref(), color);
                 Self::draw_ranges(
@@ -765,6 +811,26 @@ void main(){
                     ids.iter()
                         .filter_map(|id| self.face_ranges.get(id).copied()),
                 );
+            }
+            if !view.ghost_parts.is_empty() {
+                let mut ghosts: Vec<_> = scene.meshes.iter()
+                    .filter(|m| view.ghost_parts.contains(&m.part)).collect();
+                ghosts.sort_by(|a,b| {
+                    let depth = |m: &crate::engine::MeshView| view.matrix.project_point3(Vec3::from_array(m.centroid.map(|v| v as f32))).z;
+                    depth(b).total_cmp(&depth(a))
+                });
+                gl.enable(glow::BLEND);
+                gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
+                gl.depth_mask(false);
+                gl.uniform_1_i32(highlight.as_ref(), 0);
+                gl.uniform_1_i32(ghost.as_ref(), 1);
+                gl.uniform_1_f32(opacity.as_ref(), 0.18);
+                Self::draw_ranges(gl, glow::TRIANGLES, ghosts.into_iter()
+                    .filter_map(|m| self.part_ranges.get(&m.part).copied()));
+                gl.uniform_1_f32(opacity.as_ref(), 1.);
+                gl.uniform_1_i32(ghost.as_ref(), 0);
+                gl.depth_mask(true);
+                gl.disable(glow::BLEND);
             }
             gl.disable(glow::POLYGON_OFFSET_FILL);
             gl.uniform_1_i32(gl.get_uniform_location(self.program, "lines").as_ref(), 1);
@@ -842,6 +908,20 @@ mod tests {
         assert!((hits[0].point.z - 8.).abs() < 1e-3);
         let hidden = BTreeSet::from([hits[0].part.clone()]);
         assert!(picks(&scene, &camera, pos, rect, &hidden).is_empty());
+        let mut display_only = (*scene).clone();
+        let edge = display_only.meshes[0]
+            .edges
+            .iter_mut()
+            .find(|e| !e.seam)
+            .unwrap();
+        edge.key = "untracked:curved:display-only".into();
+        let point = edge.points[edge.points.len() / 2];
+        let cursor = camera.project(point.map(f64::from), rect);
+        assert!(
+            pick_edges(&display_only, &camera, cursor, rect, &BTreeSet::new())
+                .iter()
+                .any(|e| e.key == "untracked:curved:display-only")
+        );
         let area = egui::Rect::from_two_pos(
             camera.project([-41., -26., 0.], rect),
             camera.project([41., 26., 0.], rect),
@@ -868,6 +948,23 @@ mod tests {
             )
             .is_empty()
         );
+        let mut profile = scene.sketches.values().next().unwrap().clone();
+        profile.plane.origin = [200., 0., 0.];
+        camera.fit_with_profile(&scene, &profile, rect);
+        for point in profile.entities.iter().flat_map(|e| e.points()) {
+            assert!(
+                rect.shrink(1.)
+                    .contains(camera.project(profile.plane.at(point), rect))
+            );
+        }
+        for mesh in &scene.meshes {
+            for point in &mesh.positions {
+                assert!(
+                    rect.shrink(1.)
+                        .contains(camera.project(point.map(f64::from), rect))
+                );
+            }
+        }
     }
     #[test]
     fn crossing_box_finds_segments_and_triangles_without_vertices_inside() {

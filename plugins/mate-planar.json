@@ -1,0 +1,9 @@
+{
+  "id": "mate-planar",
+  "name": "Planar",
+  "version": "1.0.0",
+  "category": "mate",
+  "script": "mate-planar.rhai",
+  "fields": [],
+  "description": "Planar mate using two local connector frames."
+}

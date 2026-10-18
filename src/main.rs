@@ -15,6 +15,14 @@ fn main() -> eframe::Result {
         .first()
         .filter(|s| !s.to_string_lossy().starts_with('-'))
         .map(std::path::PathBuf::from);
+    let assembly_path = path
+        .as_ref()
+        .filter(|p| {
+            p.extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("cadasm"))
+        })
+        .cloned();
+    let path = if assembly_path.is_some() { None } else { path };
     let document = if args.iter().any(|a| a == "--demo") {
         cad::model::demo()
     } else if let Some(p) = &path {
@@ -48,13 +56,11 @@ fn main() -> eframe::Result {
         "CAD",
         options,
         Box::new(move |cc| {
-            Ok(Box::new(cad::app::CadApp::new(
-                cc,
-                document,
-                path,
-                plugins,
-                space_mouse,
-            )))
+            let mut app = cad::app::CadApp::new(cc, document, path, plugins, space_mouse);
+            if let Some(path) = assembly_path {
+                app.open_assembly_path(&cc.egui_ctx, path);
+            }
+            Ok(Box::new(app))
         }),
     )
 }

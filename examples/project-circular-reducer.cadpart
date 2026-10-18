@@ -1,0 +1,665 @@
+{
+  "format": 1,
+  "name": "Flanged circular reducer",
+  "variables": {
+    "flange": "5",
+    "flange_radius": "23",
+    "length": "50"
+  },
+  "features": [
+    {
+      "id": "f1",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Hollow radial section",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "3"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "-flange"
+            },
+            {
+              "a": 2,
+              "b": 1,
+              "kind": "Coincident",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0:1"
+            },
+            {
+              "a": 2,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "flange_radius"
+            },
+            {
+              "a": 2,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "-flange"
+            },
+            {
+              "a": 3,
+              "b": 2,
+              "kind": "Coincident",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0:1"
+            },
+            {
+              "a": 3,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "flange_radius"
+            },
+            {
+              "a": 3,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0"
+            },
+            {
+              "a": 4,
+              "b": 3,
+              "kind": "Coincident",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0:1"
+            },
+            {
+              "a": 4,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "16"
+            },
+            {
+              "a": 4,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0"
+            },
+            {
+              "a": 5,
+              "b": 4,
+              "kind": "Coincident",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0:1"
+            },
+            {
+              "a": 5,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "10"
+            },
+            {
+              "a": 5,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "length/2"
+            },
+            {
+              "a": 6,
+              "b": 5,
+              "kind": "Coincident",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0:1"
+            },
+            {
+              "a": 6,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "6"
+            },
+            {
+              "a": 6,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "length"
+            },
+            {
+              "a": 7,
+              "b": 1,
+              "kind": "Coincident",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "1:0"
+            },
+            {
+              "a": 7,
+              "b": 6,
+              "kind": "Coincident",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0:1"
+            },
+            {
+              "a": 7,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "3"
+            },
+            {
+              "a": 7,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "length"
+            }
+          ],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "line",
+              "values": [
+                "3",
+                "-5",
+                "23",
+                "-5"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 2,
+              "kind": "line",
+              "values": [
+                "23",
+                "-5",
+                "23",
+                "0"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 3,
+              "kind": "line",
+              "values": [
+                "23",
+                "0",
+                "16",
+                "0"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 4,
+              "kind": "line",
+              "values": [
+                "16",
+                "0",
+                "10",
+                "25"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 5,
+              "kind": "line",
+              "values": [
+                "10",
+                "25",
+                "6",
+                "50"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 6,
+              "kind": "line",
+              "values": [
+                "6",
+                "50",
+                "3",
+                "50"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 7,
+              "kind": "line",
+              "values": [
+                "3",
+                "50",
+                "3",
+                "-5"
+              ]
+            }
+          ],
+          "next_id": 7
+        },
+        "offset": "0",
+        "plane": "Front",
+        "support": ""
+      }
+    },
+    {
+      "id": "f2",
+      "plugin": "revolve",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "967fd7d645e4df99",
+      "name": "Hollow reducer and flange",
+      "suppressed": false,
+      "params": {
+        "angle": "360",
+        "axis": "V",
+        "axis_offset": "0",
+        "mode": "New",
+        "sketch": "f1",
+        "target": ""
+      }
+    },
+    {
+      "id": "f3",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Flange bolts",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "19"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Radius",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "2"
+            },
+            {
+              "a": 2,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "-19"
+            },
+            {
+              "a": 2,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0"
+            },
+            {
+              "a": 2,
+              "b": 0,
+              "kind": "Radius",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "2"
+            },
+            {
+              "a": 3,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0"
+            },
+            {
+              "a": 3,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "19"
+            },
+            {
+              "a": 3,
+              "b": 0,
+              "kind": "Radius",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "2"
+            },
+            {
+              "a": 4,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0"
+            },
+            {
+              "a": 4,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "-19"
+            },
+            {
+              "a": 4,
+              "b": 0,
+              "kind": "Radius",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "2"
+            }
+          ],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "circle",
+              "values": [
+                "19",
+                "0",
+                "2"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 2,
+              "kind": "circle",
+              "values": [
+                "-19",
+                "0",
+                "2"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 3,
+              "kind": "circle",
+              "values": [
+                "0",
+                "19",
+                "2"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 4,
+              "kind": "circle",
+              "values": [
+                "0",
+                "-19",
+                "2"
+              ]
+            }
+          ],
+          "next_id": 4
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": ""
+      }
+    },
+    {
+      "id": "f4",
+      "plugin": "extrude",
+      "plugin_version": "1.1.0",
+      "plugin_hash": "094953e2178e0cde",
+      "name": "Bolt holes",
+      "suppressed": false,
+      "params": {
+        "depth": "flange",
+        "mode": "Remove",
+        "regions": null,
+        "reverse": true,
+        "sketch": "f3",
+        "symmetric": false,
+        "target": "@last"
+      }
+    }
+  ],
+  "rollback": null,
+  "next_id": 5
+}

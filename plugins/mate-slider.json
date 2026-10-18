@@ -1,0 +1,9 @@
+{
+  "id": "mate-slider",
+  "name": "Slider",
+  "version": "1.0.0",
+  "category": "mate",
+  "script": "mate-slider.rhai",
+  "fields": [],
+  "description": "Slider mate using two local connector frames."
+}

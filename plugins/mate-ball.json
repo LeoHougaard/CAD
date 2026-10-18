@@ -1,0 +1,9 @@
+{
+  "id": "mate-ball",
+  "name": "Ball",
+  "version": "1.0.0",
+  "category": "mate",
+  "script": "mate-ball.rhai",
+  "fields": [],
+  "description": "Ball mate using two local connector frames."
+}

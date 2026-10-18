@@ -14,12 +14,14 @@ use std::{
     sync::{Arc, Mutex, mpsc},
     time::{Duration, Instant},
 };
+mod assembly_workspace;
 
-const ACCENT: Color32 = Color32::from_rgb(76, 191, 206);
+fn rgb(value: [u8; 3]) -> Color32 { Color32::from_rgb(value[0], value[1], value[2]) }
+
+const ACCENT: Color32 = Color32::from_rgb(112, 184, 190);
 const MUTED: Color32 = Color32::from_rgb(143, 155, 173);
 const RED: Color32 = Color32::from_rgb(243, 125, 133);
 const PANEL: Color32 = Color32::from_rgb(12, 12, 15);
-const PURPLE: Color32 = Color32::from_rgb(178, 112, 250);
 
 fn save_checked(
     document: &Document,
@@ -35,6 +37,11 @@ fn save_checked(
         );
     }
     document.save(path)
+}
+
+enum SearchAction {
+    Feature(String), Export(String), SketchTool(Tool), History(usize), Part(String),
+    Settings, Variables, Plugins, Help, Save, Open, Fit, Planes,
 }
 
 enum Request {
@@ -123,6 +130,10 @@ struct FileDialog {
 }
 
 pub struct CadApp {
+    assembly_workspace: Option<crate::assembly_ui::AssemblyUi>,
+    assembly_mode: bool,
+    assembly_camera: Camera,
+    assembly_context: Option<assembly_workspace::ContextEdit>,
     document: Document,
     saved: Document,
     path: Option<PathBuf>,
@@ -148,6 +159,11 @@ pub struct CadApp {
     shortcut_menu: Option<egui::Pos2>,
     shortcut_search: String,
     shortcut_focus: bool,
+    search_index: usize,
+    settings_open: bool,
+    settings_error: Option<String>,
+    settings: crate::settings::Settings,
+    settings_saved: crate::settings::Settings,
     pending_accept: Option<bool>,
     selected_plane: Option<String>,
     choosing_plane: bool,
@@ -190,6 +206,9 @@ impl CadApp {
         plugin_dir: PathBuf,
         space_mouse: crate::spacemouse::SpaceMouse,
     ) -> Self {
+        let settings_result = crate::settings::Settings::load();
+        let settings_error = settings_result.as_ref().err().cloned();
+        let settings = settings_result.unwrap_or_default();
         let ctx = &cc.egui_ctx;
         space_mouse.initialize(cc);
         ctx.set_theme(egui::Theme::Dark);
@@ -198,9 +217,9 @@ impl CadApp {
         style.visuals.window_fill = Color32::from_rgb(19, 18, 23);
         style.visuals.extreme_bg_color = Color32::from_rgb(5, 5, 7);
         style.visuals.faint_bg_color = Color32::from_rgb(23, 22, 28);
-        style.visuals.selection.bg_fill = Color32::from_rgb(18, 70, 72);
-        style.visuals.selection.stroke = Stroke::new(1.0f32, ACCENT);
-        style.visuals.widgets.active.bg_fill = Color32::from_rgb(24, 82, 86);
+        style.visuals.selection.bg_fill = Color32::from_rgb(34, 55, 57);
+        style.visuals.selection.stroke = Stroke::new(1.0f32, rgb(settings.appearance.turquoise));
+        style.visuals.widgets.active.bg_fill = Color32::from_rgb(39, 61, 63);
         style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(47, 35, 61);
         style.visuals.widgets.inactive.bg_fill = Color32::from_rgb(28, 27, 33);
         style.visuals.override_text_color = Some(Color32::from_rgb(215, 224, 234));
@@ -219,6 +238,10 @@ impl CadApp {
                 .expect("CAD viewport shaders compile"),
         ));
         let mut app = Self {
+            assembly_workspace: None,
+            assembly_mode: false,
+            assembly_camera: Camera::default(),
+            assembly_context: None,
             saved: document.clone(),
             document,
             path,
@@ -244,6 +267,11 @@ impl CadApp {
             shortcut_menu: None,
             shortcut_search: String::new(),
             shortcut_focus: false,
+            search_index: 0,
+            settings_open: settings_error.is_some(),
+            settings_error,
+            settings: settings.clone(),
+            settings_saved: settings,
             pending_accept: None,
             selected_plane: None,
             choosing_plane: false,
@@ -277,6 +305,7 @@ impl CadApp {
             close_pending: false,
             allow_close: false,
         };
+        app.apply_settings(ctx);
         app.rebuild();
         app
     }
@@ -398,9 +427,9 @@ impl CadApp {
                 .map(|p| self.camera.project(plane.at(p), rect))
                 .collect();
             let color = if selected {
-                ACCENT
+                rgb(self.settings.appearance.turquoise)
             } else if hover.as_deref() == Some(name) {
-                PURPLE
+                rgb(self.settings.appearance.purple)
             } else {
                 MUTED
             };
@@ -535,6 +564,41 @@ impl CadApp {
             })
             .map(|(id, sk)| (id.as_str(), sk))
             .collect()
+    }
+    fn hovered_sketch(&self, pos: egui::Pos2) -> Option<String> {
+        let scene = self.source_scene.as_ref().unwrap_or(&self.scene);
+        let rect = self.viewport_rect;
+        let projector = self.camera.projector(rect);
+        let (origin, ray) = self.camera.ray(pos, rect);
+        let front = render::pick(scene, &self.camera, pos, rect, &self.hidden).map(|h| h.distance);
+        let mut closest = 7.0f32;
+        let mut result = None;
+        for (id, sketch) in self.region_sketches(scene) {
+            for entity in &sketch.entities {
+                for points in entity.points().windows(2) {
+                    let a = sketch.plane.at(points[0]);
+                    let b = sketch.plane.at(points[1]);
+                    let sa = projector.project(a, rect);
+                    let sb = projector.project(b, rect);
+                    let distance = render::point_segment_distance(pos, sa, sb);
+                    if distance >= closest {
+                        continue;
+                    }
+                    let delta = sb - sa;
+                    let t = ((pos - sa).dot(delta) / delta.length_sq().max(1e-8)).clamp(0., 1.);
+                    let point = glam::Vec3::from_array(a.map(|v| v as f32))
+                        .lerp(glam::Vec3::from_array(b.map(|v| v as f32)), t);
+                    let depth = (point - origin).dot(ray);
+                    if depth >= 0.
+                        && front.is_none_or(|d| depth <= d + self.camera.span / rect.height() * 2.)
+                    {
+                        closest = distance;
+                        result = Some(id.to_owned());
+                    }
+                }
+            }
+        }
+        result
     }
     fn selection_candidates(
         &self,
@@ -867,7 +931,7 @@ impl CadApp {
                     if !selected && !hovered {
                         continue;
                     }
-                    let color = if selected { ACCENT } else { PURPLE };
+                    let color = if selected { rgb(self.settings.appearance.turquoise) } else { rgb(self.settings.appearance.purple) };
                     let mut fill = egui::epaint::Mesh::default();
                     for tri in &region.triangles {
                         let offset = fill.vertices.len() as u32;
@@ -900,6 +964,8 @@ impl CadApp {
     }
     fn selection_controls(&mut self, ctx: &egui::Context, rect: Rect) {
         egui::Area::new(egui::Id::new("selection_filter")).fixed_pos(rect.min+egui::vec2(8.,8.)).show(ctx,|ui|{
+            ui.set_min_width(180.);
+            ui.style_mut().wrap_mode=Some(egui::TextWrapMode::Extend);
             ui.menu_button(format!("Select: {}",self.active_selection_filter().label()),|ui|{
                 for filter in Filter::ALL {if ui.selectable_value(&mut self.selection_filter,filter,filter.label()).clicked(){ui.close();}}
             }).response.on_hover_text("Click adds or removes. Space clears. Drag right to enclose, left to cross. Ctrl-drag removes.");
@@ -926,15 +992,16 @@ impl CadApp {
                         .max_height(280.)
                         .show(ui, |ui| {
                             for (i, target) in items.iter().enumerate() {
-                                let label = match target {
-                                    Target::Face { key, .. } => format!("Face {key}"),
-                                    Target::Edge { key, .. } => format!("Edge {key}"),
-                                    Target::Region { sketch, .. } => format!("Region of {sketch}"),
-                                    Target::Part(p) => format!("Part {p}"),
-                                    Target::Feature(f) => f.clone(),
-                                    Target::Plane(name) => format!("{name} plane"),
-                                };
-                                let response = ui.selectable_label(i == index, label);
+                                let label = self.target_label(target);
+                                ui.set_max_width(320.);
+                                let response = ui
+                                    .add(
+                                        egui::Button::new(&label)
+                                            .selected(i == index)
+                                            .frame(false)
+                                            .truncate(),
+                                    )
+                                    .on_hover_text(&label);
                                 if response.hovered()
                                     && let Some((_, _, current)) = &mut self.select_other
                                 {
@@ -956,6 +1023,70 @@ impl CadApp {
         }
         if close {
             self.select_other = None;
+        }
+    }
+    fn target_label(&self, target: &Target) -> String {
+        let scene = self.source_scene.as_ref().unwrap_or(&self.scene);
+        match target {
+            Target::Face { part, key } => scene
+                .meshes
+                .iter()
+                .find(|m| &m.part == part)
+                .map(|m| {
+                    format!(
+                        "Face {} · {}",
+                        m.faces.iter().position(|f| &f.key == key).unwrap_or(0) + 1,
+                        m.name
+                    )
+                })
+                .unwrap_or_else(|| "Face".into()),
+            Target::Edge { part, key } => scene
+                .meshes
+                .iter()
+                .find(|m| &m.part == part)
+                .map(|m| {
+                    format!(
+                        "Edge {} · {}",
+                        m.edges
+                            .iter()
+                            .filter(|e| !e.seam)
+                            .position(|e| &e.key == key)
+                            .unwrap_or(0)
+                            + 1,
+                        m.name
+                    )
+                })
+                .unwrap_or_else(|| "Edge".into()),
+            Target::Region { sketch, key } => {
+                let index = scene
+                    .regions
+                    .get(sketch)
+                    .and_then(|r| r.iter().position(|r| &r.key == key))
+                    .unwrap_or(0)
+                    + 1;
+                let name = self
+                    .document
+                    .features
+                    .iter()
+                    .find(|f| &f.id == sketch)
+                    .map(|f| f.name.as_str())
+                    .unwrap_or("Sketch");
+                format!("Region {index} · {name}")
+            }
+            Target::Part(part) => scene
+                .meshes
+                .iter()
+                .find(|m| &m.part == part)
+                .map(|m| m.name.clone())
+                .unwrap_or_else(|| "Part".into()),
+            Target::Feature(id) => self
+                .document
+                .features
+                .iter()
+                .find(|f| &f.id == id)
+                .map(|f| f.name.clone())
+                .unwrap_or_else(|| "Feature".into()),
+            Target::Plane(name) => format!("{name} plane"),
         }
     }
     fn begin(&mut self, id: &str) {
@@ -1105,6 +1236,9 @@ impl CadApp {
         let sketch = feature.sketch();
         self.source_scene = None;
         let align = sketch.is_some();
+        if feature.params.get("sketch").is_some() {
+            self.fit_when_ready = true;
+        }
         self.editor = Some(Editor {
             index,
             is_new: false,
@@ -1186,6 +1320,7 @@ impl CadApp {
         }
     }
     fn queue_load(&mut self, d: Document, path: Option<PathBuf>) {
+        if self.assembly_context.is_some() { self.notice = "Commit or cancel the current assembly context first".into(); return; }
         if self.dirty() || self.editor.is_some() {
             self.pending_load = Some((d, path));
         } else {
@@ -1214,6 +1349,9 @@ impl CadApp {
         self.rebuild();
     }
     fn open_dialog(&mut self, action: FileAction) {
+        if self.assembly_context.is_some() {
+            match action { FileAction::Save => { self.commit_context(true); return; }, FileAction::Open => { self.notice = "Commit or cancel the current assembly context first".into(); return; }, FileAction::Export(_) => () }
+        }
         let dir = self
             .path
             .as_ref()
@@ -1247,6 +1385,7 @@ impl CadApp {
         });
     }
     fn save(&mut self) {
+        if self.assembly_context.is_some() { self.commit_context(true); return; }
         if self.editor.is_some() {
             self.notice = "Finish or cancel the active feature before saving.".into();
             return;
@@ -1289,6 +1428,7 @@ impl CadApp {
         Ok(())
     }
     fn reload(&mut self) {
+        if self.assembly_context.is_some() { self.notice = "Commit or cancel the current assembly context first".into(); return; }
         if let Some(path) = self.path.clone() {
             match Document::load(&path) {
                 Ok(document) => self.queue_load(document, Some(path)),
@@ -1391,6 +1531,7 @@ impl CadApp {
         if self.files.is_some()
             || self.variables_open
             || self.plugins_open
+            || self.settings_open
             || self.close_pending
             || self.pending_load.is_some()
         {
@@ -1435,6 +1576,7 @@ impl CadApp {
         for event in events {
             let egui::Event::Key {
                 key,
+                physical_key,
                 modifiers,
                 pressed: true,
                 repeat: false,
@@ -1443,7 +1585,9 @@ impl CadApp {
             else {
                 continue;
             };
-            let Some(command) = crate::shortcuts::command_for(key, modifiers, context) else {
+            let Some(command) =
+                crate::shortcuts::command_for_event(key, physical_key, modifiers, context)
+            else {
                 continue;
             };
             if matches!(
@@ -1499,6 +1643,18 @@ impl CadApp {
                         .as_ref()
                         .and_then(|e| self.scene.sketches.get(&e.feature.id))
                         .map(|s| s.plane.clone())
+                        .or_else(|| {
+                            hover
+                                .and_then(|p| self.hovered_sketch(p))
+                                .and_then(|id| {
+                                    self.source_scene
+                                        .as_ref()
+                                        .unwrap_or(&self.scene)
+                                        .sketches
+                                        .get(&id)
+                                })
+                                .map(|sk| sk.plane.clone())
+                        })
                         .or_else(|| {
                             hover
                                 .and_then(|p| {
@@ -1579,6 +1735,7 @@ impl CadApp {
                         .or(Some(self.viewport_rect.center()));
                     self.shortcut_search.clear();
                     self.shortcut_focus = true;
+                    self.search_index = 0;
                 }
                 Command::ToggleSketches => self.show_sketches = !self.show_sketches,
                 Command::TogglePlanes => self.show_planes = !self.show_planes,
@@ -1590,34 +1747,40 @@ impl CadApp {
                 }
                 Command::HideSelectedOrHovered => {
                     let mut changed = false;
+                    let mut handled = false;
                     for target in self.selection.items() {
                         match target {
                             Target::Part(part)
                             | Target::Face { part, .. }
                             | Target::Edge { part, .. } => {
+                                handled = true;
                                 changed |= self.hidden.insert(part.clone());
                             }
                             Target::Feature(id) | Target::Region { sketch: id, .. }
                                 if self.scene.sketches.contains_key(id) =>
                             {
+                                handled = true;
                                 self.hidden_sketches.insert(id.clone());
                             }
                             _ => (),
                         }
                     }
-                    if self.selection.items().is_empty()
+                    if !handled
                         && let Some(pos) = ctx
                             .input(|i| i.pointer.hover_pos())
                             .filter(|p| self.viewport_rect.contains(*p))
-                        && let Some(hit) = render::pick(
+                    {
+                        if let Some(sketch) = self.hovered_sketch(pos) {
+                            self.hidden_sketches.insert(sketch);
+                        } else if let Some(hit) = render::pick(
                             &self.scene,
                             &self.camera,
                             pos,
                             self.viewport_rect,
                             &self.hidden,
-                        )
-                    {
-                        changed |= self.hidden.insert(hit.part);
+                        ) {
+                            changed |= self.hidden.insert(hit.part);
+                        }
                     }
                     if changed {
                         self.render_revision += 1;
@@ -1669,6 +1832,15 @@ impl CadApp {
             .and_then(|e| self.scene.sketches.get(&e.feature.id))
         {
             self.camera.fit_sketch_with_rect(sk, self.viewport_rect);
+        } else if let Some(sk) = self
+            .editor
+            .as_ref()
+            .and_then(|e| e.feature.params.get("sketch"))
+            .and_then(Value::as_str)
+            .and_then(|id| self.scene.sketches.get(id))
+        {
+            self.camera
+                .fit_with_profile(&self.scene, sk, self.viewport_rect);
         } else {
             self.camera.fit_with_rect(&self.scene, self.viewport_rect);
         }
@@ -1678,7 +1850,7 @@ impl CadApp {
         egui::TopBottomPanel::top("header")
             .frame(
                 egui::Frame::new()
-                    .fill(Color32::from_rgb(17, 23, 31))
+                    .fill(Color32::from_rgb(17, 17, 21))
                     .inner_margin(egui::Margin::symmetric(8, 3)),
             )
             .show(ctx, |ui| {
@@ -1751,6 +1923,8 @@ impl CadApp {
                             }
                         }
                     });
+                    let _ = ui.selectable_label(true, "Part Studio");
+                    if ui.add_enabled(self.assembly_context.is_none() && self.files.is_none() && self.shortcut_menu.is_none() && !self.variables_open && !self.plugins_open, egui::Button::new("Assembly")).clicked() { self.switch_to_assembly(ctx); }
                     ui.add_space(8.);
                     ui.scope(|ui| {
                         // Keep the document name from pushing the controls off screen.
@@ -1761,7 +1935,7 @@ impl CadApp {
                         );
                     });
                     if self.dirty() {
-                        ui.label(RichText::new("●").color(ACCENT));
+                        ui.label(RichText::new("●").color(rgb(self.settings.appearance.turquoise)));
                     }
                     if self.busy {
                         ui.add(egui::Spinner::new().size(14.));
@@ -1769,22 +1943,20 @@ impl CadApp {
                     if let Some(error) = &self.last_error {
                         ui.colored_label(RED, "!").on_hover_text(error);
                     }
-                    if !self.notice.is_empty() {
-                        let width = ui.available_width() - 120.;
-                        if width > 40. {
-                            ui.scope(|ui| {
-                                ui.set_max_width(width);
-                                ui.add(
-                                    egui::Label::new(
-                                        RichText::new(&self.notice).small().color(MUTED),
-                                    )
-                                    .truncate(),
-                                );
-                            });
-                        }
+                    let search_width = (ui.available_width() - 170.).max(100.);
+                    if ui.add_sized([search_width, 24.], egui::Button::new("Search commands, history, settings     Alt+C"))
+                        .clicked() {
+                        self.shortcut_menu = Some(self.viewport_rect.center() - egui::vec2(180., 150.));
+                        self.shortcut_search.clear();
+                        self.shortcut_focus = true;
+                        self.search_index = 0;
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.menu_button("…", |ui| {
+                            if ui.button("Settings").clicked() {
+                                self.open_settings();
+                                ui.close();
+                            }
                             if ui.button("Plugins").clicked() {
                                 self.plugins_open = true;
                                 ui.close();
@@ -1814,7 +1986,7 @@ impl CadApp {
         egui::TopBottomPanel::top("tools")
             .frame(
                 egui::Frame::new()
-                    .fill(PANEL)
+                    .fill(rgb(self.settings.appearance.panel))
                     .inner_margin(egui::Margin::symmetric(8, 3)),
             )
             .show(ctx, |ui| {
@@ -1840,7 +2012,7 @@ impl CadApp {
                                     egui::Button::new(
                                         RichText::new("Finish").color(Color32::BLACK),
                                     )
-                                    .fill(ACCENT),
+                                    .fill(rgb(self.settings.appearance.turquoise)),
                                 )
                                 .clicked()
                             {
@@ -1861,31 +2033,37 @@ impl CadApp {
                                 )
                             })
                             .collect();
-                        let order = ["sketch", "extrude", "revolve", "fillet", "chamfer"];
-                        for id in order {
-                            if let Some((_, name, description)) =
-                                items.iter().find(|(k, _, _)| k == id)
-                                && ui
-                                    .add_enabled(self.editor.is_none(), egui::Button::new(name))
-                                    .on_hover_text(description)
-                                    .clicked()
-                            {
-                                self.begin(id);
+                        let order = ["sketch", "extrude", "revolve", "sweep", "loft", "fillet", "chamfer", "shell", "mirror", "pattern", "transform"];
+                        let mut items = items;
+                        items.sort_by_key(|(id, _, _)| order.iter().position(|v| *v == id).unwrap_or(order.len()));
+                        let mut overflow = Vec::new();
+                        let total: f32 = items.iter().map(|(_, name, _)| {
+                            ui.painter().layout_no_wrap(name.clone(), egui::FontId::proportional(14.), Color32::WHITE).size().x + 18.
+                        }).sum();
+                        let reserve = if total > ui.available_width() { 54. } else { 0. };
+                        for (id, name, description) in items {
+                            let width = ui.painter().layout_no_wrap(name.clone(), egui::FontId::proportional(14.), Color32::WHITE).size().x + 14.;
+                            if width + reserve > ui.available_width() {
+                                overflow.push((id, name, description));
+                                continue;
+                            }
+                            if ui.add_enabled(self.editor.is_none(), egui::Button::new(name)
+                                .corner_radius(1).stroke(Stroke::new(1_f32, Color32::from_rgb(65, 65, 73))))
+                                .on_hover_text(description).clicked() {
+                                self.begin(&id);
                             }
                         }
-                        ui.menu_button("More", |ui| {
-                            for (id, name, description) in &items {
-                                if !order.contains(&id.as_str())
-                                    && ui
-                                        .add_enabled(self.editor.is_none(), egui::Button::new(name))
-                                        .on_hover_text(description)
-                                        .clicked()
-                                {
-                                    self.begin(id);
-                                    ui.close();
+                        if !overflow.is_empty() {
+                            ui.menu_button("More", |ui| {
+                                for (id, name, description) in overflow {
+                                    if ui.add_enabled(self.editor.is_none(), egui::Button::new(name))
+                                        .on_hover_text(description).clicked() {
+                                        self.begin(&id);
+                                        ui.close();
+                                    }
                                 }
-                            }
-                        });
+                            });
+                        }
                     }
                 });
             });
@@ -2208,6 +2386,7 @@ impl CadApp {
                         }
                     });
                     ui.separator();
+                    self.context_reference_controls(ui, &edit);
                     if let Some(m) = &manifest {
                         egui::ScrollArea::vertical()
                             .id_salt("feature_properties")
@@ -2300,7 +2479,7 @@ impl CadApp {
                                     && self.pending_rebuild.is_none()
                                     && self.last_error.is_none(),
                                 egui::Button::new(RichText::new("Apply").color(Color32::BLACK))
-                                    .fill(ACCENT)
+                                    .fill(rgb(self.settings.appearance.turquoise))
                                     .min_size(Vec2::new(ui.available_width(), 34.)),
                             )
                             .clicked();
@@ -2331,11 +2510,12 @@ impl CadApp {
 
     fn viewport(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(Color32::from_rgb(7, 7, 10)))
+            .frame(egui::Frame::new().fill(rgb(self.settings.appearance.background)))
             .show(ctx, |ui| {
                 let (rect, response) =
                     ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
                 self.viewport_rect = rect;
+                let display_scene = self.context_display_scene(self.scene.clone(), false);
                 let sketch_id = self
                     .editor
                     .as_ref()
@@ -2363,7 +2543,16 @@ impl CadApp {
 
                 if !self.busy && self.pending_rebuild.is_none() {
                     if self.fit_when_ready {
-                        self.camera.fit_with_rect(&self.scene, rect);
+                        if self.context_picking() { self.camera.fit_with_rect(&display_scene, rect); }
+                        else if self.editor.is_some()
+                            && let Some(sk) = sketch_id
+                                .as_ref()
+                                .and_then(|id| self.scene.sketches.get(id))
+                        {
+                            self.camera.fit_with_profile(&self.scene, sk, rect);
+                        } else {
+                            self.camera.fit_with_rect(&self.scene, rect);
+                        }
                         self.fit_when_ready = false;
                     }
                     if self.align_when_ready
@@ -2384,7 +2573,7 @@ impl CadApp {
                     pointer.is_some_and(|p| !controls.contains(p) && !select_control.contains(p));
                 let orbiting = canvas_hover
                     && response.hovered()
-                    && (!self.is_sketching() || self.choosing_plane)
+                    && (!self.is_sketching() || self.choosing_plane || self.context_picking())
                     && ui.input(|i| {
                         i.pointer.button_down(egui::PointerButton::Secondary)
                             && !i.modifiers.shift
@@ -2407,21 +2596,21 @@ impl CadApp {
                     let middle = ui.input(|i| i.pointer.button_down(egui::PointerButton::Middle));
                     if middle
                         || (right
-                            && ((self.is_sketching() && !self.choosing_plane)
+                            && ((self.is_sketching() && !self.choosing_plane && !self.context_picking())
                                 || ui.input(|i| i.modifiers.shift || i.modifiers.ctrl)))
                     {
-                        self.camera.pan(delta, rect);
+                        self.camera.pan(delta * self.settings.mouse_pan_speed, rect);
                     } else if right {
                         if ui.input(|i| i.modifiers.alt) {
-                            self.camera.orbit_upright(delta);
+                            self.camera.orbit_upright(delta * self.settings.mouse_rotation_speed);
                         } else {
-                            self.camera.orbit(delta);
+                            self.camera.orbit(delta * self.settings.mouse_rotation_speed);
                         }
                     }
                     let scroll = ui.input(|i| i.smooth_scroll_delta.y);
                     if scroll.abs() > 0.01 {
                         let old = self.camera.span;
-                        self.camera.span = (old * (-scroll * 0.0025).exp()).clamp(0.02, 1e6);
+                        self.camera.span = (old * (-scroll * 0.0025 * self.settings.mouse_zoom_speed).exp()).clamp(0.02, 1e6);
                         if let Some(p) = pointer {
                             let scale = (old - self.camera.span) / rect.height();
                             self.camera.center += self.camera.rotation
@@ -2434,23 +2623,26 @@ impl CadApp {
                     }
                 }
                 let projector = self.camera.projector(rect);
-                let pick_scene = self.source_scene.as_ref().unwrap_or(&self.scene).clone();
+                let pick_base = self.source_scene.as_ref().unwrap_or(&self.scene).clone();
+                let pick_scene = self.context_display_scene(pick_base, true);
                 let filter = self.active_selection_filter();
                 let candidates = pointer
-                    .filter(|_| canvas_hover && !self.is_sketching())
-                    .map(|p| self.selection_candidates(&pick_scene, p, rect, filter, false))
+                    .filter(|_| canvas_hover && (!self.is_sketching() || self.context_picking()))
+                    .map(|p| if self.context_picking() {
+                        self.assembly_context.as_ref().and_then(|s| render::pick(&s.ghosts, &self.camera, p, rect, &BTreeSet::new())).map(|hit| vec![Target::Face { part: hit.part, key: hit.face }]).unwrap_or_default()
+                    } else { self.selection_candidates(&pick_scene, p, rect, filter, false) })
                     .unwrap_or_default();
                 let mut hover = candidates.first().cloned();
                 if let Some((_, targets, index)) = &self.select_other {
                     hover = targets.get(*index).cloned();
                 }
-                let selected = self.face_ids(&self.scene, self.selection.items());
+                let selected = self.face_ids(&display_scene, self.selection.items());
                 let hovered =
-                    self.face_ids(&self.scene, &hover.clone().into_iter().collect::<Vec<_>>());
+                    self.face_ids(&display_scene, &hover.clone().into_iter().collect::<Vec<_>>());
                 ui.painter().add(render::paint_callback(
                     rect,
                     self.renderer.clone(),
-                    self.scene.clone(),
+                    display_scene,
                     self.hidden.clone(),
                     self.render_revision,
                     render::View {
@@ -2473,13 +2665,16 @@ impl CadApp {
                             })
                             .unwrap_or_default(),
                         shaded_edges: self.shaded_edges,
+                        selection_color: self.settings.appearance.turquoise.map(|v| f32::from(v)/255.),
+                        hover_color: self.settings.appearance.purple.map(|v| f32::from(v)/255.),
+                        ghost_parts: self.context_ghost_parts(),
                     },
                 ));
                 if self.mouse_orbiting {
                     let pivot =
                         projector.project(self.camera.pivot.to_array().map(f64::from), rect);
                     ui.painter()
-                        .circle_stroke(pivot, 4., Stroke::new(1.2_f32, ACCENT));
+                        .circle_stroke(pivot, 4., Stroke::new(1.2_f32, rgb(self.settings.appearance.turquoise)));
                 }
                 if !self.is_sketching() {
                     for (_, sk) in self.region_sketches(&pick_scene) {
@@ -2487,7 +2682,9 @@ impl CadApp {
                     }
                 }
                 self.paint_origin_planes(ui, rect, pointer);
-                if self.choosing_plane {
+                if self.context_picking() {
+                    if response.clicked() && canvas_hover && let Some(pos) = pointer { self.pick_context_reference(pos, rect); }
+                } else if self.choosing_plane {
                     if response.clicked()
                         && canvas_hover
                         && let Some(pos) = pointer
@@ -2572,15 +2769,15 @@ impl CadApp {
                                 area,
                                 0.,
                                 if crossing {
-                                    PURPLE.gamma_multiply(0.12)
+                                    rgb(self.settings.appearance.purple).gamma_multiply(0.12)
                                 } else {
-                                    ACCENT.gamma_multiply(0.12)
+                                    rgb(self.settings.appearance.turquoise).gamma_multiply(0.12)
                                 },
                             );
                             ui.painter().rect_stroke(
                                 area,
                                 0.,
-                                Stroke::new(1.0f32, if crossing { PURPLE } else { ACCENT }),
+                                Stroke::new(1.0f32, if crossing { rgb(self.settings.appearance.purple) } else { rgb(self.settings.appearance.turquoise) }),
                                 egui::StrokeKind::Inside,
                             );
                             if response.drag_stopped_by(egui::PointerButton::Primary) {
@@ -2666,13 +2863,19 @@ impl CadApp {
                     if !self.selection.items().is_empty()
                         && let Some(pos) = pointer
                     {
-                        ui.painter().text(
-                            pos + egui::vec2(15., 18.),
-                            egui::Align2::LEFT_TOP,
+                        let label = ui.painter().layout_no_wrap(
                             format!("{} selected", self.selection.items().len()),
                             egui::FontId::proportional(12.),
-                            ACCENT,
+                            rgb(self.settings.appearance.turquoise),
                         );
+                        let badge = Rect::from_min_size(
+                            pos + egui::vec2(15., 18.),
+                            label.size() + egui::vec2(8., 4.),
+                        );
+                        ui.painter()
+                            .rect_filled(badge, 3., Color32::from_rgb(7, 7, 10));
+                        ui.painter()
+                            .galley(badge.min + egui::vec2(4., 2.), label, rgb(self.settings.appearance.turquoise));
                     }
                     self.selection_controls(ctx, rect);
                     self.select_other_popup(ctx);
@@ -2693,75 +2896,204 @@ impl CadApp {
             });
     }
 
-    fn dialogs(&mut self, ctx: &egui::Context) {
-        if let Some(pos) = self.shortcut_menu {
-            let mut open = true;
-            let mut feature = None;
-            let mut sketch_tool = None;
-            egui::Window::new("Tools")
-                .default_pos(pos)
-                .default_width(220.)
-                .resizable(false)
-                .collapsible(false)
-                .open(&mut open)
-                .show(ctx, |ui| {
-                    let search = ui.add(
-                        egui::TextEdit::singleline(&mut self.shortcut_search)
-                            .id(egui::Id::new("tool_search"))
-                            .hint_text("Search tools"),
-                    );
-                    if self.shortcut_focus {
-                        search.request_focus();
-                        self.shortcut_focus = false;
-                    }
-                    let mut choose_first = ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    if self.is_sketching() {
-                        for (name, tool) in [
-                            ("Line · L", Tool::Line),
-                            ("Corner rectangle · G", Tool::Rectangle),
-                            ("Center rectangle · R", Tool::CenterRectangle),
-                            ("Circle · C", Tool::Circle),
-                            ("Dimension · D", Tool::Dimension),
-                            ("Select", Tool::Select),
-                        ] {
-                            if name
-                                .to_lowercase()
-                                .contains(&self.shortcut_search.to_lowercase())
-                                && (ui.button(name).clicked() || choose_first)
-                            {
-                                sketch_tool = Some(tool);
-                                choose_first = false;
-                            }
-                        }
-                    }
-                    for p in self
-                        .registry
-                        .plugins
-                        .values()
-                        .filter(|p| p.manifest.category == "feature")
-                    {
-                        if p.manifest
-                            .name
-                            .to_lowercase()
-                            .contains(&self.shortcut_search.to_lowercase())
-                            && (ui.button(&p.manifest.name).clicked() || choose_first)
-                        {
-                            feature = Some(p.manifest.id.clone());
-                            choose_first = false;
-                        }
+    fn notice_ui(&mut self, ctx: &egui::Context) {
+        if self.notice.is_empty() || !self.viewport_rect.is_positive() { return; }
+        egui::Area::new(egui::Id::new("status_notice"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(self.viewport_rect.left_bottom() + egui::vec2(8., -34.))
+            .show(ctx, |ui| {
+                ui.set_max_width((self.viewport_rect.width() - 24.).clamp(100., 620.));
+                egui::Frame::new().fill(rgb(self.settings.appearance.panel))
+                    .inner_margin(4).show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.add(egui::Label::new(RichText::new(&self.notice).small()).truncate())
+                                .on_hover_text(&self.notice);
+                            if ui.small_button("X").on_hover_text("Dismiss").clicked() { self.notice.clear(); }
+                        });
+                    });
+            });
+    }
+
+    fn open_settings(&mut self) {
+        self.settings.shaded_edges = self.shaded_edges;
+        self.settings.tree_open = self.tree_open;
+        self.settings.space_mouse.enabled = self.space_mouse.options.enabled;
+        self.settings.space_mouse.speed = self.space_mouse.options.speed;
+        self.settings.space_mouse.reverse_zoom = self.space_mouse.options.reverse_zoom;
+        self.settings.space_mouse.reverse_rotation = self.space_mouse.options.reverse_rotation;
+        self.settings_saved = self.settings.clone();
+        self.settings_error = None;
+        self.settings_open = true;
+    }
+
+    fn apply_settings(&mut self, ctx: &egui::Context) {
+        self.settings.sanitize();
+        let mut style = (*ctx.style()).clone();
+        style.visuals.panel_fill = rgb(self.settings.appearance.panel);
+        style.visuals.selection.stroke.color = rgb(self.settings.appearance.turquoise);
+        style.visuals.widgets.hovered.bg_stroke = Stroke::new(1_f32, rgb(self.settings.appearance.purple));
+        style.visuals.widgets.inactive.bg_stroke = Stroke::new(1_f32, Color32::from_rgb(64, 64, 72));
+        style.visuals.widgets.active.bg_stroke = Stroke::new(1_f32, rgb(self.settings.appearance.turquoise));
+        style.visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(1);
+        style.spacing.button_padding = if self.settings.compact_toolbar { Vec2::new(7., 3.) } else { Vec2::new(10., 5.) };
+        ctx.set_style(style);
+        self.shaded_edges = self.settings.shaded_edges;
+        self.tree_open = self.settings.tree_open;
+        self.space_mouse.options.enabled = self.settings.space_mouse.enabled;
+        self.space_mouse.options.speed = self.settings.space_mouse.speed;
+        self.space_mouse.options.reverse_zoom = self.settings.space_mouse.reverse_zoom;
+        self.space_mouse.options.reverse_rotation = self.settings.space_mouse.reverse_rotation;
+    }
+
+    fn settings_dialog(&mut self, ctx: &egui::Context) {
+        if !self.settings_open { return; }
+        let mut open = true;
+        let mut save = false;
+        let mut cancel = false;
+        let before = self.settings.clone();
+        egui::Window::new("Settings").open(&mut open).collapsible(false).default_width(420.)
+            .show(ctx, |ui| {
+                ui.strong("Appearance");
+                egui::Grid::new("appearance_preferences").show(ui, |ui| {
+                    for (label, color) in [("Viewport", &mut self.settings.appearance.background),
+                        ("Panels", &mut self.settings.appearance.panel), ("Selection", &mut self.settings.appearance.turquoise),
+                        ("Hover", &mut self.settings.appearance.purple)] {
+                        ui.label(label); ui.color_edit_button_srgb(color); ui.end_row();
                     }
                 });
-            if let Some(tool) = sketch_tool {
-                self.sketch_ui.set_tool(tool);
+                ui.checkbox(&mut self.settings.shaded_edges, "Visible model edges");
+                ui.checkbox(&mut self.settings.tree_open, "Feature tree");
+                ui.checkbox(&mut self.settings.compact_toolbar, "Compact buttons");
+                ui.separator();
+                ui.strong("Mouse");
+                ui.add(egui::Slider::new(&mut self.settings.mouse_rotation_speed, 0.1..=5.).text("Rotation"));
+                ui.add(egui::Slider::new(&mut self.settings.mouse_pan_speed, 0.1..=5.).text("Pan"));
+                ui.add(egui::Slider::new(&mut self.settings.mouse_zoom_speed, 0.1..=5.).text("Zoom"));
+                ui.separator();
+                ui.strong("SpaceMouse");
+                ui.checkbox(&mut self.settings.space_mouse.enabled, "Enabled");
+                ui.add(egui::Slider::new(&mut self.settings.space_mouse.speed, 0.1..=5.).text("Speed"));
+                ui.checkbox(&mut self.settings.space_mouse.reverse_zoom, "Reverse zoom");
+                ui.checkbox(&mut self.settings.space_mouse.reverse_rotation, "Reverse rotation");
+                ui.separator();
+                if let Some(error) = &self.settings_error { ui.colored_label(RED, error); }
+                ui.horizontal(|ui| {
+                    save = ui.button("Save").clicked();
+                    cancel = ui.button("Cancel").clicked();
+                    if ui.button("Restore defaults").clicked() { self.settings = Default::default(); }
+                });
+            });
+        if before != self.settings { self.apply_settings(ctx); }
+        if save {
+            match self.settings.save() {
+                Ok(()) => { self.settings_saved = self.settings.clone(); self.settings_open = false; }
+                Err(error) => self.settings_error = Some(error),
+            }
+        } else if cancel || !open {
+            self.settings = self.settings_saved.clone();
+            self.apply_settings(ctx);
+            self.settings_open = false;
+        }
+    }
+
+    fn dialogs(&mut self, ctx: &egui::Context) {
+        if let Some(pos) = self.shortcut_menu {
+            let mut entries = Vec::new();
+            if self.is_sketching() {
+                for (name, tool) in [("Line  L", Tool::Line), ("Corner rectangle  G", Tool::Rectangle),
+                    ("Center rectangle  R", Tool::CenterRectangle), ("Circle  C", Tool::Circle),
+                    ("Dimension  D", Tool::Dimension), ("Select", Tool::Select)] {
+                    entries.push((name.to_owned(), SearchAction::SketchTool(tool)));
+                }
+            }
+            for p in self.registry.plugins.values() {
+                let action = if p.manifest.category == "feature" {
+                    SearchAction::Feature(p.manifest.id.clone())
+                } else if p.manifest.category == "exporter" {
+                    SearchAction::Export(p.manifest.id.clone())
+                } else { continue; };
+                entries.push((p.manifest.name.clone(), action));
+            }
+            entries.extend([
+                ("Settings: Appearance, mouse, SpaceMouse, display".into(), SearchAction::Settings),
+                ("Variables".into(), SearchAction::Variables), ("Save  Ctrl+S".into(), SearchAction::Save),
+                ("Open  Ctrl+O".into(), SearchAction::Open), ("Fit view  F".into(), SearchAction::Fit),
+                ("Show or hide planes  P".into(), SearchAction::Planes),
+                ("Plugins".into(), SearchAction::Plugins), ("Keyboard shortcuts and help".into(), SearchAction::Help),
+            ]);
+            for (index, feature) in self.document.features.iter().enumerate() {
+                entries.push((format!("History: {}", feature.name), SearchAction::History(index)));
+            }
+            for mesh in &self.scene.meshes {
+                entries.push((format!("Part: {}", mesh.name), SearchAction::Part(mesh.part.clone())));
+            }
+            let history_available = self.editor.is_none();
+            let feature_available = history_available || (self.is_sketching() && !self.busy && self.pending_rebuild.is_none() && self.last_error.is_none());
+            let export_available = history_available && !self.scene.meshes.is_empty() && self.scene.error.is_none();
+            let available = |action: &SearchAction| match action {
+                SearchAction::Feature(_) => feature_available,
+                SearchAction::History(_) | SearchAction::Save => history_available,
+                SearchAction::Export(_) => export_available,
+                _ => true,
+            };
+            let mut open = true;
+            let mut chosen = None;
+            egui::Window::new("Search")
+                .default_pos(pos).default_width(420.).resizable(true).collapsible(false)
+                .open(&mut open).show(ctx, |ui| {
+                    let search = ui.add(egui::TextEdit::singleline(&mut self.shortcut_search)
+                        .id(egui::Id::new("tool_search")).desired_width(f32::INFINITY)
+                        .hint_text("Commands, history, parts, settings"));
+                    if self.shortcut_focus { search.request_focus(); self.shortcut_focus = false; }
+                    if search.changed() { self.search_index = 0; }
+                    let matches = crate::search::ranked(&self.shortcut_search, entries.iter().map(|(name, _)| name.as_str()));
+                    let down = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown));
+                    let up = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp));
+                    let enabled_rows: Vec<_> = matches.iter().enumerate().filter_map(|(row, &index)| available(&entries[index].1).then_some(row)).collect();
+                    let mut cursor = enabled_rows.iter().position(|row| *row == self.search_index).unwrap_or(0);
+                    if down { cursor = cursor.saturating_add(1).min(enabled_rows.len().saturating_sub(1)); }
+                    if up { cursor = cursor.saturating_sub(1); }
+                    self.search_index = enabled_rows.get(cursor).copied().unwrap_or(0);
+                    let accept = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    egui::ScrollArea::vertical().max_height(320.).show(ui, |ui| {
+                        for (row, &index) in matches.iter().enumerate() {
+                            let enabled = available(&entries[index].1);
+                            let response = ui.add_enabled_ui(enabled, |ui| ui.selectable_label(row == self.search_index, &entries[index].0)).inner;
+                            if !enabled { response.clone().on_hover_text("Finish the active feature first"); }
+                            if row == self.search_index && (up || down) { response.scroll_to_me(Some(egui::Align::Center)); }
+                            if enabled && (response.clicked() || (accept && row == self.search_index)) { chosen = Some(index); }
+                        }
+                        if matches.is_empty() { ui.weak("No matches"); }
+                        if !history_available { ui.weak("Finish the active feature to edit other features or export."); }
+                    });
+                });
+            if let Some(index) = chosen {
+                let (_, action) = entries.swap_remove(index);
                 open = false;
+                ctx.memory_mut(|m| m.surrender_focus(egui::Id::new("tool_search")));
+                match action {
+                    SearchAction::Feature(id) => self.start_feature(&id),
+                    SearchAction::Export(id) => self.exporter(&id),
+                    SearchAction::SketchTool(tool) => self.sketch_ui.set_tool(tool),
+                    SearchAction::History(index) => {
+                        self.selected_feature = Some(index);
+                        self.selection.clear();
+                        self.selection.add(Target::Feature(self.document.features[index].id.clone()));
+                        if self.editor.is_none() { self.edit_feature(index); }
+                    }
+                    SearchAction::Part(part) => { self.selection.clear(); self.selection.add(Target::Part(part)); }
+                    SearchAction::Settings => self.open_settings(),
+                    SearchAction::Variables => {
+                        self.variables_name = self.document.name.clone();
+                        self.variables_draft = self.document.variables.iter().map(|(k,v)| (k.clone(),v.clone())).collect();
+                        self.variables_open = true;
+                    }
+                    SearchAction::Save => self.save(), SearchAction::Open => self.open_dialog(FileAction::Open),
+                    SearchAction::Fit => self.fit(), SearchAction::Planes => self.show_planes = !self.show_planes,
+                    SearchAction::Plugins => self.plugins_open = true, SearchAction::Help => self.help_open = true,
+                }
             }
-            if let Some(id) = feature {
-                self.start_feature(&id);
-                open = false;
-            }
-            if !open {
-                self.shortcut_menu = None;
-            }
+            if !open { self.shortcut_menu = None; }
         }
         if let Some(mut dialog) = self.files.take() {
             let mut open = true;
@@ -2886,7 +3218,7 @@ impl CadApp {
                         if ui
                             .add_enabled(
                                 !dialog.filename.trim().is_empty(),
-                                egui::Button::new(label).fill(Color32::from_rgb(34, 94, 108)),
+                                egui::Button::new(label).fill(Color32::from_rgb(48, 73, 78)),
                             )
                             .clicked()
                         {
@@ -3083,7 +3415,7 @@ impl CadApp {
                 ui.label("Click to add or remove selections. Use the selection filter for faces, edges, parts or sketch regions. The ` key opens Select other. Shell removes selected faces. Pattern and mirror create separate parts.");
                 ui.separator();
                 ui.label("Save as .cadpart. STEP exports boundary geometry; STL exports a mesh in millimeters.");
-                ui.label(RichText::new("Arcs, splines, trim, assemblies and FeatureScript are not implemented.").small().color(MUTED));
+                ui.label(RichText::new("Arcs, splines, trim and FeatureScript are not implemented.").small().color(MUTED));
             });
         }
         if let Some(index) = self.rename_feature {
@@ -3130,7 +3462,7 @@ impl CadApp {
                 });
         }
         if self.close_pending {
-            egui::Window::new("Close CAD?").collapsible(false).show(ctx,|ui|{ui.label("There are unsaved changes. Save your Part Studio before closing to keep them.");ui.horizontal(|ui|{if ui.button("Keep editing").clicked(){self.close_pending=false;}
+            egui::Window::new("Close CAD?").collapsible(false).show(ctx,|ui|{ui.label("There are unsaved changes. Save your changes before closing to keep them.");ui.horizontal(|ui|{if ui.button("Keep editing").clicked(){self.close_pending=false;}
 if ui.button("Discard and close").clicked(){self.allow_close=true;ctx.send_viewport_cmd(egui::ViewportCommand::Close);}});});
         }
     }
@@ -3145,12 +3477,19 @@ impl eframe::App for CadApp {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
         self.poll();
+        self.poll_assembly(ctx);
         if ctx.input(|i| i.viewport().close_requested())
             && !self.allow_close
-            && (self.dirty() || self.editor.is_some())
+            && (self.dirty() || self.editor.is_some() || self.assembly_context.is_some() || self.assembly_workspace.as_ref().is_some_and(|a| a.dirty() || a.busy()))
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.close_pending = true;
+        }
+        if self.assembly_mode {
+            self.assembly_workspace_ui(ctx);
+            self.settings_dialog(ctx);
+            if self.close_pending { self.dialogs(ctx); }
+            return;
         }
         if let Some(deadline) = self.pending_rebuild {
             let now = Instant::now();
@@ -3165,6 +3504,8 @@ impl eframe::App for CadApp {
             || self.variables_open
             || self.plugins_open
             || self.help_open
+            || self.settings_open
+            || self.shortcut_menu.is_some()
             || ctx.wants_keyboard_input();
         if self
             .space_mouse
@@ -3176,10 +3517,14 @@ impl eframe::App for CadApp {
         }
         self.shortcuts(ctx);
         self.header(ctx);
+        if self.assembly_mode { ctx.request_repaint(); return; }
+        self.context_toolbar(ctx);
         self.tree(ctx);
         self.inspector(ctx);
         self.viewport(ctx);
+        self.notice_ui(ctx);
         self.dialogs(ctx);
+        self.settings_dialog(ctx);
         if let Some(repeat) = self.pending_accept {
             if !self.busy && self.pending_rebuild.is_none() {
                 self.pending_accept = None;

@@ -1,9 +1,13 @@
 #[cfg(feature = "desktop")]
 pub mod app;
+pub mod assembly;
+#[cfg(feature = "desktop")]
+pub mod assembly_ui;
 pub mod dimensions;
 pub mod engine;
 pub mod file_lock;
 pub mod model;
+pub mod settings;
 #[cfg(feature = "desktop")]
 pub mod selection;
 #[cfg(feature = "desktop")]
@@ -18,3 +22,5 @@ pub mod sketch;
 pub mod sketch_ui;
 #[cfg(feature = "desktop")]
 pub mod spacemouse;
+
+pub mod search;

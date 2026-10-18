@@ -1,0 +1,9 @@
+{
+  "id": "mate-cylindrical",
+  "name": "Cylindrical",
+  "version": "1.0.0",
+  "category": "mate",
+  "script": "mate-cylindrical.rhai",
+  "fields": [],
+  "description": "Cylindrical mate using two local connector frames."
+}

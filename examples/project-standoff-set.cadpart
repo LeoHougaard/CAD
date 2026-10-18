@@ -1,0 +1,324 @@
+{
+  "format": 1,
+  "name": "Flanged instrument standoffs",
+  "variables": {
+    "fillet": "0.5",
+    "height": "18",
+    "pitch": "30"
+  },
+  "features": [
+    {
+      "id": "f1",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Flange rings",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Radius",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "10"
+            },
+            {
+              "a": 2,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0"
+            },
+            {
+              "a": 2,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0"
+            },
+            {
+              "a": 2,
+              "b": 0,
+              "kind": "Radius",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "2.5"
+            }
+          ],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "circle",
+              "values": [
+                "0",
+                "0",
+                "10"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 2,
+              "kind": "circle",
+              "values": [
+                "0",
+                "0",
+                "2.5"
+              ]
+            }
+          ],
+          "next_id": 2
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": ""
+      }
+    },
+    {
+      "id": "f2",
+      "plugin": "extrude",
+      "plugin_version": "1.1.0",
+      "plugin_hash": "094953e2178e0cde",
+      "name": "Flange",
+      "suppressed": false,
+      "params": {
+        "depth": "3",
+        "mode": "New",
+        "regions": null,
+        "reverse": false,
+        "sketch": "f1",
+        "symmetric": false,
+        "target": "@last"
+      }
+    },
+    {
+      "id": "f3",
+      "plugin": "sketch",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1ab529f725215646",
+      "name": "Stem ring",
+      "suppressed": false,
+      "params": {
+        "geometry": {
+          "constraints": [
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0"
+            },
+            {
+              "a": 1,
+              "b": 0,
+              "kind": "Radius",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "7"
+            },
+            {
+              "a": 2,
+              "b": 0,
+              "kind": "X",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0"
+            },
+            {
+              "a": 2,
+              "b": 0,
+              "kind": "Y",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "0"
+            },
+            {
+              "a": 2,
+              "b": 0,
+              "kind": "Radius",
+              "negative": false,
+              "points": [
+                0,
+                0
+              ],
+              "position": null,
+              "reference": false,
+              "relative_position": false,
+              "value": "2.5"
+            }
+          ],
+          "entities": [
+            {
+              "construction": false,
+              "id": 1,
+              "kind": "circle",
+              "values": [
+                "0",
+                "0",
+                "7"
+              ]
+            },
+            {
+              "construction": false,
+              "id": 2,
+              "kind": "circle",
+              "values": [
+                "0",
+                "0",
+                "2.5"
+              ]
+            }
+          ],
+          "next_id": 2
+        },
+        "offset": "0",
+        "plane": "Top",
+        "support": "f2:end"
+      }
+    },
+    {
+      "id": "f4",
+      "plugin": "extrude",
+      "plugin_version": "1.1.0",
+      "plugin_hash": "094953e2178e0cde",
+      "name": "Stem",
+      "suppressed": false,
+      "params": {
+        "depth": "height-3",
+        "mode": "Add",
+        "regions": null,
+        "reverse": false,
+        "sketch": "f3",
+        "symmetric": false,
+        "target": "@last"
+      }
+    },
+    {
+      "id": "f5",
+      "plugin": "fillet",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "1f14e47ce34b6a27",
+      "name": "Top rim round",
+      "suppressed": false,
+      "params": {
+        "edges": [
+          "f4:end | f4:region-side:+c1"
+        ],
+        "radius": "fillet",
+        "target": ""
+      }
+    },
+    {
+      "id": "f6",
+      "plugin": "pattern",
+      "plugin_version": "1.0.0",
+      "plugin_hash": "c6ba923c4fe0f86e",
+      "name": "Four standoffs",
+      "suppressed": false,
+      "params": {
+        "axis": "X",
+        "count": "4",
+        "spacing": "pitch",
+        "target": ""
+      }
+    }
+  ],
+  "rollback": null,
+  "next_id": 7
+}

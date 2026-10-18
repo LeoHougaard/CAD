@@ -1,0 +1,9 @@
+{
+  "id": "mate-fastened",
+  "name": "Fastened",
+  "version": "1.0.0",
+  "category": "mate",
+  "script": "mate-fastened.rhai",
+  "fields": [],
+  "description": "Fastened mate using two local connector frames."
+}
