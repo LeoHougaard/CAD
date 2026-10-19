@@ -652,6 +652,24 @@ fn body_field<'a>(feature: &Feature, registry: &'a Registry) -> Option<&'a Field
     fields.next().is_none().then_some(body)
 }
 
+// Resolve a legacy binding once, against the editor's immutable source prefix.
+// Later Clear actions and new commands must never acquire an implicit owner.
+pub(super) fn accept_source(cached: &mut Option<Arc<Scene>>, incoming: Option<Arc<Scene>>,
+    edit: Option<&mut Editor>, registry: &Registry) -> bool {
+    if cached.is_some() { return false; }
+    let Some(source) = incoming else { return false };
+    let mut changed = false;
+    if source.error.is_none() && let Some(edit) = edit.filter(|edit| !edit.is_new)
+        && let Some(field) = body_field(&edit.feature, registry).filter(|field| visible(field, &edit.feature))
+        && matches!(edit.feature.params[&field.key].as_str().unwrap_or_default(), "" | "@last")
+        && let Some(owner) = source.meshes.last() {
+        edit.feature.params[&field.key] = json!(owner.part);
+        changed = true;
+    }
+    *cached = Some(source);
+    changed
+}
+
 pub(super) fn clear_owned_inputs(feature: &mut Feature, registry: &Registry) {
     if body_field(feature, registry).is_none() { return; }
     for field in &registry.plugins[&feature.plugin].manifest.fields {
@@ -1004,13 +1022,17 @@ impl CadApp {
                 }
             }
             "edges" | "faces" => {
-                let owner = body_field(&edit.feature, registry).map(|f| {
-                    let key = edit.feature.params[&f.key].as_str().unwrap_or_default();
-                    if !edit.is_new && matches!(key, "" | "@last") {
-                        scene.meshes.last().map_or("", |mesh| mesh.part.as_str())
-                    } else { key }
-                });
+                let owner = body_field(&edit.feature, registry).map(|f| edit.feature.params[&f.key].as_str().unwrap_or_default());
+                let all = value.as_array().is_some_and(|keys| keys.len() == 1 && keys[0] == "@all");
                 for mesh in scene.meshes.iter().filter(|mesh| owner.is_none_or(|owner| owner == mesh.part)) {
+                    if all {
+                        if field.kind == "edges" {
+                            for edge in &mesh.edges { selection.add(Target::Edge {part:mesh.part.clone(),key:edge.key.clone()}); }
+                        } else {
+                            for face in &mesh.faces { selection.add(Target::Face {part:mesh.part.clone(),key:face.key.clone()}); }
+                        }
+                        continue;
+                    }
                     for key in strings() {
                         if field.kind == "edges" && mesh.edges.iter().any(|e| reference_matches(&e.key, key)) {
                             selection.add(Target::Edge {
@@ -1331,9 +1353,13 @@ mod tests {
         let mut edit = profile_editor(feature); edit.input_field = Some("faces".into());
         for legacy in ["", "@last"] {
             edit.feature.params["target"] = json!(legacy);
+            assert!(CadApp::selection_from_input(&edit, &registry, &scene).unwrap().items().is_empty(),
+                "No legacy owner is inferred from a result scene before the prefix arrives");
+            let mut cached = None;
+            assert!(accept_source(&mut cached,Some(Arc::new(scene.clone())),Some(&mut edit),&registry));
             let selected = CadApp::selection_from_input(&edit, &registry, &scene).unwrap();
             assert_eq!(selected.items(), &[Target::Face {part:second.part.clone(), key:shared.key.clone()}]);
-            assert_eq!(edit.feature.params["target"], legacy, "Restoring a legacy binding never rewrites it");
+            assert_eq!(edit.feature.params["target"], second.part);
         }
         edit.is_new = true; edit.feature.params["target"] = json!("");
         assert!(CadApp::selection_from_input(&edit, &registry, &scene).unwrap().items().is_empty());
@@ -1384,6 +1410,82 @@ mod tests {
         assert!(fill.indices.as_chunks::<3>().0.iter().all(|triangle|
             !render::triangle_crosses_rect(triangle.map(|i|fill.vertices[i as usize].pos),hole)),
             "A removed annular face must not fill its hole");
+    }
+    #[test]
+    fn legacy_owner_adoption_uses_only_the_first_prefix_and_never_rebinds_clear_or_new_commands() {
+        let (mut document, prefix, _, registry) = profile_scene();
+        let prefix = Arc::new(prefix);
+        let owner = &prefix.meshes.last().unwrap().part;
+        let mut later = (*prefix).clone();
+        let mut future = later.meshes[0].clone(); future.part = "future:0".into(); later.meshes.push(future);
+        for plugin in ["shell","fillet","chamfer","pattern","mirror","transform","extrude","revolve"] {
+            for legacy in ["","@last"] {
+                let mut feature = registry.create(plugin,&mut document).unwrap();
+                if matches!(plugin,"extrude"|"revolve") {
+                    feature.params["mode"] = json!("Add");
+                    feature.params.as_object_mut().unwrap().remove("targets");
+                }
+                feature.params["target"] = json!(legacy);
+                let mut edit = profile_editor(feature); let mut cached = None;
+                assert!(!accept_source(&mut cached,None,Some(&mut edit),&registry));
+                assert_eq!(edit.feature.params["target"],legacy);
+                assert!(accept_source(&mut cached,Some(prefix.clone()),Some(&mut edit),&registry));
+                assert_eq!(edit.feature.params["target"],*owner);
+                let body = body_field(&edit.feature,&registry).unwrap();
+                apply_input(&mut edit.feature,body,&[],&prefix,&registry).unwrap();
+                assert_eq!(edit.feature.params["target"],"");
+                assert!(!accept_source(&mut cached,Some(Arc::new(later.clone())),Some(&mut edit),&registry));
+                assert_eq!(edit.feature.params["target"],"","Clear never inherits a new implicit owner");
+                for field in registry.plugins[plugin].manifest.fields.iter().filter(|f| matches!(f.kind.as_str(),"edges"|"faces")) {
+                    edit.feature.params[&field.key] = json!(["@all"]); edit.input_field = Some(field.key.clone());
+                    assert!(CadApp::selection_from_input(&edit,&registry,&prefix).unwrap().items().is_empty(),
+                        "Cleared Part plus All topology cannot restore an implicit last-part highlight");
+                }
+                assert!(Arc::ptr_eq(cached.as_ref().unwrap(),&prefix),"The editing source stays immutable");
+                edit.is_new = true; cached = None;
+                assert!(!accept_source(&mut cached,Some(prefix.clone()),Some(&mut edit),&registry));
+                assert_eq!(edit.feature.params["target"],"","New commands remain explicit");
+            }
+        }
+        for (mode,explicit_scope) in [("New",false),("Add",true)] {
+            let mut feature = registry.create("extrude",&mut document).unwrap();
+            feature.params["mode"] = json!(mode);
+            if !explicit_scope { feature.params.as_object_mut().unwrap().remove("targets"); }
+            let mut edit = profile_editor(feature); let mut cached = None;
+            assert!(!accept_source(&mut cached,Some(prefix.clone()),Some(&mut edit),&registry));
+            assert_eq!(edit.feature.params["target"],"","Inactive legacy fields cannot acquire dependencies");
+        }
+        for (plugin,key,kind) in [("fillet","edges","edges"),("chamfer","edges","edges"),("shell","faces","faces")] {
+            let mut feature = registry.create(plugin,&mut document).unwrap();
+            feature.params["target"] = json!(owner); feature.params[key] = json!(["@all"]);
+            let mut edit = profile_editor(feature); edit.input_field = Some(key.into());
+            let selected = CadApp::selection_from_input(&edit,&registry,&prefix).unwrap();
+            let mesh = prefix.meshes.last().unwrap();
+            assert_eq!(selected.items().len(),if kind == "edges" {mesh.edges.len()} else {mesh.faces.len()});
+            assert!(selected.items().iter().all(|target| matches!(target,Target::Edge {part,..}|Target::Face {part,..} if part == owner)));
+            assert_eq!(edit.feature.params[key],json!(["@all"]),"Highlighting never materializes sentinel references");
+        }
+    }
+    #[test]
+    fn editing_the_saved_legacy_shell_resolves_its_part_and_previews_the_hollow_result() {
+        let document = Document::load(std::path::Path::new("examples/project-instrument-enclosure.cadpart")).unwrap();
+        let registry = Registry::builtin().unwrap();
+        let index = document.features.iter().position(|f| f.plugin == "shell").unwrap();
+        assert_eq!(document.features[index].params["target"],"");
+        let mut prefix_document = document.clone(); prefix_document.rollback = Some(index);
+        let mut runtime = Runtime::new(Registry::builtin().unwrap());
+        let prefix = runtime.evaluate(&prefix_document).unwrap().scene;
+        assert!(prefix.error.is_none(),"{:?}",prefix.error);
+        let mut edit = profile_editor(document.features[index].clone()); edit.index = index;
+        assert_eq!(missing(&edit,&registry).as_deref(),Some("Select part"));
+        let mut cached = None;
+        assert!(accept_source(&mut cached,Some(prefix.clone()),Some(&mut edit),&registry));
+        assert_eq!(missing(&edit,&registry),None);
+        let mut draft = document.clone(); edit.apply_to(&mut draft); draft.rollback = Some(index+1);
+        let preview = runtime.evaluate(&draft).unwrap().scene;
+        assert!(preview.error.is_none(),"{:?}",preview.error);
+        assert!(preview.meshes[0].volume < prefix.meshes[0].volume,"The accepted source must trigger the hollow Shell preview");
+        assert_eq!(document.features[index].params["target"],"","Cancel retains the original document binding");
     }
     fn field(key: &str, kind: &str) -> Field {
         Field {

@@ -1281,9 +1281,7 @@ impl CadApp {
                     source,
                 } => {
                     if !self.work.finish_build(serial) { continue; }
-                    if source.is_some() {
-                        self.source_scene = source;
-                    }
+                    let adopted = feature_inputs::accept_source(&mut self.source_scene, source, self.editor.as_mut(), &self.registry);
                     match result {
                         Ok(scene) => {
                             self.last_error = scene.error.clone().or_else(|| self.missing_input());
@@ -1321,6 +1319,7 @@ impl CadApp {
                             self.last_error = Some(e);
                         }
                     }
+                    if adopted { self.rebuild(); }
                 }
                 Response::Exported(result) => {
                     self.work.exports = self.work.exports.saturating_sub(1);

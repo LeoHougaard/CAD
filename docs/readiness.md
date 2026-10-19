@@ -188,6 +188,13 @@ When a preview consumes selected source edges or faces, their original geometry
 remains highlighted over the result. Face highlights reuse the source triangles,
 preserving holes; existing result highlights retain their normal rendering.
 
+Older saved features can bind to the previous part implicitly. Reopening one
+resolves that binding once from its immutable source prefix into the edit draft.
+Later preview results cannot change the source or silently rebind a cleared
+input. Cancel preserves the saved binding. New commands still require explicit
+inputs. An existing "all edges" or "all faces" selection highlights the actual
+source topology of its owning part without rewriting the stored selection.
+
 Linux CI exposed a document-lock release race during parallel process creation.
 Closing one descriptor does not release an open-description lock while another
 copy remains alive, as documented by [flock](https://man7.org/linux/man-pages/man2/flock.2.html).
