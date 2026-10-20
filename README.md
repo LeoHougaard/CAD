@@ -1,5 +1,10 @@
 # CAD
 
+The replacement is being built in [`next`](next/README.md), using native FreeCAD
+modeling behind a Rust interface. The application described below is the earlier
+prototype. It remains available while the replacement is verified. Its source is
+preserved at [`archive/rust-prototype-e9040be`](https://github.com/LeoHougaard/CAD/tree/archive/rust-prototype-e9040be).
+
 A local, offline Rust Part Studio with an editable parametric feature history. Dark UI, native OpenGL viewport, background geometry worker, and local feature packages. Tested on Windows and native Debian ARM64 on a Pixel 10.
 
 ## Run

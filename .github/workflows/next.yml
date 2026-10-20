@@ -1,0 +1,59 @@
+name: Native FreeCAD migration
+
+on:
+  push:
+    paths: ['next/**', '.github/workflows/next.yml']
+  pull_request:
+    paths: ['next/**', '.github/workflows/next.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-next-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_BUILD_JOBS: 2
+  RUSTUP_TOOLCHAIN: 1.99.1
+
+jobs:
+  native:
+    name: Native documents / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Linux runtime libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgl1 libegl1 libglu1-mesa libxkbcommon0
+      - name: Rust toolchain
+        run: rustup toolchain install 1.99.1 --profile minimal --component clippy --component rustfmt
+      - name: Cache pinned runtime
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .tools/freecad-runtime
+          key: native-freecad-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('next/runtime.json') }}
+      - name: Rust checks
+        run: |
+          cargo fmt --manifest-path next/Cargo.toml -- --check
+          cargo clippy --manifest-path next/Cargo.toml --all-targets --locked -- -D warnings
+          cargo test --manifest-path next/Cargo.toml --locked
+          cargo build --manifest-path next/Cargo.toml --locked
+      - name: Verified native runtime
+        run: python next/tools/setup_runtime.py --output next/target/runtime.json
+      - name: Real constrained sketches, attachment, fillets and history
+        run: |
+          host=next/target/debug/cad-next
+          if [ "$RUNNER_OS" = Windows ]; then host="$host.exe"; fi
+          python next/tests/native_workflows.py --host "$host" --runtime next/target/runtime.json --output next/target/native-documents

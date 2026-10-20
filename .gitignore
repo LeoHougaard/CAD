@@ -1,5 +1,6 @@
 /.tools/
 /target/
+/next/target/
 /dist/
 /output/*
 !/output/tutorials/
@@ -16,6 +17,7 @@
 !/output/pixel-final-idle.json
 *.lock
 !Cargo.lock
+!next/Cargo.lock
 *.log
 __pycache__/
 *.py[cod]
