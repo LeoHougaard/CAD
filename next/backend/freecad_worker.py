@@ -21,7 +21,8 @@ import PartDesign  # Register the native feature classes in headless mode.
 
 VERSION = 1
 OPERATIONS = ["capabilities", "new", "open", "inspect", "transaction", "undo",
-              "redo", "save", "mesh", "topology", "close"]
+              "redo", "save", "mesh", "topology", "close", "preview",
+              "preview_commit", "preview_cancel"]
 EDIT_OPERATIONS = ["add_object", "set", "expression", "geometry", "constraint",
                    "datum", "move_geometry", "construction", "delete_geometry", "delete_constraint"]
 OBJECT_TYPES = {
@@ -37,6 +38,7 @@ OBJECT_TYPES = {
 }
 _revisions = {}
 _poisoned = set()
+_previews = {}
 _clock = 0
 
 
@@ -93,6 +95,9 @@ def document(request, writable=False):
             fail("missing_revision", "Document mutations require expected_revision")
         if type(expected) is not int or expected != _revisions[key]:
             fail("stale_revision", "Document revision changed")
+        if key in _previews and not request.get("op", "").startswith("preview") and not (
+                key in _poisoned and request.get("op") == "close"):
+            fail("preview_active", "Finish or cancel the active preview before another write")
     return doc
 
 
@@ -179,7 +184,7 @@ def bounds(shape):
     return {"min": [box.XMin, box.YMin, box.ZMin], "max": [box.XMax, box.YMax, box.ZMax]}
 
 
-def topology(shape):
+def topology(shape, deflection=0.1):
     faces, edges = [], []
     native_faces = shape.Faces
     for index, face in enumerate(native_faces, 1):
@@ -198,12 +203,16 @@ def topology(shape):
             if len(endpoints) == 1:
                 endpoints *= 2
             geometry_type = None
+            points = endpoints
         else:
             endpoints = [encode(edge.valueAt(edge.FirstParameter)), encode(edge.valueAt(edge.LastParameter))]
             geometry_type = edge.Curve.TypeId
+            points = endpoints if isinstance(edge.Curve, Part.Line) else [
+                encode(point) for point in edge.discretize(Deflection=deflection)]
         edges.append({"subelement": key, "mapped_name": shape.getElementMappedName(key) or None,
                       "geometry_type": geometry_type, "center": encode(edge.CenterOfMass),
                       "bounds": bounds(edge), "length": edge.Length, "endpoints": endpoints,
+                      "points": points,
                       "closed": edge.isClosed(), "degenerated": edge.Degenerated,
                       "orientation": edge.Orientation,
                       "faces": ["Face" + str(i) for i, face in enumerate(native_faces, 1)
@@ -215,6 +224,14 @@ def world_from_shape(obj):
     if hasattr(obj, "getGlobalPlacement") and hasattr(obj, "Placement"):
         return encode(obj.getGlobalPlacement().multiply(obj.Placement.inverse()))
     return encode(App.Placement())
+
+
+def oriented_normal(face, u, v):
+    normal = face.normalAt(u, v)
+    length = normal.Length
+    if not math.isfinite(length) or length < 1e-12:
+        fail("display_error", "Native face returned an undefined display normal")
+    return [normal.x / length, normal.y / length, normal.z / length]
 
 
 def sketch_geometry(obj):
@@ -233,6 +250,11 @@ def sketch_geometry(obj):
                 entry["kind"] = "circle"
         result.append(entry)
     return result
+
+
+def preview_metadata(doc):
+    active = _previews.get(doc.Name)
+    return {"token": active["token"], "label": active["label"]} if active else None
 
 
 def snapshot(doc, revision=None):
@@ -274,7 +296,7 @@ def snapshot(doc, revision=None):
         objects.append(entry)
     return {"document": doc.Name, "revision": _revisions[doc.Name] if revision is None else revision, "objects": objects,
             "undo_count": doc.UndoCount, "redo_count": doc.RedoCount,
-            "available": doc.Name not in _poisoned}
+            "available": doc.Name not in _poisoned, "preview": preview_metadata(doc)}
 
 
 def prepare_state(doc):
@@ -416,7 +438,97 @@ def transaction(doc, request):
         except Exception:
             _poisoned.add(doc.Name)
             traceback.print_exc(file=sys.stderr)
+        # Abort restores model edits, but native element aliases and redo
+        # history may have changed. Never reuse identities from before it.
+        bump(doc)
         raise
+    publish_state(doc, state)
+    return {"document": doc.Name, "revision": _revisions[doc.Name],
+            "edits": results, "state": state}
+
+
+def preview(doc, request):
+    token = request.get("token")
+    if not isinstance(token, str) or not token or len(token) > 256:
+        fail("invalid_request", "Preview token requires a nonempty string of at most 256 characters")
+    active = _previews.get(doc.Name)
+    if active and active["token"] != token:
+        fail("preview_owner", "Preview belongs to another gesture")
+    op = request["op"]
+    if op != "preview":
+        if active is None:
+            fail("no_preview", "Document has no active preview")
+        # Build and serialize the response before committing native history.
+        if op == "preview_commit":
+            state = prepare_state(doc)
+            state["preview"] = None
+            try:
+                doc.commitTransaction()
+            except Exception:
+                _poisoned.add(doc.Name)
+                bump(doc)
+                raise
+        else:
+            try:
+                doc.abortTransaction()
+                doc.recompute()
+                validate(doc)
+                state = prepare_state(doc)
+                state["preview"] = None
+            except Exception:
+                _poisoned.add(doc.Name)
+                _previews.pop(doc.Name, None)
+                bump(doc)
+                raise
+        del _previews[doc.Name]
+        return publish_state(doc, state)
+    edits = request.get("edits")
+    if not isinstance(edits, list) or not edits:
+        fail("invalid_request", "Preview requires a nonempty edits list")
+    label = request.get("label", active["label"] if active else "Edit")
+    if not isinstance(label, str):
+        fail("invalid_request", "Preview label must be a string")
+    # FreeCAD clears redo as soon as an actual transaction starts, including
+    # transactions later aborted. Refuse before mutation rather than erase
+    # history merely by opening a dialog or dragging and pressing Escape.
+    if active is None and doc.RedoCount:
+        fail("preview_redo_conflict", "Native redo history is present; use a committed edit to branch history")
+    if active:
+        try:
+            doc.abortTransaction()
+            doc.recompute()
+            validate(doc)
+        except Exception:
+            _poisoned.add(doc.Name)
+            bump(doc)
+            raise
+    doc.openTransaction(label)
+    try:
+        results = [apply_edit(doc, edit) for edit in edits]
+        if doc.recompute() is False:
+            fail("invalid_model", "Native recompute failed")
+        validate(doc)
+        state = prepare_state(doc)
+        state["preview"] = {"token": token, "label": label}
+        json.dumps(results, allow_nan=False)
+    except Exception:
+        try:
+            doc.abortTransaction()
+            doc.recompute()
+            if active:
+                doc.openTransaction(active["label"])
+                for edit in active["edits"]:
+                    apply_edit(doc, edit)
+                doc.recompute()
+            validate(doc)
+        except Exception:
+            _poisoned.add(doc.Name)
+            traceback.print_exc(file=sys.stderr)
+        # Abort/replay can change native element aliases even for an initial
+        # candidate that failed. Callers must re-inspect before another write.
+        bump(doc)
+        raise
+    _previews[doc.Name] = {"token": token, "label": label, "edits": edits}
     publish_state(doc, state)
     return {"document": doc.Name, "revision": _revisions[doc.Name],
             "edits": results, "state": state}
@@ -439,6 +551,13 @@ def dispatch(request):
                 "occt_version": Part.OCC_VERSION, "process_id": os.getpid(), "operations": OPERATIONS,
                 "object_types": sorted(OBJECT_TYPES), "geometry_kinds": ["line", "circle", "arc"],
                 "edit_operations": EDIT_OPERATIONS}
+    # Native transactions are coordinated by FreeCAD's application, including
+    # across documents. Another document's write can commit the open gesture.
+    # Keep a worker-wide write lease until its owner commits or cancels.
+    if _previews and op in {"new", "open", "transaction", "undo", "redo", "save", "close",
+                            "preview", "preview_commit", "preview_cancel"}:
+        if op in {"new", "open"} or request.get("document") not in _previews:
+            fail("preview_active", "Finish or cancel the active preview before another document write")
     if op in ("new", "open"):
         if op == "new":
             key = name(request["name"])
@@ -463,11 +582,14 @@ def dispatch(request):
         return publish_state(doc, state)
     if op not in OPERATIONS:
         fail("unsupported_operation", "Unsupported operation: " + str(op))
-    doc = document(request, writable=op in ("transaction", "undo", "redo", "save", "close"))
+    doc = document(request, writable=op in ("transaction", "undo", "redo", "save", "close",
+                                           "preview", "preview_commit", "preview_cancel"))
     if op == "inspect":
         return snapshot(doc)
     if op == "transaction":
         return transaction(doc, request)
+    if op in ("preview", "preview_commit", "preview_cancel"):
+        return preview(doc, request)
     if op in ("undo", "redo"):
         if getattr(doc, "UndoCount" if op == "undo" else "RedoCount") == 0:
             fail("nothing_to_" + op, "No native transaction to " + op)
@@ -497,6 +619,7 @@ def dispatch(request):
         App.closeDocument(key)
         del _revisions[key]
         _poisoned.discard(key)
+        _previews.pop(key, None)
         return {"document": key, "closed": True}
     if op in ("mesh", "topology"):
         if doc.Name in _poisoned:
@@ -505,24 +628,31 @@ def dispatch(request):
         obj = object_in(doc, request["object"])
         if not hasattr(obj, "Shape") or obj.Shape.isNull():
             fail("no_shape", "Object has no native display shape")
-        if op == "topology":
-            return {"document": doc.Name, "revision": _revisions[doc.Name], "object": obj.Name,
-                    "world_from_shape": world_from_shape(obj),
-                    **topology(obj.Shape)}
         deflection = number(request.get("deflection", 0.1))
         if deflection <= 0:
             fail("invalid_request", "Deflection must be positive")
-        positions, triangles, faces = [], [], []
+        if op == "topology":
+            return {"document": doc.Name, "revision": _revisions[doc.Name], "object": obj.Name,
+                    "preview": preview_metadata(doc),
+                    "world_from_shape": world_from_shape(obj),
+                    **topology(obj.Shape, deflection)}
+        positions, normals, triangles, faces = [], [], [], []
         for index, face in enumerate(obj.Shape.Faces, 1):
             points, facets = face.tessellate(deflection)
             offset, first = len(positions), len(triangles)
             positions.extend(encode(p) for p in points)
+            surface = face.Surface
+            if isinstance(surface, Part.Plane):
+                normals.extend([oriented_normal(face, 0, 0)] * len(points))
+            else:
+                normals.extend(oriented_normal(face, *surface.parameter(point)) for point in points)
             triangles.extend([[offset + i for i in tri] for tri in facets])
             faces.append({"subelement": "Face" + str(index), "first_triangle": first,
                           "triangle_count": len(facets)})
         return {"document": doc.Name, "revision": _revisions[doc.Name], "object": obj.Name,
+                "preview": preview_metadata(doc),
                 "world_from_shape": world_from_shape(obj),
-                "positions": positions, "triangles": triangles, "faces": faces}
+                "positions": positions, "normals": normals, "triangles": triangles, "faces": faces}
 
 
 def main():

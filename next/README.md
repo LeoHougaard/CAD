@@ -10,9 +10,56 @@ interface. A small, local worker adapter initially calls FreeCAD's supported
 Python API. It does not run FreeCAD's GUI or a network service. This interim
 version is mixed-language; the eventual target remains Rust throughout.
 
-This is a headless modeling foundation, not the replacement desktop editor.
-The [migration order and completion gates](MIGRATION.md) describe the remaining
-work. The earlier Windows application has not been replaced by this worker.
+This includes an initial Rust desktop editor and the headless modeling host.
+The editor is under workflow verification. It has not replaced the earlier
+Windows application. The [migration gates](MIGRATION.md) describe the remaining
+work toward a complete Part Studio.
+
+## Run the editor
+
+Build the optional desktop target and use the same pinned runtime configuration:
+
+```sh
+cargo build --manifest-path next/Cargo.toml --features desktop --locked
+next/target/debug/cad-next-editor --runtime next/target/runtime.json
+```
+
+Use `.exe` on Windows. `--open part.FCStd` opens an existing native document.
+Run this as a separate application; it does not replace `dist/CAD.exe`.
+
+Create a sketch, choose Rectangle or Circle, then click two points in the
+viewport. Profiles have native dimensions and constraints. Their solved values
+appear in the sketch dimension panel. Set explicit dimensions there, then choose
+Extrude or Pocket. Selecting a planar solid face before Sketch creates native
+face support. The feature list reopens sketches for dimension edits. Double-click
+a solid feature to edit its length or radius. Fillet uses a selected visible edge.
+
+Feature values create native previews. Apply commits one undo step; Cancel or
+Escape restores the baseline. An invalid value cannot be applied. Existing
+native redo history blocks previews until a committed edit branches history or
+Redo consumes it. See [preview ownership and native limits](PROTOCOL.md).
+
+Right-drag orbits, middle-drag pans, and the wheel zooms. F fits the model.
+Ctrl+S saves the document; Ctrl+Shift+S opens the FCStd Save as dialog.
+Ctrl+Z and Ctrl+Shift+Z use native Undo/Redo.
+The editor asks before discarding unsaved changes. Native calls and display
+extraction run on a model thread; camera/input do not wait for recomputation.
+The viewport uses OpenGL depth testing and native face/edge identities. Geometry
+and history remain entirely in the native document.
+
+The [local feature package interface](PACKAGES.md) is available to both Rust
+callers and `cad-next-packages`. The editor's Packages menu exposes loaded
+declarative features, including their parameters. `--packages DIR` loads a
+caller-selected collection. Executable plugins and custom UI extensions are
+future work.
+
+This is a bounded editor implementation, not complete Onshape parity. Current
+interactive tools cover rectangles, circles, their dimensions, extrusion,
+pockets and single-edge fillets. Arbitrary line/arc creation, interactive
+constraint authoring, sketch dragging, multiple displayed Bodies, assemblies,
+rollback-tree editing and robust file locking between processes remain
+unfinished. General documents and moderate-part performance need broader gates.
+The [verification record](VERIFICATION.md) lists the tested workflows and limits.
 
 ## Run the verified foundation
 
@@ -69,8 +116,9 @@ These headless checks pass on Windows x64 and the Pixel's native Linux ARM64.
 They include empty sketch creation, constrained dragging, construction toggling,
 deletion back to empty, arcs, native dimension expressions, unit rejection,
 attachment remapping from Face6 to Face7, and continued editing after reopen.
-They do not establish broad feature parity, interactive performance or a usable
-replacement editor. CI repeats the native checks on Windows and Linux x64.
+They do not establish broad feature parity or interactive performance. CI repeats
+native, package and preview checks on Windows and Linux x64 and compiles/tests
+the optional desktop target.
 
 Compare actual shapes, intended placement and reference ownership, validity,
 volume, topology and saved history. Include native Pixel interaction once the

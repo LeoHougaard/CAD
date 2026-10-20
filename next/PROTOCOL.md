@@ -9,20 +9,70 @@ parameters. Responses repeat version and id, contain `ok`, and contain either
 `result` or `error: {code, message}`. Unknown versions and operations fail.
 
 The initial operations are `capabilities`, `new`, `open`, `inspect`, `transaction`,
-`undo`, `redo`, `save`, `mesh`, `topology`, and `close`. `new` takes a document `name`; `open`
+`preview`, `preview_commit`, `preview_cancel`, `undo`, `redo`, `save`, `mesh`,
+`topology`, and `close`. `new` takes a document `name`; `open`
 and `save` take a native file `path`; other document operations take `document`.
-`mesh` also takes the result object's `object` name and optional `deflection`.
+`mesh` and `topology` also take the result object's `object` name and optional
+positive `deflection`, default 0.1 model units.
 
 `transaction` takes `label`, `edits` and a required `expected_revision`. It
 applies its edits, recomputes and validates solid results before committing.
-Any failure aborts all its edits. Revisions must change on successful mutations
-and Undo/Redo. A stale revision must fail before mutating the document. This is a
+Any failure aborts all its model edits. Revisions change on successful mutations,
+Undo/Redo and failed transactions that entered the native edit/rollback cycle.
+Native rollback can change element aliases and history even when geometry is
+restored. After a failed mutation, call `inspect` to refresh the revision and
+display/selection before another write. Preflight rejections, such as stale
+revision or an empty edits list, leave the revision unchanged.
+A stale revision must fail before mutating the document. This is a
 single-worker revision, not a cross-process file concurrency claim.
 
 `undo`, `redo`, `save` and `close` also require `expected_revision`. Missing tokens
 return `missing_revision`; stale tokens return `stale_revision` before mutation.
 Read requests preserve revisions. Save advances the revision. A transaction's
 response is prepared before commit so serialization errors also abort the edit.
+
+`preview` takes `document`, the current `expected_revision`, a caller-chosen
+nonempty string `token` of at most 256 characters, `label` and nonempty `edits`.
+It returns the same `{document, revision, edits, state}` structure as a
+transaction. The first accepted preview opens a native transaction. Subsequent
+calls with the same token replace the candidate from the original gesture
+baseline, not from the previous candidate. Send the complete candidate edits on
+every call. Every accepted candidate advances the revision. Invalid replacements
+restore the last accepted candidate and retain its ownership. Native replay can
+assign new element aliases, so a failed replacement also advances the revision.
+After any failed preview, call `inspect` to obtain the current revision and
+refresh display/selection before another write. A first failed preview restores
+the baseline and acquires no ownership, but also advances its revision if it
+entered the native edit/rollback cycle.
+
+`preview_commit` and `preview_cancel` take `document`, the current
+`expected_revision` and the same `token`. They return a document snapshot and
+advance the revision. Commit ends the native transaction as one undo entry for
+the complete gesture. Cancel aborts it and restores the baseline without adding
+an undo entry. Calling either without an active preview returns `no_preview`.
+Another token returns `preview_owner`. Stale revisions fail before any action.
+The token identifies a gesture, rather than authenticating a client.
+
+Snapshots, mesh and topology responses include `preview: {token, label}` while
+a valid candidate is active and `preview: null` otherwise. Read results describe
+that candidate with its revision. A client must discard display responses from
+older revisions. Reads remain available throughout a gesture.
+
+FreeCAD coordinates native transactions across documents. An active preview
+therefore holds a worker-wide write lease. Ordinary transactions, Undo/Redo,
+Save/Close, opening or creating another document and previews for another
+document return `preview_active` until its owner commits or cancels. A poisoned
+document can still be closed for recovery. Keep the lease short and cancel it
+when abandoning a tool or document.
+
+Native FreeCAD discards redo history when a transaction starts, including one
+later canceled. To preserve history, a first preview with a nonempty redo stack
+returns `preview_redo_conflict` before any change. Ordinary explicit transactions
+can still branch history after Undo. A failed ordinary transaction also loses
+the prior native redo stack, while restoring model edits and advancing revision.
+Preserving native redo during a canceled
+preview needs a later native adapter change; clients must show this limitation
+instead of silently losing history.
 
 Initial edits are native object operations:
 
@@ -69,13 +119,21 @@ value, name, driving/virtual/active flags. A constrained drag can leave geometry
 unchanged. The solved snapshot is authoritative, not the requested target.
 
 `mesh` is for display only and returns positions and triangle indices with
-per-face identities. It must not replace native faces or flatten model history.
+per-face identities. `normals` has one finite unit vector per position. Normals
+come from the oriented native face at each vertex's surface parameters, preserving
+smooth curved surfaces and separate normals at face boundaries. A reversed face
+therefore has its reversed normal, including the inward wall of a hole. It must
+not replace native faces or flatten model history.
 
 `topology` takes `document` and `object`. Faces include revision-scoped native
 subelement names, mapped aliases where available, type, center, bounds, area and
 oriented planar normal. Edges include names, type, length, endpoints, bounds and
 face adjacency. Curved faces have null planar normals. Degenerate edges are
-explicit. Native indices can change after edits. Store references as native link
+explicit. Each edge also includes display-only `points`: two exact endpoints for
+a line, native curve discretization at the requested deflection otherwise, and
+the available endpoints for a degenerate edge. Closed curves include their
+intermediate points instead of only coincident endpoints. Native indices can
+change after edits. Store references as native link
 properties, not detached index strings in a second history graph.
 
 Mesh and topology coordinates are the native Shape coordinates. Their
@@ -83,6 +141,8 @@ Mesh and topology coordinates are the native Shape coordinates. Their
 feature inside a moved Body this includes the Body placement. The Body's own
 Shape is already placed, so its additional transform is identity. Applying the
 object placement again would double-transform the model.
+Normals use the same native Shape coordinate frame. Apply only the rotation of
+`world_from_shape` to normals, never its translation.
 
 Implementation may refine parameter details while this first gate is developed;
 changes must be reflected here and shared by the worker, host and workflow

@@ -1,5 +1,11 @@
 //! Persistent local modeling session. Native documents stay inside the worker.
 
+#[cfg(feature = "desktop")]
+pub mod editor;
+pub mod packages;
+#[cfg(feature = "desktop")]
+pub mod viewport;
+
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use std::ffi::{OsStr, OsString};

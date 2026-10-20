@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "feature.pad",
+  "label": "Extrude",
+  "description": "Create a native PartDesign::Pad from a sketch profile.",
+  "parameters": {
+    "name": {
+      "type": "identifier"
+    },
+    "body": {
+      "type": "identifier"
+    },
+    "profile": {
+      "type": "identifier"
+    },
+    "length": {
+      "type": "number",
+      "exclusive_minimum": 0
+    }
+  },
+  "edits": [
+    {
+      "op": "add_object",
+      "type": "PartDesign::Pad",
+      "name": {
+        "$param": "name"
+      },
+      "body": {
+        "$param": "body"
+      }
+    },
+    {
+      "op": "set",
+      "object": {
+        "$param": "name"
+      },
+      "property": "Profile",
+      "value": {
+        "link": {
+          "$param": "profile"
+        }
+      }
+    },
+    {
+      "op": "set",
+      "object": {
+        "$param": "name"
+      },
+      "property": "Length",
+      "value": {
+        "$param": "length"
+      }
+    }
+  ]
+}

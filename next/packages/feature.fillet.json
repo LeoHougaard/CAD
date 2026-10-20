@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "id": "feature.fillet",
+  "label": "Fillet",
+  "description": "Round a native edge and retain the native subelement link for topology remapping.",
+  "parameters": {
+    "name": {
+      "type": "identifier"
+    },
+    "body": {
+      "type": "identifier"
+    },
+    "source": {
+      "type": "identifier"
+    },
+    "edge": {
+      "type": "edge"
+    },
+    "radius": {
+      "type": "number",
+      "exclusive_minimum": 0
+    }
+  },
+  "edits": [
+    {
+      "op": "add_object",
+      "type": "PartDesign::Fillet",
+      "name": {
+        "$param": "name"
+      },
+      "body": {
+        "$param": "body"
+      }
+    },
+    {
+      "op": "set",
+      "object": {
+        "$param": "name"
+      },
+      "property": "Base",
+      "value": {
+        "link": {
+          "$param": "source"
+        },
+        "subelements": [
+          {
+            "$param": "edge"
+          }
+        ]
+      }
+    },
+    {
+      "op": "set",
+      "object": {
+        "$param": "name"
+      },
+      "property": "Radius",
+      "value": {
+        "$param": "radius"
+      }
+    }
+  ]
+}

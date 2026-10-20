@@ -233,7 +233,7 @@ def fillet_workflow(session, output):
     session.call("transaction", document=doc, label="Impossible radius", edits=[
         set_value("CornerFillet", "Radius", 1000)], expect_error="invalid_model")
     restored = session.call("inspect", document=doc)
-    assert restored["available"] and restored["revision"] == revision
+    assert restored["available"] and restored["revision"] > revision
     near(solid(restored, "CornerFillet")["volume"], corner["volume"])
     near(objects(restored)["CornerFillet"]["properties"]["Radius"], 2)
     # A different agent's stale command must not alter this document.
@@ -271,6 +271,93 @@ def fillet_workflow(session, output):
                 display_triangles=len(mesh["triangles"]))
 
 
+def display_normals_workflow(session):
+    doc = session.call("new", name="NativeDisplayNormals")["document"]
+    transaction(session, doc, "Native normal reference shapes", [
+        add("PartDesign::Body", "Body"), add("Sketcher::SketchObject", "Sketch", "Body"),
+        dict(op="geometry", object="Sketch", kind="circle", center=[0, 0, 0], radius=5),
+        add("PartDesign::Pad", "Pad", "Body"), set_value("Pad", "Profile", link("Sketch")),
+        set_value("Pad", "Length", 10),
+        add("Part::Cylinder", "Outer"), set_value("Outer", "Radius", 5), set_value("Outer", "Height", 10),
+        add("Part::Cylinder", "Inner"), set_value("Inner", "Radius", 2), set_value("Inner", "Height", 10),
+        add("Part::Cut", "Ring"), set_value("Ring", "Base", link("Outer")), set_value("Ring", "Tool", link("Inner")),
+        add("Part::Sphere", "Sphere"), set_value("Sphere", "Radius", 5)])
+
+    def checked_mesh(obj):
+        mesh = session.call("mesh", document=doc, object=obj, deflection=.03)
+        topo = session.call("topology", document=doc, object=obj, deflection=.03)
+        assert len(mesh["positions"]) == len(mesh["normals"]) > 0
+        for normal in mesh["normals"]:
+            assert len(normal) == 3 and all(math.isfinite(value) for value in normal)
+            near(sum(value * value for value in normal), 1)
+        groups = []
+        for face, native in zip(mesh["faces"], topo["faces"]):
+            assert face["subelement"] == native["subelement"]
+            first, count = face["first_triangle"], face["triangle_count"]
+            vertices = {index for triangle in mesh["triangles"][first:first + count] for index in triangle}
+            assert vertices
+            if native["normal"] is not None:
+                for index in vertices:
+                    near(sum(a * b for a, b in zip(mesh["normals"][index], native["normal"])), 1)
+            groups.append((native, vertices))
+        return mesh, groups
+
+    def cylindrical_normals(mesh, groups, placed=False):
+        counts = {"outward": 0, "inward": 0}
+        for face, vertices in groups:
+            if face["geometry_type"] != "Part::GeomCylinder":
+                continue
+            for index in vertices:
+                point = mesh["positions"][index]
+                radial = [0, point[1] - 200, point[2] - 300] if placed else [point[0], point[1], 0]
+                radius = math.sqrt(sum(value * value for value in radial))
+                # Ring's inner cylindrical wall must point into the hole.
+                sign = -1 if radius < 3 else 1
+                expected = [sign * value / radius for value in radial]
+                near(sum(a * b for a, b in zip(mesh["normals"][index], expected)), 1)
+                counts["inward" if sign < 0 else "outward"] += 1
+        assert counts["outward"]
+        return counts
+
+    mesh, groups = checked_mesh("Pad")
+    cylindrical_normals(mesh, groups)
+    mesh, groups = checked_mesh("Ring")
+    ring = cylindrical_normals(mesh, groups)
+    assert ring["inward"]
+    sphere, _ = checked_mesh("Sphere")
+    for point, normal in zip(sphere["positions"], sphere["normals"]):
+        near(sum(a * b / 5 for a, b in zip(point, normal)), 1)
+    coarse = session.call("topology", document=doc, object="Pad", deflection=.5)
+    fine = session.call("topology", document=doc, object="Pad", deflection=.03)
+    coarse_points = sum(len(edge["points"]) for edge in coarse["edges"])
+    fine_points = sum(len(edge["points"]) for edge in fine["edges"])
+    assert fine_points > coarse_points
+    for op in ("mesh", "topology"):
+        session.call(op, document=doc, object="Pad", deflection=0, expect_error="invalid_request")
+    transaction(session, doc, "Place native normal reference Body", [
+        set_value("Body", "Placement", dict(position=[100, 200, 300],
+                  rotation=[0, math.sqrt(.5), 0, math.sqrt(.5)]))])
+    child, groups = checked_mesh("Pad")
+    cylindrical_normals(child, groups)
+    transform = child["world_from_shape"]
+    assert transform["position"] == [100, 200, 300]
+    for actual, expected in zip(transform["rotation"], [0, math.sqrt(.5), 0, math.sqrt(.5)]):
+        near(actual, expected)
+    body, groups = checked_mesh("Body")
+    cylindrical_normals(body, groups, placed=True)
+    for value in body["world_from_shape"]["position"]:
+        near(value, 0)
+    # The Body mesh is already placed. The child requires one quaternion
+    # rotation, and normals receive no translation. Check their world agreement.
+    def world_normals(values):
+        return {tuple(round(value, 6) for value in normal) for normal in values}
+    rotated_child = [[normal[2], normal[1], -normal[0]] for normal in child["normals"]]
+    assert world_normals(rotated_child) == world_normals(body["normals"])
+    return dict(ring_vertices=len(mesh["positions"]), sphere_vertices=len(sphere["positions"]),
+                inward_vertices=ring["inward"], placed_body_vertices=len(body["positions"]),
+                coarse_edge_points=coarse_points, fine_edge_points=fine_points)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", required=True, type=Path)
@@ -286,6 +373,7 @@ def main():
                       sketch=sketch_workflow(session),
                       attachment=attachment_workflow(session, args.output.resolve()),
                       fillets=fillet_workflow(session, args.output.resolve()),
+                      display_normals=display_normals_workflow(session),
                       startup_ms=session.startup_ms, operations=session.timings)
         (args.output / "report.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
         print(json.dumps({key: value for key, value in result.items() if key not in {"capabilities", "operations"}}, indent=2))

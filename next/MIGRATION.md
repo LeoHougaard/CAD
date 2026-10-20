@@ -36,6 +36,11 @@ Native sources pinned to the selected release:
    Implement Onshape selection, sketch editing, feature previews and rollback
    as transactions against native state. Reopening a file must restore editable
    geometry and constraints without a separate frontend history.
+   The initial editor now covers constrained rectangle/circle profiles, native
+   dimensions, face attachment, extrusion, pockets, fillet previews, undo/redo
+   and FCStd reopening. Declarative feature packages share its command boundary.
+   See [tested workflows and remaining gates](VERIFICATION.md). General sketch
+   interaction, complete feature editing and executable plugins remain open.
 3. Measure complete user actions on the Pixel. Keep input, camera movement and
    drawing independent of model recomputation. Reduce copying, unnecessary
    recomputes and unused dependencies before translating working algorithms.

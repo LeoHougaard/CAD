@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "feature.pocket",
+  "label": "Remove",
+  "description": "Create a native PartDesign::Pocket from a sketch profile.",
+  "parameters": {
+    "name": {
+      "type": "identifier"
+    },
+    "body": {
+      "type": "identifier"
+    },
+    "profile": {
+      "type": "identifier"
+    },
+    "length": {
+      "type": "number",
+      "exclusive_minimum": 0
+    }
+  },
+  "edits": [
+    {
+      "op": "add_object",
+      "type": "PartDesign::Pocket",
+      "name": {
+        "$param": "name"
+      },
+      "body": {
+        "$param": "body"
+      }
+    },
+    {
+      "op": "set",
+      "object": {
+        "$param": "name"
+      },
+      "property": "Profile",
+      "value": {
+        "link": {
+          "$param": "profile"
+        }
+      }
+    },
+    {
+      "op": "set",
+      "object": {
+        "$param": "name"
+      },
+      "property": "Length",
+      "value": {
+        "$param": "length"
+      }
+    }
+  ]
+}

@@ -1,0 +1,378 @@
+{
+  "version": 1,
+  "id": "sketch.rectangle",
+  "label": "Rectangle",
+  "description": "Add four joined lines with native x/y, width and height dimensions. Constraints 8/9 set the corner and 10/11 set width/height relative to this package's first constraint.",
+  "parameters": {
+    "object": {
+      "type": "identifier"
+    },
+    "x": {
+      "type": "number",
+      "default": 0
+    },
+    "y": {
+      "type": "number",
+      "default": 0
+    },
+    "width": {
+      "type": "number",
+      "exclusive_minimum": 0
+    },
+    "height": {
+      "type": "number",
+      "exclusive_minimum": 0
+    },
+    "index": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0
+    }
+  },
+  "edits": [
+    {
+      "op": "geometry",
+      "object": {
+        "$param": "object"
+      },
+      "kind": "line",
+      "start": [
+        {
+          "$param": "x"
+        },
+        {
+          "$param": "y"
+        },
+        0
+      ],
+      "end": [
+        {
+          "$sum": [
+            {
+              "$param": "x"
+            },
+            {
+              "$param": "width"
+            }
+          ]
+        },
+        {
+          "$param": "y"
+        },
+        0
+      ]
+    },
+    {
+      "op": "geometry",
+      "object": {
+        "$param": "object"
+      },
+      "kind": "line",
+      "start": [
+        {
+          "$sum": [
+            {
+              "$param": "x"
+            },
+            {
+              "$param": "width"
+            }
+          ]
+        },
+        {
+          "$param": "y"
+        },
+        0
+      ],
+      "end": [
+        {
+          "$sum": [
+            {
+              "$param": "x"
+            },
+            {
+              "$param": "width"
+            }
+          ]
+        },
+        {
+          "$sum": [
+            {
+              "$param": "y"
+            },
+            {
+              "$param": "height"
+            }
+          ]
+        },
+        0
+      ]
+    },
+    {
+      "op": "geometry",
+      "object": {
+        "$param": "object"
+      },
+      "kind": "line",
+      "start": [
+        {
+          "$sum": [
+            {
+              "$param": "x"
+            },
+            {
+              "$param": "width"
+            }
+          ]
+        },
+        {
+          "$sum": [
+            {
+              "$param": "y"
+            },
+            {
+              "$param": "height"
+            }
+          ]
+        },
+        0
+      ],
+      "end": [
+        {
+          "$param": "x"
+        },
+        {
+          "$sum": [
+            {
+              "$param": "y"
+            },
+            {
+              "$param": "height"
+            }
+          ]
+        },
+        0
+      ]
+    },
+    {
+      "op": "geometry",
+      "object": {
+        "$param": "object"
+      },
+      "kind": "line",
+      "start": [
+        {
+          "$param": "x"
+        },
+        {
+          "$sum": [
+            {
+              "$param": "y"
+            },
+            {
+              "$param": "height"
+            }
+          ]
+        },
+        0
+      ],
+      "end": [
+        {
+          "$param": "x"
+        },
+        {
+          "$param": "y"
+        },
+        0
+      ]
+    },
+    {
+      "op": "constraint",
+      "object": {
+        "$param": "object"
+      },
+      "kind": "Coincident",
+      "args": [
+        {
+          "$param": "index"
+        },
+        2,
+        {
+          "$param": "index",
+          "offset": 1
+        },
+        1
+      ]
+    },
+    {
+      "op": "constraint",
+      "object": {
+        "$param": "object"
+      },
+      "kind": "Coincident",
+      "args": [
+        {
+          "$param": "index",
+          "offset": 1
+        },
+        2,
+        {
+          "$param": "index",
+          "offset": 2
+        },
+        1
+      ]
+    },
+    {
+      "op": "constraint",
+      "object": {
+        "$param": "object"
+      },
+      "kind": "Coincident",
+      "args": [
+        {
+          "$param": "index",
+          "offset": 2
+        },
+        2,
+        {
+          "$param": "index",
+          "offset": 3
+        },
+        1
+      ]
+    },
+    {
+      "op": "constraint",
+      "object": {
+        "$param": "object"
+      },
+      "kind": "Coincident",
+      "args": [
+        {
+          "$param": "index",
+          "offset": 3
+        },
+        2,
+        {
+          "$param": "index"
+        },
+        1
+      ]
+    },
+    {
+      "op": "constraint",
+      "object": {
+        "$param": "object"
+      },
+      "kind": "Horizontal",
+      "args": [
+        {
+          "$param": "index"
+        }
+      ]
+    },
+    {
+      "op": "constraint",
+      "object": {
+        "$param": "object"
+      },
+      "kind": "Vertical",
+      "args": [
+        {
+          "$param": "index",
+          "offset": 1
+        }
+      ]
+    },
+    {
+      "op": "constraint",
+      "object": {
+        "$param": "object"
+      },
+      "kind": "Horizontal",
+      "args": [
+        {
+          "$param": "index",
+          "offset": 2
+        }
+      ]
+    },
+    {
+      "op": "constraint",
+      "object": {
+        "$param": "object"
+      },
+      "kind": "Vertical",
+      "args": [
+        {
+          "$param": "index",
+          "offset": 3
+        }
+      ]
+    },
+    {
+      "op": "constraint",
+      "object": {
+        "$param": "object"
+      },
+      "kind": "DistanceX",
+      "args": [
+        {
+          "$param": "index"
+        },
+        1,
+        {
+          "$param": "x"
+        }
+      ]
+    },
+    {
+      "op": "constraint",
+      "object": {
+        "$param": "object"
+      },
+      "kind": "DistanceY",
+      "args": [
+        {
+          "$param": "index"
+        },
+        1,
+        {
+          "$param": "y"
+        }
+      ]
+    },
+    {
+      "op": "constraint",
+      "object": {
+        "$param": "object"
+      },
+      "kind": "Distance",
+      "args": [
+        {
+          "$param": "index"
+        },
+        {
+          "$param": "width"
+        }
+      ]
+    },
+    {
+      "op": "constraint",
+      "object": {
+        "$param": "object"
+      },
+      "kind": "Distance",
+      "args": [
+        {
+          "$param": "index",
+          "offset": 1
+        },
+        {
+          "$param": "height"
+        }
+      ]
+    }
+  ]
+}

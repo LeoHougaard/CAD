@@ -36,7 +36,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libgl1 libegl1 libglu1-mesa libxkbcommon0
+          sudo apt-get install -y --no-install-recommends libgl1 libegl1 libglu1-mesa libxkbcommon-dev libwayland-dev
       - name: Rust toolchain
         run: rustup toolchain install 1.99.1 --profile minimal --component clippy --component rustfmt
       - name: Cache pinned runtime
@@ -47,9 +47,9 @@ jobs:
       - name: Rust checks
         run: |
           cargo fmt --manifest-path next/Cargo.toml -- --check
-          cargo clippy --manifest-path next/Cargo.toml --all-targets --locked -- -D warnings
-          cargo test --manifest-path next/Cargo.toml --locked
-          cargo build --manifest-path next/Cargo.toml --locked
+          cargo clippy --manifest-path next/Cargo.toml --all-features --all-targets --locked -- -D warnings
+          cargo test --manifest-path next/Cargo.toml --all-features --locked
+          cargo build --manifest-path next/Cargo.toml --all-features --locked
       - name: Verified native runtime
         run: python next/tools/setup_runtime.py --output next/target/runtime.json
       - name: Real constrained sketches, attachment, fillets and history
@@ -57,3 +57,7 @@ jobs:
           host=next/target/debug/cad-next
           if [ "$RUNNER_OS" = Windows ]; then host="$host.exe"; fi
           python next/tests/native_workflows.py --host "$host" --runtime next/target/runtime.json --output next/target/native-documents
+          python next/tests/preview_workflows.py --host "$host" --runtime next/target/runtime.json --output next/target/preview-documents
+          compiler=next/target/debug/cad-next-packages
+          if [ "$RUNNER_OS" = Windows ]; then compiler="$compiler.exe"; fi
+          python next/tests/package_workflows.py --host "$host" --compiler "$compiler" --runtime next/target/runtime.json --output next/target/package-documents

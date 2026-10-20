@@ -1,0 +1,96 @@
+{
+  "version": 1,
+  "id": "sketch.circle",
+  "label": "Circle",
+  "description": "Add a circle with native center coordinates and radius. Radius is constraint 2 relative to this package's first constraint.",
+  "parameters": {
+    "object": {
+      "type": "identifier"
+    },
+    "x": {
+      "type": "number",
+      "default": 0
+    },
+    "y": {
+      "type": "number",
+      "default": 0
+    },
+    "radius": {
+      "type": "number",
+      "exclusive_minimum": 0
+    },
+    "index": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0
+    }
+  },
+  "edits": [
+    {
+      "op": "geometry",
+      "object": {
+        "$param": "object"
+      },
+      "kind": "circle",
+      "center": [
+        {
+          "$param": "x"
+        },
+        {
+          "$param": "y"
+        },
+        0
+      ],
+      "radius": {
+        "$param": "radius"
+      }
+    },
+    {
+      "op": "constraint",
+      "object": {
+        "$param": "object"
+      },
+      "kind": "DistanceX",
+      "args": [
+        {
+          "$param": "index"
+        },
+        3,
+        {
+          "$param": "x"
+        }
+      ]
+    },
+    {
+      "op": "constraint",
+      "object": {
+        "$param": "object"
+      },
+      "kind": "DistanceY",
+      "args": [
+        {
+          "$param": "index"
+        },
+        3,
+        {
+          "$param": "y"
+        }
+      ]
+    },
+    {
+      "op": "constraint",
+      "object": {
+        "$param": "object"
+      },
+      "kind": "Radius",
+      "args": [
+        {
+          "$param": "index"
+        },
+        {
+          "$param": "radius"
+        }
+      ]
+    }
+  ]
+}
