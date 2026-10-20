@@ -71,13 +71,10 @@ pub(super) fn detach(params: &mut Value, evaluated: &Plane) {
 impl CadApp {
     pub(super) fn sketch_support_ui(&mut self, ui: &mut egui::Ui, edit: &mut Editor) -> bool {
         let frozen = edit.feature.params.get("context_plane").is_some_and(|v| !v.is_null());
-        let label = if frozen {
-            if edit.feature.params.get("context_ref").is_some_and(|v| !v.is_null()) { "In-context plane".into() }
-            else { "Detached plane".into() }
-        } else {
-            support_target(&edit.feature.params, self.source_scene.as_deref().unwrap_or(&self.scene))
-                .map(|target| self.target_label(&target)).unwrap_or_else(|| "Missing support".into())
-        };
+        // Frozen and assembly bindings already have their own reference controls.
+        if frozen && !self.choosing_plane { return false; }
+        let label = support_target(&edit.feature.params, self.source_scene.as_deref().unwrap_or(&self.scene))
+            .map(|target| self.target_label(&target)).unwrap_or_else(|| "Missing support".into());
         let can_detach = !frozen && !self.work.busy() && self.pending_rebuild.is_none()
             && self.last_error.is_none() && self.scene.sketches.contains_key(&edit.feature.id);
         match support_controls(ui, &label, self.choosing_plane, can_detach) {

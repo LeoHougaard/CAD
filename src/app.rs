@@ -2301,6 +2301,7 @@ impl CadApp {
                     });
                     ui.separator();
                     changed |= self.context_reference_controls(ui, &mut edit);
+                    changed |= before_choosing_plane != self.choosing_plane;
                     if let Some(m) = &manifest {
                         egui::ScrollArea::vertical()
                             .id_salt("feature_properties")
