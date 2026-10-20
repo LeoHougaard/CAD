@@ -2,7 +2,9 @@ name: CI
 
 on:
   push:
+    paths-ignore: ['next/**', '.github/workflows/next.yml']
   pull_request:
+    paths-ignore: ['next/**', '.github/workflows/next.yml']
   workflow_dispatch:
 
 permissions:

@@ -71,10 +71,12 @@ def archive(cache, asset):
 def extract(archive_path, destination, asset):
     print("Extracting " + str(archive_path), file=sys.stderr)
     if asset["format"] == "7z":
-        tar = shutil.which("tar")
-        if tar is None:
+        # Git Bash puts GNU tar ahead of Windows' libarchive tar. GNU tar treats
+        # drive letters as remote hosts and does not read this portable 7z.
+        tar = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "tar.exe"
+        if not tar.is_file():
             raise RuntimeError("Windows tar.exe is required to extract the portable 7z archive")
-        command = [tar, "-xf", str(archive_path), "-C", str(destination)]
+        command = [str(tar), "-xf", str(archive_path), "-C", str(destination)]
     elif asset["format"] == "appimage":
         # The verified AppImage's built-in extractor does not mount with FUSE.
         archive_path.chmod(archive_path.stat().st_mode | 0o100)
