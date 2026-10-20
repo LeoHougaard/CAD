@@ -1,6 +1,27 @@
 //! Origin and feature planes share one drawing, picking and attachment path.
 use super::*;
 
+pub(super) fn support_overrides_origin(params: &Value) -> bool {
+    params.get("context_plane").is_some_and(|v| !v.is_null())
+        || params.get("support_ref").is_some_and(|v| !v.is_null())
+        || params["support"].as_str().is_some_and(|s| !s.is_empty())
+}
+
+enum SupportAction { Change, Detach }
+fn support_controls(ui: &mut egui::Ui, label: &str, choosing: bool, can_detach: bool) -> Option<SupportAction> {
+    ui.label(RichText::new("Sketch support").small().color(MUTED));
+    if choosing {
+        ui.label("Select a plane or planar face");
+        return None;
+    }
+    ui.add(egui::Label::new(label).truncate());
+    ui.horizontal(|ui| {
+        if ui.small_button("Change").clicked() { return Some(SupportAction::Change); }
+        if ui.add_enabled(can_detach, egui::Button::new("Detach").small()).clicked() { return Some(SupportAction::Detach); }
+        None
+    }).inner
+}
+
 // Highlight the same support that regeneration will resolve. An unattached
 // draft is handled by the caller; a missing reference never becomes Top.
 pub(super) fn support_target(params: &Value, scene: &Scene) -> Option<Target> {
@@ -48,6 +69,37 @@ pub(super) fn detach(params: &mut Value, evaluated: &Plane) {
 }
 
 impl CadApp {
+    pub(super) fn sketch_support_ui(&mut self, ui: &mut egui::Ui, edit: &mut Editor) -> bool {
+        let frozen = edit.feature.params.get("context_plane").is_some_and(|v| !v.is_null());
+        let label = if frozen {
+            if edit.feature.params.get("context_ref").is_some_and(|v| !v.is_null()) { "In-context plane".into() }
+            else { "Detached plane".into() }
+        } else {
+            support_target(&edit.feature.params, self.source_scene.as_deref().unwrap_or(&self.scene))
+                .map(|target| self.target_label(&target)).unwrap_or_else(|| "Missing support".into())
+        };
+        let can_detach = !frozen && !self.work.busy() && self.pending_rebuild.is_none()
+            && self.last_error.is_none() && self.scene.sketches.contains_key(&edit.feature.id);
+        match support_controls(ui, &label, self.choosing_plane, can_detach) {
+            Some(SupportAction::Change) => {
+                self.choosing_plane = true;
+                self.show_planes = true;
+                self.align_when_ready = false;
+                self.selection.clear();
+                self.selected_plane = None;
+                self.sketch_ui.cancel_gesture();
+                true
+            }
+            Some(SupportAction::Detach) => {
+                let sketch = &self.scene.sketches[&edit.feature.id];
+                detach(&mut edit.feature.params, &sketch.plane);
+                self.selection.clear();
+                self.selected_plane = None;
+                true
+            }
+            None => false,
+        }
+    }
     pub(super) fn plane_frame(&self, id: &str) -> Option<Plane> {
         if matches!(id, "Top" | "Front" | "Right") {
             return Some(Plane::named(id, 0.));
@@ -139,15 +191,12 @@ impl CadApp {
             && edit.sketch.is_some()
             && !self.choosing_plane
         {
-            let id = edit.feature.params["support"]
-                .as_str()
-                .filter(|s| !s.is_empty())
-                .or_else(|| edit.feature.params["plane"].as_str())
-                .unwrap_or("Top");
+            let Some(Target::Plane(id)) = support_target(&edit.feature.params,
+                self.source_scene.as_deref().unwrap_or(&self.scene)) else { return vec![]; };
             return self
-                .plane_frame(id)
-                .filter(|_| !self.hidden_sketches.contains(id))
-                .map(|plane| vec![(id.to_owned(), plane)])
+                .plane_frame(&id)
+                .filter(|_| !self.hidden_sketches.contains(&id))
+                .map(|plane| vec![(id, plane)])
                 .unwrap_or_default();
         }
         let selecting = self.choosing_plane || self.plane_input_active();
@@ -301,6 +350,33 @@ impl CadApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn bound_support_row_never_presents_the_inactive_origin_choice() {
+        let mut scene = Scene::default();
+        scene.planes.insert("f8".into(), Plane::named("Front", 12.));
+        for params in [
+            json!({"plane":"Top","support_ref":{"kind":"datum","feature":"f8"}}),
+            json!({"plane":"Top","support":"f8"}),
+            json!({"plane":"Top","support_ref":{"kind":"face","part":"f2:0","face":"f2:end"}}),
+            json!({"plane":"Top","context_plane":Plane::named("Front",12.)}),
+        ] {
+            assert!(support_overrides_origin(&params));
+            assert_ne!(support_target(&params,&scene), Some(Target::Plane("Top".into())));
+        }
+        assert!(!support_overrides_origin(&json!({"plane":"Top","support":"","support_ref":null})));
+        let params = json!({"plane":"Top","support_ref":{"kind":"datum","feature":"f8"}});
+        assert_eq!(support_target(&params,&scene),Some(Target::Plane("f8".into())));
+        let ctx = egui::Context::default();
+        let output = ctx.run(egui::RawInput::default(),|ctx| {
+            egui::CentralPanel::default().show(ctx,|ui| { let _ = support_controls(ui,"Plane 1",false,true); });
+        });
+        let text:Vec<_> = output.shapes.iter().filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => Some(text.galley.job.text.as_str()), _ => None,
+        }).collect();
+        assert!(text.contains(&"Plane 1"),"{text:?}");
+        assert!(!text.contains(&"Top"),"The actual support row must not contain an origin selector");
+        assert!(text.contains(&"Change") && text.contains(&"Detach"));
+    }
     #[test]
     fn support_highlight_uses_the_binding_instead_of_an_obsolete_origin_plane() {
         let scene = Scene::default();

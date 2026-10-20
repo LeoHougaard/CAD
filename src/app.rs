@@ -2308,9 +2308,10 @@ impl CadApp {
                             .show(ui, |ui| {
                                 for field in &m.fields {
                                     if !feature_inputs::visible(field, &edit.feature) { continue; }
-                                    if self.choosing_plane && field.key == "plane" {
-                                        ui.label(RichText::new("Sketch support").small().color(MUTED));
-                                        ui.label("Select a plane or planar face");
+                                    if m.editor == "sketch" && field.kind == "support" { continue; }
+                                    if m.editor == "sketch" && field.key == "plane"
+                                        && (self.choosing_plane || planes::support_overrides_origin(&edit.feature.params)) {
+                                        changed |= self.sketch_support_ui(ui, &mut edit);
                                         continue;
                                     }
                                     if (edit.feature.params.get("context_plane").is_some_and(|v|!v.is_null()) && matches!(field.key.as_str(),"plane"|"support")) || (edit.feature.params.get("context_up_to").is_some_and(|v|!v.is_null()) && matches!(field.key.as_str(),"depth"|"symmetric")) {continue;}
@@ -3836,6 +3837,37 @@ mod save_tests {
             sketch: document.features[index].sketch(), changed: false,
             input_field: None, undo: vec![], redo: vec![],
         }
+    }
+    #[test]
+    fn changing_and_detaching_a_bound_sketch_keep_offset_and_editor_history() {
+        let original = crate::model::demo();
+        let mut editor = edit(&original,0,false);
+        editor.feature.params["support_ref"] = json!({"kind":"datum","feature":"f8"});
+        editor.feature.params["offset"] = json!("3");
+        let bound = editor.feature.params.clone();
+        let pins = (editor.feature.plugin_hash.clone(),editor.feature.plugin_version.clone());
+        // Change opens the existing picker without mutating the binding.
+        editor.record(bound.clone(),false);
+        let mut choosing = true;
+        assert_eq!(editor.feature.params,bound);
+        planes::attach(&mut editor.feature.params,"Right").unwrap();
+        editor.record(bound.clone(),choosing);
+        choosing = false;
+        assert_eq!(editor.feature.params["offset"],"3");
+        assert_eq!(editor.step_history(false,&mut choosing),Some(true));
+        assert!(choosing);
+        assert_eq!(editor.feature.params,bound);
+        assert_eq!(editor.step_history(false,&mut choosing),Some(true));
+        assert!(!choosing);
+        let evaluated = Plane::named("Front",15.);
+        planes::detach(&mut editor.feature.params,&evaluated);
+        editor.record(bound.clone(),false);
+        assert_eq!(editor.feature.params["context_plane"],json!(evaluated));
+        assert_eq!(editor.feature.params["offset"],"0");
+        editor.step_history(false,&mut choosing).unwrap();
+        assert_eq!(editor.feature.params,bound);
+        assert_eq!((editor.feature.plugin_hash,editor.feature.plugin_version),pins);
+        assert_eq!(original.rollback,None);
     }
     #[test]
     fn sketch_plane_history_restores_explicit_choice_and_automatic_camera() {
