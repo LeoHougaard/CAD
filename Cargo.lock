@@ -189,7 +189,7 @@ dependencies = [
 [[package]]
 name = "brepkit-algo"
 version = "4.2.2"
-source = "git+https://github.com/LeoHougaard/brepkit?rev=08219b32f6ddf79608567419092f68f57ed9f908#08219b32f6ddf79608567419092f68f57ed9f908"
+source = "git+https://github.com/LeoHougaard/brepkit?rev=a534b99229b7c2c196fdb1f723e532db2b785c6e#a534b99229b7c2c196fdb1f723e532db2b785c6e"
 dependencies = [
  "brepkit-math",
  "brepkit-topology",
@@ -200,7 +200,7 @@ dependencies = [
 [[package]]
 name = "brepkit-blend"
 version = "4.2.2"
-source = "git+https://github.com/LeoHougaard/brepkit?rev=08219b32f6ddf79608567419092f68f57ed9f908#08219b32f6ddf79608567419092f68f57ed9f908"
+source = "git+https://github.com/LeoHougaard/brepkit?rev=a534b99229b7c2c196fdb1f723e532db2b785c6e#a534b99229b7c2c196fdb1f723e532db2b785c6e"
 dependencies = [
  "brepkit-math",
  "brepkit-topology",
@@ -211,7 +211,7 @@ dependencies = [
 [[package]]
 name = "brepkit-check"
 version = "4.2.2"
-source = "git+https://github.com/LeoHougaard/brepkit?rev=08219b32f6ddf79608567419092f68f57ed9f908#08219b32f6ddf79608567419092f68f57ed9f908"
+source = "git+https://github.com/LeoHougaard/brepkit?rev=a534b99229b7c2c196fdb1f723e532db2b785c6e#a534b99229b7c2c196fdb1f723e532db2b785c6e"
 dependencies = [
  "brepkit-geometry",
  "brepkit-math",
@@ -223,7 +223,7 @@ dependencies = [
 [[package]]
 name = "brepkit-geometry"
 version = "4.2.2"
-source = "git+https://github.com/LeoHougaard/brepkit?rev=08219b32f6ddf79608567419092f68f57ed9f908#08219b32f6ddf79608567419092f68f57ed9f908"
+source = "git+https://github.com/LeoHougaard/brepkit?rev=a534b99229b7c2c196fdb1f723e532db2b785c6e#a534b99229b7c2c196fdb1f723e532db2b785c6e"
 dependencies = [
  "brepkit-math",
  "thiserror 2.0.21",
@@ -232,7 +232,7 @@ dependencies = [
 [[package]]
 name = "brepkit-heal"
 version = "4.2.2"
-source = "git+https://github.com/LeoHougaard/brepkit?rev=08219b32f6ddf79608567419092f68f57ed9f908#08219b32f6ddf79608567419092f68f57ed9f908"
+source = "git+https://github.com/LeoHougaard/brepkit?rev=a534b99229b7c2c196fdb1f723e532db2b785c6e#a534b99229b7c2c196fdb1f723e532db2b785c6e"
 dependencies = [
  "bitflags 2.13.2",
  "brepkit-geometry",
@@ -245,7 +245,7 @@ dependencies = [
 [[package]]
 name = "brepkit-io"
 version = "4.2.2"
-source = "git+https://github.com/LeoHougaard/brepkit?rev=08219b32f6ddf79608567419092f68f57ed9f908#08219b32f6ddf79608567419092f68f57ed9f908"
+source = "git+https://github.com/LeoHougaard/brepkit?rev=a534b99229b7c2c196fdb1f723e532db2b785c6e#a534b99229b7c2c196fdb1f723e532db2b785c6e"
 dependencies = [
  "brepkit-math",
  "brepkit-operations",
@@ -261,7 +261,7 @@ dependencies = [
 [[package]]
 name = "brepkit-math"
 version = "4.2.2"
-source = "git+https://github.com/LeoHougaard/brepkit?rev=08219b32f6ddf79608567419092f68f57ed9f908#08219b32f6ddf79608567419092f68f57ed9f908"
+source = "git+https://github.com/LeoHougaard/brepkit?rev=a534b99229b7c2c196fdb1f723e532db2b785c6e#a534b99229b7c2c196fdb1f723e532db2b785c6e"
 dependencies = [
  "log",
  "robust",
@@ -272,7 +272,7 @@ dependencies = [
 [[package]]
 name = "brepkit-offset"
 version = "4.2.2"
-source = "git+https://github.com/LeoHougaard/brepkit?rev=08219b32f6ddf79608567419092f68f57ed9f908#08219b32f6ddf79608567419092f68f57ed9f908"
+source = "git+https://github.com/LeoHougaard/brepkit?rev=a534b99229b7c2c196fdb1f723e532db2b785c6e#a534b99229b7c2c196fdb1f723e532db2b785c6e"
 dependencies = [
  "brepkit-geometry",
  "brepkit-math",
@@ -284,7 +284,7 @@ dependencies = [
 [[package]]
 name = "brepkit-operations"
 version = "4.2.2"
-source = "git+https://github.com/LeoHougaard/brepkit?rev=08219b32f6ddf79608567419092f68f57ed9f908#08219b32f6ddf79608567419092f68f57ed9f908"
+source = "git+https://github.com/LeoHougaard/brepkit?rev=a534b99229b7c2c196fdb1f723e532db2b785c6e#a534b99229b7c2c196fdb1f723e532db2b785c6e"
 dependencies = [
  "brepkit-algo",
  "brepkit-blend",
@@ -303,7 +303,7 @@ dependencies = [
 [[package]]
 name = "brepkit-sketch"
 version = "4.2.2"
-source = "git+https://github.com/LeoHougaard/brepkit?rev=08219b32f6ddf79608567419092f68f57ed9f908#08219b32f6ddf79608567419092f68f57ed9f908"
+source = "git+https://github.com/LeoHougaard/brepkit?rev=a534b99229b7c2c196fdb1f723e532db2b785c6e#a534b99229b7c2c196fdb1f723e532db2b785c6e"
 dependencies = [
  "thiserror 2.0.21",
 ]
@@ -311,7 +311,7 @@ dependencies = [
 [[package]]
 name = "brepkit-topology"
 version = "4.2.2"
-source = "git+https://github.com/LeoHougaard/brepkit?rev=08219b32f6ddf79608567419092f68f57ed9f908#08219b32f6ddf79608567419092f68f57ed9f908"
+source = "git+https://github.com/LeoHougaard/brepkit?rev=a534b99229b7c2c196fdb1f723e532db2b785c6e#a534b99229b7c2c196fdb1f723e532db2b785c6e"
 dependencies = [
  "brepkit-math",
  "smallvec",

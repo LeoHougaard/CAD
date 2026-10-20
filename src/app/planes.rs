@@ -1,6 +1,28 @@
 //! Origin and feature planes share one drawing, picking and attachment path.
 use super::*;
 
+// Highlight the same support that regeneration will resolve. An unattached
+// draft is handled by the caller; a missing reference never becomes Top.
+pub(super) fn support_target(params: &Value, scene: &Scene) -> Option<Target> {
+    if params.get("context_plane").is_some_and(|v| !v.is_null()) { return None; }
+    if let Some(reference) = params.get("support_ref").filter(|v| !v.is_null()) {
+        return match serde_json::from_value::<crate::model::PlaneReference>(reference.clone()).ok()? {
+            crate::model::PlaneReference::Origin { plane } => Some(Target::Plane(plane)),
+            crate::model::PlaneReference::Datum { feature } => Some(Target::Plane(feature)),
+            crate::model::PlaneReference::Face { part, face } => Some(Target::Face { part, key: face }),
+        };
+    }
+    if let Some(support) = params["support"].as_str().filter(|s| !s.is_empty()) {
+        if scene.planes.contains_key(support) { return Some(Target::Plane(support.into())); }
+        let mut matches = scene.meshes.iter().flat_map(|m| m.faces.iter().filter(move |f| reference_matches(&f.key, support))
+            .map(move |f| Target::Face { part: m.part.clone(), key: f.key.clone() }));
+        let first = matches.next()?;
+        return matches.next().is_none().then_some(first);
+    }
+    params["plane"].as_str().filter(|plane| matches!(*plane, "Top" | "Front" | "Right"))
+        .map(|plane| Target::Plane(plane.into()))
+}
+
 pub(super) fn attach(params: &mut Value, id: &str) -> crate::model::Result<()> {
     let key = if matches!(id, "Top" | "Front" | "Right") { "plane" } else { "support" };
     crate::model::set_sketch_support(params, key, json!(id))
@@ -266,10 +288,8 @@ impl CadApp {
                 self.last_error = Some(error);
                 return;
             }
-            if before != edit.feature.params {
-                edit.undo.push(before);
-                edit.redo.clear();
-                edit.changed = true;
+            if before != edit.feature.params || self.choosing_plane {
+                edit.record(before, self.choosing_plane);
             }
             self.choosing_plane = false;
             self.align_when_ready = true;
@@ -281,6 +301,18 @@ impl CadApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn support_highlight_uses_the_binding_instead_of_an_obsolete_origin_plane() {
+        let scene = Scene::default();
+        let mut params = json!({"plane":"Top","support":"missing-face"});
+        assert_eq!(support_target(&params, &scene), None);
+        attach_face(&mut params, "f2:0", "f2:end").unwrap();
+        assert_eq!(support_target(&params, &scene), Some(Target::Face { part: "f2:0".into(), key: "f2:end".into() }));
+        attach(&mut params, "Right").unwrap();
+        assert_eq!(support_target(&params, &scene), Some(Target::Plane("Right".into())));
+        detach(&mut params, &Plane::named("Front", 7.));
+        assert_eq!(support_target(&params, &scene), None, "A detached frame has no selected source plane");
+    }
     #[test]
     fn datum_attachment_is_explicit_and_detach_preserves_evaluated_frame() {
         let mut params = json!({"plane":"Top","offset":"3","support":"","context_ref":{},"support_ref":{"kind":"face","part":"f2:0","face":"f2:end"}});

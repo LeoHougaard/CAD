@@ -1,0 +1,20 @@
+{
+  "id": "conditional-operation",
+  "name": "Conditional operation",
+  "version": "1.0.0",
+  "category": "feature",
+  "script": "conditional.rhai",
+  "fields": [
+    {"key":"mode","label":"Mode","kind":"choice","default":"New","options":["New","Cut"]},
+    {"key":"profile","label":"Cut profile","kind":"sketch","default":"","required":true,"when":[{"op":"equals","key":"mode","value":"Cut"}]},
+    {"key":"target","label":"Cut target","kind":"body","default":"","required":true,"when":[{"op":"equals","key":"mode","value":"Cut"}]},
+    {"key":"anchor","label":"Optional anchor","kind":"body","default":"","required":false,"when":[]},
+    {"key":"tools","label":"Optional parts","kind":"bodies","default":[],"required":false,"when":[]},
+    {"key":"guides","label":"Optional sketches","kind":"sketches","default":[],"required":false,"when":[]},
+    {"key":"optional_axis","label":"Optional axis","kind":"axis","default":{"kind":"origin","axis":"X"},"required":false,"when":[]},
+    {"key":"optional_plane","label":"Optional plane","kind":"plane_ref","default":{"kind":"origin","plane":"Top"},"required":false,"when":[]},
+    {"key":"cut_depth","label":"Cut depth","kind":"number","default":"not_defined","when":[{"op":"equals","key":"mode","value":"Cut"}]},
+    {"key":"height","label":"Height","kind":"number","default":"3"},
+    {"key":"width","label":"Width","kind":"number","default":"4","hidden":true}
+  ]
+}

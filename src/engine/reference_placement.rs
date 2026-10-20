@@ -92,11 +92,7 @@ impl Geometry {
             frame.validate()?;
             anchors.push((key(logical), frame, placed[source.as_str()].clone()));
         }
-        let edges = self
-            .edge_anchors
-            .iter()
-            .filter(|a| sources.contains(&a.source))
-            .map(|a| {
+        let place_edge = |a: &EdgeAnchor| {
                 let mut a = a.clone();
                 a.source = placed[a.source.as_str()].clone();
                 a.key = key(&a.key);
@@ -113,10 +109,28 @@ impl Geometry {
                     )
                 });
                 a
-            })
+            };
+        let edges = self
+            .edge_anchors
+            .iter()
+            .filter(|a| sources.contains(&a.source))
+            .map(place_edge)
             .collect::<Vec<_>>();
+        let generated = self.generated_faces.iter().filter(|a| sources.contains(&a.source))
+            .map(|a| Ok(generated_references::GeneratedFace {
+                key: key(&a.key), source: placed[a.source.as_str()].clone(),
+                surface: generated_references::transformed_surface(&a.surface, matrix)?,
+                boundary: a.boundary.iter().map(place_edge).collect(),
+                frame: a.frame.as_ref().map(|p| {
+                    let origin = matrix.mul_point(p3(p.origin));
+                    let u = vector(matrix,p.u);
+                    let normal = vector(matrix,p.normal);
+                    Plane { origin:[origin.x(),origin.y(),origin.z()], u, v:cross(normal,u), normal }
+                }),
+            })).collect::<Result<Vec<_>>>()?;
         self.anchors.extend(anchors);
         self.edge_anchors.extend(edges);
+        self.generated_faces.extend(generated);
         Ok(placed.into_values().collect())
     }
 
@@ -145,7 +159,7 @@ impl Geometry {
             return Err("Face reference is missing or ambiguous; reselect it".into());
         }
         let (id, actual) = aliases[0];
-        let namespaces: Vec<_> = self
+        let namespaces = self
             .anchors
             .iter()
             .filter(|(logical, plane, source)| {
@@ -158,8 +172,13 @@ impl Geometry {
             })
             .filter_map(|(logical, _, _)| {
                 alias_depth(logical, key).map(|depth| (depth, canonical_reference(logical)))
-            })
-            .collect();
+            });
+        let generated_namespaces = self.generated_faces.iter().filter(|r|
+            part.reference_sources.contains(&r.source) && reference_alias(&r.key, key)
+                && r.frame.as_ref().is_some_and(|plane|self.topo.face(*id).is_ok_and(|face|match face.surface(){
+                    FaceSurface::Plane {normal,d}=>plane_matches(plane,*normal,*d),_=>false})))
+            .filter_map(|r|alias_depth(&r.key,key).map(|depth|(depth,canonical_reference(&r.key))));
+        let namespaces:Vec<_> = namespaces.chain(generated_namespaces).collect();
         // A new outer occurrence preserves its prior logical namespace. Prefer
         // that exact prior namespace over aliases through additional ancestors.
         let depth = namespaces.iter().map(|(depth, _)| *depth).min();

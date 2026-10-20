@@ -14,6 +14,20 @@ Every request has `version`, `path`, and `action`. An optional `plugins` directo
 
 The response contains `result.document`, `result.revision`, `result.plugins`, and `result.model`. Plugin schemas list field keys, kinds, defaults, and choices. The model lists solved sketch entities, degrees of freedom, feature statuses, part volumes in mm³, display-mesh bounds in mm, face keys and planes, and edge keys. Inspect can return an invalid model so an agent can diagnose it. Check `result.validation_error` and `result.model.error` before relying on geometry.
 
+Selectable plugin fields may declare `required: true` or `false`. Explicitly required
+inputs are checked by both the editor and headless evaluation. Optional empty inputs
+do not block a feature. Omitted `required` retains the package's legacy validation.
+`when` is an array of conditions that must all hold, for example
+`[{"op":"equals","key":"mode","value":"Cut"}]`. Conditions support `equals`,
+`not_equals`, and `present`. Equality uses the controlling field's declared default
+when its key is missing. `present` takes a boolean and tests key existence even
+when the value is null. Condition keys must name declared fields. An inactive field
+retains its saved value but is omitted from selection routing and expression/reference
+validation. `hidden` only hides a control and does not disable its value. An explicit
+empty `when: []` is always active; omitting it retains the original body-mode and
+legacy profile-face conventions. Inspect exposes both declarations. Existing bundled
+package bytes, versions and document pins remain unchanged.
+
 Each resolved sketch also lists `regions`, with stable `key` identities, display-only `outer` and `holes` contours, and `whole_sketch` indicating the legacy whole-sketch selection. Set Extrude's `regions` parameter to an array of these keys to choose enclosed cells. `null` means whole sketch; `[]` is an explicit empty selection and is rejected. Region changes are validated atomically like other parameter edits. See [sketch regions](sketch-regions.md) for supported intersections and identity changes.
 
 Revisions are `fnv1a64:` followed by a stable hash of every file byte, including whitespace. They detect changes and are not security signatures. A preview's returned revision identifies the bytes it would save.

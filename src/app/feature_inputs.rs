@@ -3,31 +3,11 @@ use super::*;
 use crate::model::{ProfileReference, reference_matches};
 
 pub(super) fn selectable(kind: &str) -> bool {
-    matches!(
-        kind,
-        "profiles" | "regions" | "profile_face" | "plane_ref" | "axis" | "edges" | "faces" | "body" | "bodies" | "sketch" | "sketches"
-    )
+    Field::selectable(kind)
 }
 
 pub(super) fn visible(field: &Field, feature: &Feature) -> bool {
-    let p = &feature.params;
-    !field.hidden && !((feature.plugin == "plane"
-        && match field.key.as_str() {
-            "second" | "flip_alignment" => p["mode"] != "Midplane",
-            "axis_ref" | "angle" => p["mode"] != "Angle",
-            "offset" => p["mode"] != "Offset",
-            _ => false,
-        })
-        || (matches!(field.kind.as_str(), "body" | "bodies") && p["mode"] == "New")
-        || (p.get("profile_face").is_some_and(|v| !v.is_null())
-            && matches!(field.kind.as_str(), "sketch" | "regions"))
-        || (feature.plugin == "boolean" && field.key == "targets" && p["mode"] != "Subtract")
-        || (matches!(feature.plugin.as_str(), "extrude" | "revolve")
-            && ((field.key == "target" && p.get("targets").is_some())
-                || (field.key == "targets" && p.get("targets").is_none())))
-        || (feature.plugin == "revolve"
-            && matches!(field.key.as_str(), "axis" | "axis_offset")
-            && p.get("axis_ref").is_some_and(|v| !v.is_null())))
+    field.visible(&feature.params)
 }
 
 fn input<'a>(edit: &Editor, registry: &'a Registry) -> Option<&'a Field> {
@@ -44,7 +24,7 @@ fn input<'a>(edit: &Editor, registry: &'a Registry) -> Option<&'a Field> {
 
 fn primary_input<'a>(feature: &Feature, registry: &'a Registry) -> Option<&'a Field> {
     let fields = &registry.plugins.get(&feature.plugin)?.manifest.fields;
-            [
+    let kinds = [
                 "profiles",
                 "regions",
                 "profile_face",
@@ -56,17 +36,17 @@ fn primary_input<'a>(feature: &Feature, registry: &'a Registry) -> Option<&'a Fi
                 "bodies",
                 "axis",
                 "body",
-            ]
-            .into_iter()
-            .find_map(|kind| {
-                fields
-                    .iter()
-                    .find(|f| f.kind == kind && visible(f, feature))
-            })
+    ];
+    fields.iter().filter(|field| selectable(&field.kind) && visible(field, feature))
+        .min_by_key(|field| (field.required == Some(false), kinds.iter().position(|kind| *kind == field.kind)))
 }
 
 pub(super) fn active_key<'a>(edit: &Editor, registry: &'a Registry) -> Option<&'a str> {
     input(edit, registry).map(|f| f.key.as_str())
+}
+
+fn empty_axis(field: &Field) -> Value {
+    if field.required == Some(false) { Value::Null } else { json!({}) }
 }
 
 // UI commands start with empty references. Manifest defaults remain compatible
@@ -76,7 +56,7 @@ pub(super) fn prepare(feature: &mut Feature, registry: &Registry) {
     for field in plugin.manifest.fields.iter().filter(|f| !f.hidden && selectable(&f.kind)) {
         feature.params[&field.key] = match field.kind.as_str() {
             "profiles" | "regions" | "edges" | "faces" | "bodies" | "sketches" => json!([]),
-            "axis" => json!({}),
+            "axis" => empty_axis(field),
             "plane_ref" | "profile_face" => Value::Null,
             _ => json!(""),
         };
@@ -86,18 +66,7 @@ pub(super) fn prepare(feature: &mut Feature, registry: &Registry) {
 pub(super) fn missing(edit: &Editor, registry: &Registry) -> Option<String> {
     if edit.sketch.is_some() { return None; }
     let plugin = registry.plugins.get(&edit.feature.plugin)?;
-    plugin.manifest.fields.iter().filter(|f| visible(f, &edit.feature) && selectable(&f.kind))
-        .find(|field| {
-            let value = &edit.feature.params[&field.key];
-            match field.kind.as_str() {
-                "profiles" => ProfileReference::from_params(&edit.feature.params).map_or(true, |p| p.is_empty()),
-                "regions" => value.as_array().is_some_and(Vec::is_empty),
-                "axis" => !value.is_null() && value["kind"].as_str().is_none(),
-                "edges" | "faces" | "bodies" | "sketches" => value.as_array().is_none_or(Vec::is_empty),
-                "plane_ref" | "profile_face" => value.is_null(),
-                _ => value.as_str().is_none_or(str::is_empty),
-            }
-        })
+    plugin.manifest.fields.iter().find(|field| visible(field, &edit.feature) && field.missing(&edit.feature.params))
         .map(|f| format!("Select {}", f.label.to_lowercase()))
 }
 
@@ -182,6 +151,7 @@ pub(super) fn input_ui(
                 Some("edge") => scene.meshes.iter().find(|m|Some(m.part.as_str()) == value["part"].as_str())
                     .and_then(|m|m.edges.iter().position(|e|value["edge"].as_str().is_some_and(|key|reference_matches(&e.key,key))).map(|i|format!("{} / Edge {}",m.name,i+1)))
                     .unwrap_or_else(||"Missing axis".into()),
+                _ if value.is_null() && field.required == Some(false) => "None".into(),
                 _ if value.is_null() => "Sketch axis (legacy)".into(),
                 _ => "Select a line or edge".into(),
             };
@@ -194,7 +164,7 @@ pub(super) fn input_ui(
                         }
                     }
                 });
-                if ui.small_button("Clear").clicked() { *value = json!({}); }
+                if ui.small_button("Clear").clicked() { *value = empty_axis(field); }
             });
         }
         "bodies" => {
@@ -647,7 +617,7 @@ pub(super) fn source_topology_shapes(source: &Scene, result: &Scene, projector: 
 }
 
 fn body_field<'a>(feature: &Feature, registry: &'a Registry) -> Option<&'a Field> {
-    let mut fields = registry.plugins.get(&feature.plugin)?.manifest.fields.iter().filter(|f| f.kind == "body");
+    let mut fields = registry.plugins.get(&feature.plugin)?.manifest.fields.iter().filter(|f| f.kind == "body" && f.active(&feature.params));
     let body = fields.next()?;
     fields.next().is_none().then_some(body)
 }
@@ -784,7 +754,7 @@ fn apply_selection(params: &mut Value, field: &Field, targets: &[Target], scene:
                 Target::SketchEntity { sketch, entity, edge } if scene.sketches.get(sketch).is_some_and(|s| s.entities.iter().any(|e| e.id == *entity)) => Some(json!({"kind":"sketch_entity","sketch":sketch,"entity":entity,"edge":edge})),
                 _ => None,
             })
-            .unwrap_or_else(|| json!({})),
+            .unwrap_or_else(|| empty_axis(field)),
         "regions" => {
             if let Some(sketch) = targets.iter().rev().find_map(|t| {
                 if let Target::Region { sketch, .. } = t {
@@ -912,9 +882,7 @@ impl CadApp {
             return;
         }
         if before != edit.feature.params {
-            edit.undo.push(before);
-            edit.redo.clear();
-            edit.changed = true;
+            edit.record(before, self.choosing_plane);
             self.schedule(ctx);
         }
         self.restore_feature_selection();
@@ -1324,7 +1292,7 @@ mod tests {
     }
     #[test]
     fn single_part_inputs_reject_mixed_owners_and_clear_geometry_when_the_part_changes() {
-        let (mut document, scene, _, registry) = profile_scene();
+        let (mut document, scene, _, mut registry) = profile_scene();
         let first = &scene.meshes[0]; let second = &scene.meshes[1];
         for (plugin, key, kind) in [("fillet", "edges", "edges"), ("chamfer", "edges", "edges"), ("shell", "faces", "faces")] {
             let target = |mesh: &crate::engine::MeshView| if kind == "edges" {
@@ -1347,6 +1315,15 @@ mod tests {
             assert_eq!(feature.params["target"], "");
             assert_eq!(feature.params[key], json!([]), "Ambiguous preselection cannot select an arbitrary part");
         }
+        registry.plugins.get_mut("fillet").unwrap().manifest.fields.iter_mut().find(|f| f.key == "target").unwrap().hidden = true;
+        let mut hidden_owner = registry.create("fillet", &mut document).unwrap();
+        let edges = [first, second].map(|mesh| Target::Edge {part:mesh.part.clone(), key:mesh.edges[0].key.clone()});
+        let before = hidden_owner.params.clone();
+        assert!(apply_input(&mut hidden_owner, &field("edges", "edges"), &edges, &scene, &registry).is_err(),
+            "Hidden controls retain their input ownership semantics");
+        assert_eq!(hidden_owner.params, before);
+        apply_input(&mut hidden_owner, &field("edges", "edges"), &edges[..1], &scene, &registry).unwrap();
+        assert_eq!(hidden_owner.params["target"], first.part);
         let shared = first.faces.iter().find(|face| second.faces.iter().any(|other| other.key == face.key)).unwrap();
         let mut feature = registry.create("shell", &mut document).unwrap();
         feature.params["faces"] = json!([shared.key]);
@@ -1495,7 +1472,44 @@ mod tests {
             default: Value::Null,
             options: vec![],
             hidden: false,
+            when: None,
+            required: None,
         }
+    }
+    #[test]
+    fn external_conditional_inputs_share_routing_requirement_and_preview_contracts() {
+        let (mut document, scene, _, mut registry) = profile_scene();
+        registry.add(include_str!("../../tests/fixtures/conditional-plugin.json"),
+            include_str!("../../tests/fixtures/conditional-plugin.rhai")).unwrap();
+        let mut feature = registry.create("conditional-operation", &mut document).unwrap();
+        prepare(&mut feature, &registry);
+        let mut edit = profile_editor(feature);
+        assert_eq!(missing(&edit, &registry), None, "Optional empty inputs cannot block New mode");
+        assert_eq!(active_key(&edit, &registry), Some("optional_plane"));
+        assert!(edit.feature.params["optional_axis"].is_null());
+        assert!(edit.feature.params["optional_plane"].is_null());
+        let axis = registry.plugins["conditional-operation"].manifest.fields.iter().find(|f| f.key == "optional_axis").unwrap();
+        apply_input(&mut edit.feature, axis, &[], &scene, &registry).unwrap();
+        assert!(edit.feature.params["optional_axis"].is_null());
+        edit.feature.params["mode"] = json!("Cut");
+        assert_eq!(missing(&edit, &registry).as_deref(), Some("Select cut profile"));
+        assert_eq!(active_key(&edit, &registry), Some("profile"));
+        let profile = registry.plugins["conditional-operation"].manifest.fields.iter().find(|f| f.key == "profile").unwrap();
+        apply_input(&mut edit.feature, profile, &[Target::Feature("f1".into())], &scene, &registry).unwrap();
+        assert_eq!(missing(&edit, &registry).as_deref(), Some("Select cut target"));
+        cycle(&mut edit, &registry, false);
+        assert_eq!(active_key(&edit, &registry), Some("target"));
+        let target = registry.plugins["conditional-operation"].manifest.fields.iter().find(|f| f.key == "target").unwrap();
+        apply_input(&mut edit.feature, target, &[Target::Part(scene.meshes[0].part.clone())], &scene, &registry).unwrap();
+        edit.feature.params["cut_depth"] = json!("1");
+        assert_eq!(missing(&edit, &registry), None);
+        edit.input_field = Some("target".into());
+        let selected = CadApp::selection_from_input(&edit, &registry, &scene).unwrap();
+        assert_eq!(selected.items(), &[Target::Part(scene.meshes[0].part.clone())]);
+        edit.feature.params["mode"] = json!("New");
+        assert_eq!(active_key(&edit, &registry), Some("optional_plane"), "A stale active field must not route hidden input");
+        assert_eq!(missing(&edit, &registry), None);
+        assert_eq!(edit.feature.params["target"], scene.meshes[0].part, "Changing modes preserves dormant input");
     }
     #[test]
     fn legacy_single_scope_is_not_silently_converted_to_empty_explicit_scope() {
@@ -1504,16 +1518,16 @@ mod tests {
             let mut document = Document::default();
             let mut feature = registry.create(plugin, &mut document).unwrap();
             feature.params["mode"] = json!("Remove");
-            let single = field("target", "body");
-            let multiple = field("targets", "bodies");
-            assert!(!visible(&single, &feature));
-            assert!(visible(&multiple, &feature));
+            let single = registry.plugins[plugin].manifest.fields.iter().find(|f| f.key == "target").unwrap();
+            let multiple = registry.plugins[plugin].manifest.fields.iter().find(|f| f.key == "targets").unwrap();
+            assert!(!visible(single, &feature));
+            assert!(visible(multiple, &feature));
             feature.params.as_object_mut().unwrap().remove("targets");
-            assert!(visible(&single, &feature));
-            assert!(!visible(&multiple, &feature));
+            assert!(visible(single, &feature));
+            assert!(!visible(multiple, &feature));
             feature.params["targets"] = json!([]);
-            assert!(!visible(&single, &feature));
-            assert!(visible(&multiple, &feature));
+            assert!(!visible(single, &feature));
+            assert!(visible(multiple, &feature));
         }
     }
     #[test]

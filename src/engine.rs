@@ -4,6 +4,7 @@ mod edge_setback;
 mod boolean_prisms;
 mod feature_controls;
 mod reference_placement;
+mod generated_references;
 mod sweep_loft;
 use crate::{
     model::{canonical_reference, reference_matches, Document, Feature, Plane, Result},
@@ -98,6 +99,7 @@ pub struct Geometry {
     pub anchors: Vec<(String, Plane, String)>,
     pub outputs: BTreeMap<String, Vec<String>>,
     edge_anchors: Vec<EdgeAnchor>,
+    generated_faces: Vec<generated_references::GeneratedFace>,
 }
 impl Default for Geometry {
     fn default() -> Self {
@@ -109,6 +111,7 @@ impl Default for Geometry {
             anchors: vec![],
             outputs: BTreeMap::new(),
             edge_anchors: vec![],
+            generated_faces: vec![],
         }
     }
 }
@@ -134,6 +137,14 @@ impl EdgeAnchor {
             return false;
         };
         let (a, b) = (a.point(), b.point());
+        // A full circle has no geometric start vertex. Copies and exact
+        // canonicalization may choose another periodic seam on the same circle.
+        if let (Some((center, normal, radius, true)), EdgeCurve::Circle(c)) = (self.circle, edge.curve()) {
+            return (a - b).length() < TOL
+                && (center - c.center()).length() < TOL
+                && (radius - c.radius()).abs() < TOL
+                && normal.cross(c.normal()).length() < 1e-8;
+        }
         if !(((a - self.start).length() < TOL && (b - self.end).length() < TOL)
             || ((b - self.start).length() < TOL && (a - self.end).length() < TOL))
         {
@@ -286,6 +297,7 @@ impl Runtime {
                 let parts_before = geometry.parts.clone();
                 let anchors_before = geometry.anchors.len();
                 let edge_anchors_before = geometry.edge_anchors.len();
+                let generated_faces_before = geometry.generated_faces.len();
                 let result = (|| {
                     let plan = self.registry.evaluate(feature, &numbers)?;
                     let operations = if let Some(a) = plan.as_array() {
@@ -327,6 +339,7 @@ impl Runtime {
                     geometry.parts = parts_before;
                     geometry.anchors.truncate(anchors_before);
                     geometry.edge_anchors.truncate(edge_anchors_before);
+                    geometry.generated_faces.truncate(generated_faces_before);
                     geometry.sketches.remove(&feature.id);
                     geometry.planes.remove(&feature.id);
                     geometry.outputs.remove(&feature.id);
@@ -864,7 +877,7 @@ impl Geometry {
             .into_iter()
             .map(|id| {
                 let face = self.topo.face(id).map_err(err)?;
-                let key = match face.surface() {
+                let mut key = match face.surface() {
                     FaceSurface::Plane { normal, d } => self
                         .anchors
                         .iter()
@@ -915,6 +928,10 @@ impl Geometry {
                     }
                     _ => format!("untracked:curved:{}", id.index()),
                 };
+                if key.contains("untracked:")
+                    && let Some(generated) = self.generated_face_key(id, allowed)? {
+                    key = generated;
+                }
                 Ok((id, key))
             })
             .collect::<Result<Vec<_>>>()?;

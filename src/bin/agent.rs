@@ -219,7 +219,7 @@ fn field_value(field: &Field, value: &Value) -> cad::model::Result<()> {
                         && reference_text(o.get("face"), 8192)
                 })
         }
-        "plane_ref" => (value.is_null() && field.default.is_null())
+        "plane_ref" => (value.is_null() && (field.default.is_null() || field.required == Some(false)))
             || serde_json::from_value::<PlaneReference>(value.clone())
                 .is_ok_and(|reference| reference.validate().is_ok()),
         "profiles" => value.is_null() || (value.is_array()
@@ -252,7 +252,7 @@ fn field_value(field: &Field, value: &Value) -> cad::model::Result<()> {
                     })
         }
         "sketches" => value.as_array().is_some_and(|a| {
-            (2..=32).contains(&a.len())
+            (field.required.is_some() || a.len() >= 2) && a.len() <= 32
                 && a.iter()
                     .all(|v| v.as_str().is_some_and(|s| !s.is_empty() && s.len() <= 128))
                 && a.iter()
@@ -640,9 +640,12 @@ fn validate(document: &Document, registry: &Registry) -> cad::model::Result<()> 
                 feature.id
             ));
         }
+        plugin.validate_inputs(&feature.params)?;
         for field in &plugin.manifest.fields {
             let value = feature.params.get(&field.key).unwrap_or(&field.default);
+            if !field.active(&feature.params) { continue; }
             field_value(field, value)?;
+            if field.required == Some(false) && field.empty_input(&feature.params) { continue; }
             if field.kind == "number" {
                 numbers.value(value)?;
             }
@@ -748,7 +751,7 @@ fn schemas(registry: &Registry) -> Value {
     json!(registry.plugins.values().map(|p| json!({
         "id":p.manifest.id,"name":p.manifest.name,"version":p.manifest.version,"hash":p.hash,
         "category":p.manifest.category,"editor":p.manifest.editor,
-        "fields":p.manifest.fields.iter().map(|f| json!({"key":f.key,"label":f.label,"kind":f.kind,"default":f.default,"options":f.options,"hidden":f.hidden})).collect::<Vec<_>>()
+        "fields":p.manifest.fields.iter().map(|f| json!({"key":f.key,"label":f.label,"kind":f.kind,"default":f.default,"options":f.options,"hidden":f.hidden,"when":f.when,"required":f.required})).collect::<Vec<_>>()
     })).collect::<Vec<_>>())
 }
 fn successful(evaluation: &Evaluation) -> Result<()> {

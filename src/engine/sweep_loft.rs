@@ -188,6 +188,32 @@ impl Geometry {
                 return Err("Circular loft would polygonize the profiles".into());
             }
         }
+        let section_ids = ids.iter().map(|id| id.as_str().unwrap().to_owned()).collect::<Vec<_>>();
+        if let Some(rings) = &polygon_sections {
+            let roles = profiles.iter().zip(rings).map(|(sk,ring)| polygon_roles(sk, ring))
+                .collect::<Result<Vec<_>>>()?;
+            self.register_polygon_sections(f, ordinal, solid, rings, &section_ids, &roles)?;
+        } else {
+            let prefix = format!("{}:generated:{ordinal}", f.id);
+            for i in 0..profiles.len()-1 {
+                let mut boundary = vec![];
+                let mut curves = vec![];
+                for j in [i,i+1] {
+                    let RegionLoop::Circle { center, radius, entity } = &regions[j] else { unreachable!() };
+                    let curve = profiles[j].entities.iter().find(|e| e.id == *entity)
+                        .ok_or("Loft circle source is missing")?.curve_key(0);
+                    boundary.push(generated_references::circle(&prefix,
+                        format!("{prefix}:ring:{}:{curve}", section_ids[j]),
+                        p3(profiles[j].plane.at(*center)), v3(profiles[j].plane.normal), *radius,
+                        p3(profiles[j].plane.at([center[0]+radius,center[1]]))));
+                    curves.push(curve);
+                }
+                self.register_generated_face(&prefix,
+                    format!("{prefix}:side:{}:{}:{}:{}", section_ids[i],curves[0],section_ids[i+1],curves[1]),
+                    solid, boundary)?;
+            }
+        }
+        let output = self.operation_output_key(f, ordinal * 100, p)?;
         self.add_result(
             f,
             solid,
@@ -195,6 +221,8 @@ impl Geometry {
             text(p, "target", ""),
             ordinal * 100,
         )?;
+        self.parts.iter_mut().find(|part| part.key == output).unwrap()
+            .reference_sources.insert(format!("{}:generated:{ordinal}", f.id));
         let end = p3(profiles.last().unwrap().plane.origin);
         let mut end_plane = profiles.last().unwrap().plane.clone();
         if v3(end_plane.normal).dot(axis) < 0. {
@@ -203,6 +231,7 @@ impl Geometry {
         end_plane.v = cross(end_plane.normal, end_plane.u);
         self.cap_anchors(
             f,
+            &format!("{}:generated:{ordinal}", f.id),
             &profiles[0].plane,
             &end_plane,
             (end - first).dot(axis).signum(),
@@ -313,12 +342,27 @@ impl Geometry {
                     profile.plane.shifted(signed),
                     signed.signum(),
                 ));
-                faces
+                let solids = faces
                     .iter()
                     .map(|face| {
                         ops::extrude::extrude(&mut self.topo, *face, tangent, length).map_err(err)
                     })
-                    .collect::<Result<Vec<_>>>()?
+                    .collect::<Result<Vec<_>>>()?;
+                // A straight sweep is an extrusion. Reuse its source-boundary
+                // identities without changing the established cap names.
+                let edges = sketch::region_edges(&profile)?;
+                let source = format!("{}:generated:{ordinal}", f.id);
+                for edge in edges.iter().filter(|edge|edge.circle.is_none()) {
+                    let origin=profile.plane.at(edge.start);
+                    let u=sub(profile.plane.at(edge.end),origin);
+                    let length=dot(u,u).sqrt();
+                    if length<EPS { continue; }
+                    let u=u.map(|x|x/length);
+                    self.anchors.push((format!("{source}:region-side:{}",edge.key),
+                        Plane {origin,u,v:profile.plane.normal,normal:cross(u,profile.plane.normal)},source.clone()));
+                }
+                self.register_profile_edges(&source, &profile, &edges, 0., signed);
+                solids
             } else {
                 if regions.len() != 1 || !matches!(regions[0], RegionLoop::Polygon { .. }) {
                     return Err("Sharp-corner sweeps currently need one polygon profile without holes; use a circular path for a curved tube".into());
@@ -330,15 +374,36 @@ impl Geometry {
                     unreachable!()
                 };
                 let (sections, start, end) = miter_sections(&profile, &path, &points, polygon)?;
-                let built = sections
-                    .into_iter()
-                    .map(|(vertices, normal)| polygon_face(&mut self.topo, vertices, normal))
+                let rings = sections.iter().map(|(vertices,_)| vertices.clone()).collect::<Vec<_>>();
+                let built = sections.iter()
+                    .map(|(vertices, normal)| polygon_face(&mut self.topo, vertices.clone(), *normal))
                     .collect::<Result<Vec<_>>>()?;
                 caps = Some((start, end, 1.));
-                vec![ruled_loft(&mut self.topo, &built)?]
+                let solid = ruled_loft(&mut self.topo, &built)?;
+                let original_ring = polygon.iter().map(|p| p3(profile.plane.at(*p))).collect::<Vec<_>>();
+                let profile_roles = polygon_roles(&profile, &original_ring)?;
+                let roles = vec![profile_roles; rings.len()];
+                let segments = points.windows(2).map(|pair| {
+                    let ids:Vec<_> = entities.iter().filter(|e| e.kind == "line" && {
+                        let a=p3(path.plane.at([e.values[0],e.values[1]]));
+                        let b=p3(path.plane.at([e.values[2],e.values[3]]));
+                        ((a-pair[0]).length()<EPS && (b-pair[1]).length()<EPS)
+                            || ((a-pair[1]).length()<EPS && (b-pair[0]).length()<EPS)
+                    }).map(|e| e.curve_key(0)).collect();
+                    if ids.len()!=1 { return Err("Sweep segment source is missing or ambiguous".into()); }
+                    Ok(format!("{}:{}",text(p,"path",""),ids[0]))
+                }).collect::<Result<Vec<_>>>()?;
+                let sections = (0..points.len()).map(|i| {
+                    if i==0 { format!("start:{}",segments[0]) }
+                    else if i==points.len()-1 { format!("end:{}",segments[i-1]) }
+                    else { let mut adjacent=[segments[i-1].as_str(),segments[i].as_str()]; adjacent.sort(); format!("junction:{}:{}",adjacent[0],adjacent[1]) }
+                }).collect::<Vec<_>>();
+                self.register_polygon_sections(f, ordinal, solid, &rings, &sections, &roles)?;
+                vec![solid]
             }
         };
         for (i, solid) in solids.into_iter().enumerate() {
+            let output = self.operation_output_key(f, ordinal * 100 + i, p)?;
             self.add_result(
                 f,
                 solid,
@@ -346,23 +411,66 @@ impl Geometry {
                 text(p, "target", ""),
                 ordinal * 100 + i,
             )?;
+            self.parts.iter_mut().find(|part| part.key == output).unwrap()
+                .reference_sources.insert(format!("{}:generated:{ordinal}", f.id));
         }
         if let Some((start, end, sign)) = caps {
-            self.cap_anchors(f, &start, &end, sign);
+            self.cap_anchors(f, &format!("{}:generated:{ordinal}", f.id), &start, &end, sign);
         }
         Ok(())
     }
 
-    fn cap_anchors(&mut self, f: &Feature, start: &Plane, end: &Plane, sign: f64) {
+    fn cap_anchors(&mut self, f: &Feature, source: &str, start: &Plane, end: &Plane, sign: f64) {
         let mut a = start.clone();
         let mut b = end.clone();
         a.normal = a.normal.map(|x| -sign * x);
         a.v = cross(a.normal, a.u);
         b.normal = b.normal.map(|x| sign * x);
         b.v = cross(b.normal, b.u);
-        self.anchors.push((format!("{}:start", f.id), a, f.id.clone()));
-        self.anchors.push((format!("{}:end", f.id), b, f.id.clone()));
+        self.anchors.push((format!("{}:start", f.id), a, source.into()));
+        self.anchors.push((format!("{}:end", f.id), b, source.into()));
     }
+
+    fn operation_output_key(&self, f:&Feature, ordinal:usize, p:&Value) -> Result<String> {
+        if text(p,"mode","New") == "New" { Ok(format!("{}:{ordinal}",f.id)) }
+        else { Ok(self.parts[self.target(text(p,"target",""))?].key.clone()) }
+    }
+
+    fn register_polygon_sections(&mut self, f:&Feature, ordinal:usize, solid:SolidId,
+        rings:&[Vec<Point3>], sections:&[String], roles:&[Vec<(String,String)>]) -> Result<()> {
+        let prefix=format!("{}:generated:{ordinal}", f.id);
+        for span in 0..rings.len()-1 {
+            let lower=&rings[span]; let upper=&rings[span+1];
+            for i in 0..lower.len() {
+                let next=(i+1)%lower.len();
+                let ring_key=|section:usize,side:usize| format!("{prefix}:ring:{}:{}",sections[section],roles[section][side].0);
+                let vertex_key=|vertex:usize| format!("{prefix}:span:{}:{}:vertex:{}:{}",sections[span],sections[span+1],roles[span][vertex].1,roles[span+1][vertex].1);
+                let line=|key,a,b| generated_references::line(&prefix,key,a,b);
+                let boundary=vec![line(ring_key(span,i),lower[i],lower[next]),
+                    line(vertex_key(next),lower[next],upper[next]),
+                    line(ring_key(span+1,i),upper[next],upper[i]),
+                    line(vertex_key(i),upper[i],lower[i])];
+                self.register_generated_face(&prefix,
+                    format!("{prefix}:side:{}:{}:{}:{}",sections[span],roles[span][i].0,sections[span+1],roles[span+1][i].0),solid,boundary)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn polygon_roles(sk:&ResolvedSketch, ring:&[Point3]) -> Result<Vec<(String,String)>> {
+    let edges=sketch::region_edges(sk)?;
+    (0..ring.len()).map(|i| {
+        let a=ring[i]; let b=ring[(i+1)%ring.len()];
+        let hits=edges.iter().filter(|edge| edge.circle.is_none()).filter_map(|edge| {
+            let start=p3(sk.plane.at(edge.start)); let end=p3(sk.plane.at(edge.end));
+            if (a-start).length()<EPS && (b-end).length()<EPS { Some((edge.key.clone(),edge.start_key.clone())) }
+            else if (a-end).length()<EPS && (b-start).length()<EPS { Some((edge.key.clone(),edge.end_key.clone())) }
+            else { None }
+        }).collect::<Vec<_>>();
+        if hits.len()!=1 { return Err("Generated boundary lost its source curve identity".into()); }
+        Ok(hits[0].clone())
+    }).collect()
 }
 
 // Kernel polygon loft sides are planar by default. A warped quadrilateral is

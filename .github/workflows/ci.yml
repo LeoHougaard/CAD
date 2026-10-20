@@ -67,7 +67,7 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          folders = [Path('target/test-output'), Path('target/test-output/regions'), Path('target/test-output/geometry-controls'), Path('target/test-output/blend-semantics'), Path('target/test-output/original-enclosure-order'), Path('target/test-output/assembly-performance'), Path('output/sweep-loft')]
+          folders = [Path('target/test-output'), Path('target/test-output/regions'), Path('target/test-output/geometry-controls'), Path('target/test-output/blend-semantics'), Path('target/test-output/original-enclosure-order'), Path('target/test-output/assembly-performance'), Path('target/test-output/generated-references'), Path('output/sweep-loft')]
           folders.extend(Path('target/test-output/end-user-projects').glob('*'))
           for folder in folders:
               for path in folder.glob('*'):
@@ -123,6 +123,10 @@ jobs:
       - name: Verify exact geometry controls with Open CASCADE
         if: runner.os == 'Linux'
         run: .tools/ci-python/bin/python tools/verify_geometry_controls_step.py
+
+      - name: Verify generated-side feature chains with Open CASCADE
+        if: runner.os == 'Linux'
+        run: .tools/ci-python/bin/python tools/verify_generated_references_step.py
 
       - name: Verify Boolean and fillet material boundaries with Open CASCADE
         if: runner.os == 'Linux'

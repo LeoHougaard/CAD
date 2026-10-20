@@ -23,7 +23,10 @@ impl Geometry {
         let mut plane = self.anchors.iter().find_map(|(k, p, scope)| {
             (sources.contains(scope) && reference_matches(k, source)
                 && plane_matches(p, *normal, *d)).then(|| p.clone())
-        }).unwrap_or_else(|| {
+        }).or_else(|| self.generated_faces.iter().find_map(|r|
+            (sources.contains(&r.source) && reference_matches(&r.key, source))
+                .then(|| r.frame.clone()).flatten()))
+        .unwrap_or_else(|| {
             let seed = if n[0].abs() < 0.8 { [1., 0., 0.] } else { [0., 1., 0.] };
             let projected = sub(seed, n.map(|x| x * dot(seed, n)));
             let u = projected.map(|x| x / dot(projected, projected).sqrt());

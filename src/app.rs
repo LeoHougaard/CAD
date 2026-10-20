@@ -188,14 +188,38 @@ struct Editor {
     sketch: Option<Sketch>,
     changed: bool,
     input_field: Option<String>,
-    undo: Vec<Value>,
-    redo: Vec<Value>,
+    undo: Vec<EditState>,
+    redo: Vec<EditState>,
+}
+struct EditState {
+    params: Value,
+    choosing_plane: bool,
 }
 impl Editor {
     fn sync(&mut self) {
         if let Some(sk) = &self.sketch {
             self.feature.set_sketch(sk);
         }
+    }
+    fn record(&mut self, params: Value, choosing_plane: bool) {
+        self.undo.push(EditState { params, choosing_plane });
+        if self.undo.len() > 60 { self.undo.remove(0); }
+        self.redo.clear();
+        self.changed = true;
+    }
+    fn step_history(&mut self, redo: bool, choosing_plane: &mut bool) -> Option<bool> {
+        self.sync();
+        let state = if redo { self.redo.pop() } else { self.undo.pop() }?;
+        let plane_changed = *choosing_plane != state.choosing_plane
+            || ["plane", "support", "support_ref", "context_plane", "context_ref"]
+                .iter().any(|key| self.feature.params.get(*key) != state.params.get(*key));
+        let old = EditState {
+            params: std::mem::replace(&mut self.feature.params, state.params),
+            choosing_plane: std::mem::replace(choosing_plane, state.choosing_plane),
+        };
+        self.sketch = self.feature.sketch();
+        if redo { self.undo.push(old); } else { self.redo.push(old); }
+        Some(plane_changed && self.sketch.is_some())
     }
     fn apply_to(&self, document: &mut Document) {
         let mut feature = self.feature.clone();
@@ -206,6 +230,22 @@ impl Editor {
             if let Some(end) = &mut document.rollback { *end += 1; }
         } else { document.features[self.index] = feature; }
     }
+}
+
+// A slider previews many rollback positions but commits one history action.
+#[derive(Default)]
+struct RollbackEdit {
+    before: Option<Document>,
+}
+impl RollbackEdit {
+    fn set(&mut self, document: &mut Document, end: Option<usize>) -> bool {
+        let end = end.filter(|end| *end < document.features.len());
+        if document.rollback == end { return false; }
+        self.before.get_or_insert_with(|| document.clone());
+        document.rollback = end;
+        true
+    }
+    fn finish(&mut self) -> Option<Document> { self.before.take() }
 }
 enum FileAction {
     Open,
@@ -242,6 +282,7 @@ pub struct CadApp {
     path: Option<PathBuf>,
     past: VecDeque<Document>,
     future: Vec<Document>,
+    rollback_edit: RollbackEdit,
     registry: Arc<Registry>,
     plugin_dir: PathBuf,
     worker: Worker,
@@ -353,6 +394,7 @@ impl CadApp {
             path,
             past: VecDeque::new(),
             future: vec![],
+            rollback_edit: RollbackEdit::default(),
             registry,
             plugin_dir,
             worker,
@@ -486,6 +528,13 @@ impl CadApp {
         self.future.clear();
         self.last_error = None;
         self.rebuild();
+    }
+    fn finish_rollback(&mut self) {
+        if let Some(before) = self.rollback_edit.finish() { self.remember(before); }
+    }
+    fn set_rollback(&mut self, end: Option<usize>) {
+        self.finish_rollback();
+        if self.rollback_edit.set(&mut self.document, end) { self.finish_rollback(); }
     }
     fn edited_faces(&mut self) -> Vec<usize> {
         let Some(edit) = &self.editor else { self.edit_highlight = None; return vec![]; };
@@ -958,6 +1007,7 @@ impl CadApp {
         }
     }
     fn begin(&mut self, id: &str) {
+        self.finish_rollback();
         self.notice.clear();
         self.sketch_ui = SketchUi::default();
         if self.editor.is_some() || self.rename_feature.is_some() {
@@ -1032,6 +1082,7 @@ impl CadApp {
         self.rebuild();
     }
     fn edit_feature(&mut self, index: usize) {
+        self.finish_rollback();
         self.notice.clear();
         self.sketch_ui = SketchUi::default();
         if self.editor.is_some() || self.rename_feature.is_some() {
@@ -1097,20 +1148,21 @@ impl CadApp {
         if before == self.document { self.rebuild(); } else { self.remember(before); }
     }
     fn undo(&mut self, redo: bool) {
+        self.finish_rollback();
         if let Some(editor) = &mut self.editor {
-            editor.sync();
-            let stack = if redo {
-                &mut editor.redo
-            } else {
-                &mut editor.undo
-            };
-            if let Some(v) = stack.pop() {
-                let old = std::mem::replace(&mut editor.feature.params, v);
-                editor.sketch = editor.feature.sketch();
-                if redo {
-                    editor.undo.push(old);
-                } else {
-                    editor.redo.push(old);
+            if let Some(plane_changed) = editor.step_history(redo, &mut self.choosing_plane) {
+                if plane_changed {
+                    let target = (!self.choosing_plane).then(|| planes::support_target(
+                        &editor.feature.params, self.source_scene.as_deref().unwrap_or(&self.scene),
+                    )).flatten();
+                    self.selected_plane = match &target { Some(Target::Plane(id)) => Some(id.clone()), _ => None };
+                    self.selection.clear();
+                    if let Some(target) = target { self.selection.add(target); }
+                    self.align_when_ready = !self.choosing_plane;
+                    if self.choosing_plane {
+                        self.show_planes = true;
+                        editor.workspace.restore_camera(&mut self.camera);
+                    }
                 }
                 self.sketch_ui.cancel_gesture();
                 self.sync_selection_from_editor();
@@ -1149,6 +1201,7 @@ impl CadApp {
         self.path = path;
         self.past.clear();
         self.future.clear();
+        self.rollback_edit = RollbackEdit::default();
         self.editor = None;
         self.pending_edit = None;
         self.source_scene = None;
@@ -1201,6 +1254,7 @@ impl CadApp {
         });
     }
     fn save(&mut self) {
+        self.finish_rollback();
         if self.assembly_context.is_some() { self.commit_context(true); return; }
         if self.editor.is_some() {
             self.notice = "Finish or cancel the active feature before saving.".into();
@@ -1717,7 +1771,7 @@ impl CadApp {
                         }
                         ui.separator();
                         if ui
-                            .add_enabled(!self.past.is_empty(), egui::Button::new("Undo    Ctrl+Z"))
+                            .add_enabled(self.editor.as_ref().map_or(!self.past.is_empty(), |e| !e.undo.is_empty()), egui::Button::new("Undo    Ctrl+Z"))
                             .clicked()
                         {
                             self.undo(false);
@@ -1725,7 +1779,7 @@ impl CadApp {
                         }
                         if ui
                             .add_enabled(
-                                !self.future.is_empty(),
+                                self.editor.as_ref().map_or(!self.future.is_empty(), |e| !e.redo.is_empty()),
                                 egui::Button::new("Redo    Ctrl+Y"),
                             )
                             .clicked()
@@ -2097,21 +2151,23 @@ impl CadApp {
                     });
                 if self.editor.is_none() {
                     if let Some((i, c)) = command {
-                        let before = self.document.clone();
-                        match c {
-                            "suppress" => {
-                                self.document.features[i].suppressed =
-                                    !self.document.features[i].suppressed
+                        if c == "rollback" { self.set_rollback(Some(i)); }
+                        else {
+                            let before = self.document.clone();
+                            match c {
+                                "suppress" => {
+                                    self.document.features[i].suppressed =
+                                        !self.document.features[i].suppressed
+                                }
+                                "delete" => {
+                                    self.document.features.remove(i);
+                                    self.document.rollback = None;
+                                    self.selected_feature = None;
+                                }
+                                _ => (),
                             }
-                            "rollback" => self.document.rollback = Some(i),
-                            "delete" => {
-                                self.document.features.remove(i);
-                                self.document.rollback = None;
-                                self.selected_feature = None;
-                            }
-                            _ => (),
+                            self.remember(before);
                         }
-                        self.remember(before);
                     }
                     if let Some((a, b)) = moved {
                         let before = self.document.clone();
@@ -2128,8 +2184,7 @@ impl CadApp {
                 ui.horizontal(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.add_enabled(self.editor.is_none(), egui::Button::new("End").small()).clicked() {
-                            self.document.rollback = None;
-                            self.rebuild();
+                            self.set_rollback(None);
                         }
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                             ui.label(RichText::new("Rollback").small().color(MUTED));
@@ -2147,12 +2202,8 @@ impl CadApp {
                                 )
                                 .changed()
                             {
-                                self.document.rollback = if value == self.document.features.len() {
-                                    None
-                                } else {
-                                    Some(value)
-                                };
-                                self.rebuild();
+                                if self.rollback_edit.set(&mut self.document, Some(value)) { self.rebuild(); }
+                                if !ui.input(|i| i.pointer.primary_down()) { self.finish_rollback(); }
                             }
                         });
                     });
@@ -2217,6 +2268,7 @@ impl CadApp {
                 if let Some(mut edit) = self.editor.take() {
                     edit.sync();
                     let before_params = edit.feature.params.clone();
+                    let before_choosing_plane = self.choosing_plane;
                     let manifest = self
                         .registry
                         .plugins
@@ -2269,12 +2321,6 @@ impl CadApp {
                                             .get(&field.key)
                                             .and_then(Value::as_str)
                                             .is_none_or(str::is_empty)
-                                    {
-                                        continue;
-                                    }
-                                    if field.kind == "body"
-                                        && edit.feature.params.get("mode").and_then(Value::as_str)
-                                            == Some("New")
                                     {
                                         continue;
                                     }
@@ -2403,12 +2449,7 @@ impl CadApp {
                             .clicked();
                     }
                     if changed {
-                        edit.undo.push(before_params);
-                        if edit.undo.len() > 60 {
-                            edit.undo.remove(0);
-                        }
-                        edit.redo.clear();
-                        edit.changed = true;
+                        edit.record(before_params, before_choosing_plane);
                         edit.sync();
                     }
                     self.editor = Some(edit);
@@ -2614,7 +2655,7 @@ impl CadApp {
                                         let before = edit.feature.params.clone();
                                         match planes::attach_face(&mut edit.feature.params, &part, &key) {
                                             Ok(()) => {
-                                                if before != edit.feature.params { edit.undo.push(before); edit.redo.clear(); edit.changed = true; }
+                                                if before != edit.feature.params { edit.record(before, self.choosing_plane); }
                                                 self.choosing_plane = false;
                                                 self.align_when_ready = true;
                                                 self.rebuild();
@@ -2654,11 +2695,7 @@ impl CadApp {
                             if action.changed {
                                 live = action.live;
                                 if action.checkpoint {
-                                    edit.undo.push(before);
-                                    if edit.undo.len() > 60 {
-                                        edit.undo.remove(0);
-                                    }
-                                    edit.redo.clear();
+                                    edit.record(before, self.choosing_plane);
                                 }
                                 edit.sync();
                                 changed = true;
@@ -3426,6 +3463,7 @@ impl eframe::App for CadApp {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
         self.poll();
+        if !ctx.input(|i| i.pointer.primary_down()) { self.finish_rollback(); }
         self.poll_assembly(ctx);
         if ctx.input(|i| i.viewport().close_requested())
             && !self.allow_close
@@ -3800,6 +3838,70 @@ mod save_tests {
         }
     }
     #[test]
+    fn sketch_plane_history_restores_explicit_choice_and_automatic_camera() {
+        let document = crate::model::demo();
+        let mut editor = edit(&document, 0, true);
+        let before = editor.feature.params.clone();
+        planes::attach(&mut editor.feature.params, "Front").unwrap();
+        editor.record(before.clone(), true);
+        let mut choosing_plane = false;
+        let rect = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800., 600.));
+        let numbers = Numbers::for_document(&document).unwrap();
+        let front = crate::sketch::resolve(editor.sketch.as_ref().unwrap(), Plane::named("Front", 0.), &numbers).unwrap();
+        let mut camera = Camera::default();
+        let original_camera = camera.clone();
+        editor.workspace.align_camera(&mut camera, &front, rect);
+        assert_eq!(editor.step_history(false, &mut choosing_plane), Some(true));
+        assert!(choosing_plane, "Undo returns to choosing support, not implicit Top");
+        assert_eq!(editor.feature.params, before);
+        editor.workspace.restore_camera(&mut camera);
+        assert!(camera == original_camera);
+        assert_eq!(editor.step_history(true, &mut choosing_plane), Some(true));
+        assert!(!choosing_plane);
+        assert_eq!(planes::support_target(&editor.feature.params, &Scene::default()), Some(Target::Plane("Front".into())));
+        editor.workspace.align_camera(&mut camera, &front, rect);
+        camera.pan(egui::vec2(30., 15.), rect);
+        let manual = camera.clone();
+        editor.step_history(false, &mut choosing_plane).unwrap();
+        editor.workspace.restore_camera(&mut camera);
+        assert!(camera == manual, "Undo to unchosen preserves deliberate navigation");
+    }
+    #[test]
+    fn sketch_geometry_history_does_not_claim_the_camera_or_change_support() {
+        let document = crate::model::demo();
+        let mut editor = edit(&document, 0, false);
+        let before = editor.feature.params.clone();
+        editor.sketch.as_mut().unwrap().add_circle([100., 50.], 4.);
+        editor.sync();
+        editor.record(before.clone(), false);
+        let mut choosing_plane = false;
+        assert_eq!(editor.step_history(false, &mut choosing_plane), Some(false));
+        assert_eq!(editor.feature.params, before);
+        assert_eq!(editor.step_history(true, &mut choosing_plane), Some(false));
+        assert_eq!(editor.sketch.as_ref().unwrap().entities.len(), document.features[0].sketch().unwrap().entities.len()+1);
+    }
+    #[test]
+    fn rollback_drag_has_one_original_snapshot_and_noop_keeps_history_empty() {
+        let original = crate::model::demo();
+        let mut document = original.clone();
+        let mut gesture = RollbackEdit::default();
+        assert!(!gesture.set(&mut document, None));
+        assert!(gesture.finish().is_none());
+        for end in [0, 2, 1, 3] { assert!(gesture.set(&mut document, Some(end))); }
+        let before = gesture.finish().unwrap();
+        assert_eq!(before, original, "Only the pre-drag document is recorded");
+        assert_eq!(document.rollback, Some(3));
+        assert!(gesture.finish().is_none());
+        assert!(gesture.set(&mut document, None));
+        let before_end = gesture.finish().unwrap();
+        assert_eq!(before_end.rollback, Some(3));
+        document = before_end;
+        assert_eq!(document.rollback, Some(3), "Undo End returns to the prior bar position");
+        assert!(gesture.set(&mut document, Some(0)));
+        assert!(gesture.set(&mut document, Some(3)));
+        assert_eq!(gesture.finish().unwrap(), document, "A round-trip gesture is a no-op for remember");
+    }
+    #[test]
     fn edit_camera_restores_only_automatic_framing_and_keeps_manual_navigation() {
         let document = crate::model::demo();
         let mut workspace = edit(&document, 0, false).workspace;
@@ -4050,6 +4152,8 @@ mod save_tests {
             default: json!([]),
             options: vec![],
             hidden: false,
+            when: None,
+            required: None,
         };
         for width in [220., 244.] {
             let ctx = egui::Context::default();

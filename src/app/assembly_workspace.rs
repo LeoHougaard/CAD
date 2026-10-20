@@ -210,8 +210,7 @@ impl CadApp {
                     && let Some(feature) =
                         document.features.iter().find(|f| f.id == edit.feature.id)
                 {
-                    edit.undo.push(edit.feature.params.clone());
-                    edit.redo.clear();
+                    edit.record(edit.feature.params.clone(), self.choosing_plane);
                     edit.feature.params = feature.params.clone();
                     edit.changed = true;
                 }

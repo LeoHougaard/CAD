@@ -779,3 +779,81 @@ fn ordered_sketch_parameters_preserve_order_and_reject_invalid_or_future_referen
         json!(["f2", "f1"])
     );
 }
+
+#[test]
+fn installed_conditional_plugin_round_trips_multistep_edits_and_rejects_incomplete_mode_changes() {
+    let fixture = Fixture::new();
+    let plugins = fixture.directory.join("plugins");
+    std::fs::create_dir(&plugins).unwrap();
+    std::fs::write(plugins.join("conditional.json"), include_str!("fixtures/conditional-plugin.json")).unwrap();
+    std::fs::write(plugins.join("conditional.rhai"), include_str!("fixtures/conditional-plugin.rhai")).unwrap();
+    let inspect = || {
+        let mut request = request(&fixture.path, json!({"op":"inspect"}));
+        request["plugins"] = json!(plugins);
+        let (ok, response) = call(request);
+        assert!(ok, "{response}");
+        assert!(response["result"]["validation_error"].is_null(), "{response}");
+        response["result"].clone()
+    };
+    let change = |revision: &Value, edits: Value| {
+        let mut request = apply(&fixture.path, revision, edits);
+        request["plugins"] = json!(plugins);
+        call(request)
+    };
+    let first = inspect();
+    let schema = first["plugins"].as_array().unwrap().iter().find(|p| p["id"] == "conditional-operation").unwrap();
+    let fields = schema["fields"].as_array().unwrap();
+    assert_eq!(fields.iter().find(|f| f["key"] == "profile").unwrap()["when"],
+        json!([{"op":"equals","key":"mode","value":"Cut"}]));
+    assert_eq!(fields.iter().find(|f| f["key"] == "guides").unwrap()["required"], false);
+    let pins = first["document"]["features"].clone();
+    let (ok, added) = change(&first["revision"], json!([
+        {"op":"add_feature","plugin":"conditional-operation","params":{"optional_axis":null,"optional_plane":null,"guides":["f1"]}}
+    ]));
+    assert!(ok, "{added}");
+    let reopened = inspect();
+    assert_eq!(reopened["document"]["features"][2]["params"]["guides"], json!(["f1"]));
+    assert_eq!(&reopened["document"]["features"].as_array().unwrap()[..2], pins.as_array().unwrap());
+    assert_eq!(reopened["model"]["parts"].as_array().unwrap().len(), 2);
+    assert!((reopened["model"]["parts"][1]["volume_mm3"].as_f64().unwrap() - 60.).abs() < 1e-6,
+        "Hidden numeric width must still be evaluated: {reopened}");
+    let before = std::fs::read(&fixture.path).unwrap();
+    let (ok, rejected) = change(&reopened["revision"], json!([
+        {"op":"set_param","feature":"f3","key":"mode","value":"Cut"}
+    ]));
+    assert!(!ok, "{rejected}");
+    assert!(rejected["error"]["message"].as_str().unwrap().contains("cut profile"), "{rejected}");
+    assert_eq!(std::fs::read(&fixture.path).unwrap(), before);
+    let (ok, cut) = change(&reopened["revision"], json!([
+        {"op":"set_param","feature":"f3","key":"mode","value":"Cut"},
+        {"op":"set_param","feature":"f3","key":"profile","value":"f1"},
+        {"op":"set_param","feature":"f3","key":"target","value":"f2:0"},
+        {"op":"set_param","feature":"f3","key":"cut_depth","value":"2"},
+        {"op":"add_feature","plugin":"conditional-operation","params":{"height":"2"}}
+    ]));
+    assert!(ok, "{cut}");
+    let cut = inspect();
+    let (ok, resized) = change(&cut["revision"], json!([
+        {"op":"set_dimension","feature":"f1","index":1,"value":"30"}
+    ]));
+    assert!(ok, "{resized}");
+    let resized = inspect();
+    let parts = resized["model"]["parts"].as_array().unwrap();
+    assert_eq!(parts.len(), 2);
+    assert!((parts[0]["volume_mm3"].as_f64().unwrap() - 2400.).abs() < 1e-6);
+    assert!((parts[1]["volume_mm3"].as_f64().unwrap() - 40.).abs() < 1e-6);
+    let (ok, dormant) = change(&resized["revision"], json!([
+        {"op":"set_param","feature":"f3","key":"mode","value":"New"},
+        {"op":"set_param","feature":"f3","key":"profile","value":"gone"},
+        {"op":"set_param","feature":"f3","key":"cut_depth","value":"not_defined"}
+    ]));
+    assert!(ok, "{dormant}");
+    let dormant = inspect();
+    assert_eq!(dormant["model"]["parts"].as_array().unwrap().len(), 3);
+    let before = std::fs::read(&fixture.path).unwrap();
+    let (ok, rejected) = change(&dormant["revision"], json!([
+        {"op":"set_param","feature":"f3","key":"mode","value":"Cut"}
+    ]));
+    assert!(!ok, "{rejected}");
+    assert_eq!(std::fs::read(&fixture.path).unwrap(), before, "Invalid dormant references cannot become live silently");
+}

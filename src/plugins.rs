@@ -1,6 +1,6 @@
 use crate::model::{Document, Feature, Result};
 use rhai::{AST, Dynamic, Engine, Scope};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, path::Path};
 
@@ -14,6 +14,65 @@ pub struct Field {
     pub options: Vec<String>,
     #[serde(default)]
     pub hidden: bool,
+    /// All conditions must hold. None retains the original generic field conventions.
+    #[serde(default)]
+    pub when: Option<Vec<FieldCondition>>,
+    /// Explicit declarations are also checked by headless evaluation. None keeps legacy scripts.
+    #[serde(default)]
+    pub required: Option<bool>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
+pub enum FieldCondition {
+    Equals { key: String, value: Value, #[serde(skip)] default: Value },
+    NotEquals { key: String, value: Value, #[serde(skip)] default: Value },
+    Present { key: String, value: bool },
+}
+impl FieldCondition {
+    fn key(&self) -> &str {
+        match self { Self::Equals {key,..} | Self::NotEquals {key,..} | Self::Present {key,..} => key }
+    }
+    fn matches(&self, params: &Value) -> bool {
+        match self {
+            Self::Equals {key,value,default} => params.get(key).unwrap_or(default) == value,
+            Self::NotEquals {key,value,default} => params.get(key).unwrap_or(default) != value,
+            Self::Present {key,value} => params.get(key).is_some() == *value,
+        }
+    }
+}
+impl Field {
+    pub fn selectable(kind: &str) -> bool {
+        matches!(kind, "profiles" | "regions" | "profile_face" | "plane_ref" | "axis" |
+            "edges" | "faces" | "body" | "bodies" | "sketch" | "sketches")
+    }
+    /// Active inputs affect evaluation; hidden is presentation only.
+    pub fn active(&self, params: &Value) -> bool {
+        self.when.as_ref().map_or_else(|| {
+            !(matches!(self.kind.as_str(), "body" | "bodies") && params["mode"] == "New"
+                || matches!(self.kind.as_str(), "sketch" | "regions") && !params["profile_face"].is_null())
+        }, |conditions| conditions.iter().all(|c| c.matches(params)))
+    }
+    pub fn visible(&self, params: &Value) -> bool { !self.hidden && self.active(params) }
+    pub fn empty_input(&self, params: &Value) -> bool {
+        let value = params.get(&self.key).unwrap_or(&self.default);
+        match self.kind.as_str() {
+            "profiles" => {
+                let result = if self.key == "profiles" { crate::model::ProfileReference::from_params(params) }
+                    else { crate::model::ProfileReference::from_params(&json!({"profiles":value})) };
+                result.map_or(true, |items| items.is_empty())
+            }
+            "regions" if self.required.is_none() => value.as_array().is_some_and(Vec::is_empty),
+            "axis" if self.required.is_none() => !value.is_null() && value["kind"].as_str().is_none(),
+            "axis" => value["kind"].as_str().is_none(),
+            "regions" | "edges" | "faces" | "bodies" | "sketches" => value.as_array().is_none_or(Vec::is_empty),
+            "plane_ref" | "profile_face" => value.is_null(),
+            _ => value.as_str().is_none_or(str::is_empty),
+        }
+    }
+    pub fn missing(&self, params: &Value) -> bool {
+        Self::selectable(&self.kind) && self.required.unwrap_or(true) && self.active(params) && self.empty_input(params)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -37,6 +96,12 @@ pub struct Plugin {
     ast: AST,
 }
 impl Plugin {
+    pub fn validate_inputs(&self, params: &Value) -> Result<()> {
+        if let Some(field) = self.manifest.fields.iter().find(|f| f.required == Some(true) && f.missing(params)) {
+            return Err(format!("Select {}", field.label.to_lowercase()));
+        }
+        Ok(())
+    }
     pub fn adopt_inputs(&self, feature: &mut Feature) {
         let profiles = self.manifest.fields.iter().any(|field| field.kind == "profiles"
             && feature.params.get(&field.key).is_some_and(Value::is_array));
@@ -249,12 +314,30 @@ impl Registry {
         r
     }
     pub fn add(&mut self, text: &str, script: &str) -> Result<()> {
-        let m: Manifest = serde_json::from_str(text).map_err(|e| e.to_string())?;
+        let mut m: Manifest = serde_json::from_str(text).map_err(|e| e.to_string())?;
         if m.id.is_empty() || m.fields.len() > 64 || script.len() > 1024 * 1024 {
             return Err("Invalid plugin package size or identity".into());
         }
+        for field in &m.fields {
+            if field.required.is_some() && !Field::selectable(&field.kind) {
+                return Err(format!("Only selectable inputs may declare required: {}", field.key));
+            }
+            if let Some(conditions) = &field.when
+                && (conditions.len() > 16 || conditions.iter().any(|c| !m.fields.iter().any(|f| f.key == c.key()))) {
+                return Err(format!("Invalid field conditions: {}", field.key));
+            }
+        }
         let ast = self.engine.compile(script).map_err(|e| e.to_string())?;
         let hash = source_hash(&(text.to_owned() + script));
+        bundled_field_conditions(&mut m, text, script);
+        let defaults: BTreeMap<_,_> = m.fields.iter().map(|f| (f.key.clone(), f.default.clone())).collect();
+        for field in &mut m.fields {
+            for condition in field.when.iter_mut().flatten() {
+                if let FieldCondition::Equals {key,default,..} | FieldCondition::NotEquals {key,default,..} = condition {
+                    *default = defaults.get(key).cloned().unwrap_or(Value::Null);
+                }
+            }
+        }
         self.plugins.insert(
             m.id.clone(),
             Plugin {
@@ -299,12 +382,13 @@ impl Registry {
         if !p.matches(feature) {
             return Err("Plugin code changed. Restore the pinned package or explicitly adopt the new version in the feature editor.".into());
         }
+        p.validate_inputs(&feature.params)?;
         let mut params = feature.params.clone();
         if !params.is_object() {
             return Err("Feature parameters must be an object".into());
         }
         for f in &p.manifest.fields {
-            if f.kind == "number" {
+            if f.kind == "number" && f.active(&feature.params) {
                 params[&f.key] = json!(numbers.value(params.get(&f.key).unwrap_or(&f.default))?);
             }
         }
@@ -314,6 +398,44 @@ impl Registry {
             .call_fn(&mut Scope::new(), &p.ast, "build", (data,))
             .map_err(|e| e.to_string())?;
         rhai::serde::from_dynamic(&output).map_err(|e| e.to_string())
+    }
+}
+
+// UI metadata for exact bundled packages. Package bytes and saved content pins stay unchanged.
+// Overrides and new packages declare their own conditions, even when they reuse a builtin id.
+fn bundled_field_conditions(manifest: &mut Manifest, text: &str, script: &str) {
+    let bundled = match manifest.id.as_str() {
+        "plane" => text == include_str!("../plugins/plane.json") && script == include_str!("../plugins/plane.rhai"),
+        "boolean" => text == include_str!("../plugins/boolean.json") && script == include_str!("../plugins/boolean.rhai"),
+        "extrude" => text == include_str!("../plugins/extrude.json") && script == include_str!("../plugins/extrude.rhai"),
+        "revolve" => text == include_str!("../plugins/revolve.json") && script == include_str!("../plugins/revolve.rhai"),
+        _ => false,
+    };
+    if !bundled { return; }
+    for field in &mut manifest.fields {
+        use FieldCondition::{Equals, NotEquals, Present};
+        let mut conditions = vec![];
+        if matches!(field.kind.as_str(), "body" | "bodies") {
+            conditions.push(NotEquals { key: "mode".into(), value: json!("New"), default: Value::Null });
+        }
+        if matches!(field.kind.as_str(), "sketch" | "regions") {
+            conditions.push(Equals { key: "profile_face".into(), value: Value::Null, default: Value::Null });
+        }
+        let mode = match (manifest.id.as_str(), field.key.as_str()) {
+            ("plane", "second" | "flip_alignment") => Some("Midplane"),
+            ("plane", "axis_ref" | "angle") => Some("Angle"),
+            ("plane", "offset") => Some("Offset"),
+            ("boolean", "targets") => Some("Subtract"),
+            _ => None,
+        };
+        if let Some(mode) = mode { conditions.push(Equals {key:"mode".into(), value:json!(mode), default:Value::Null}); }
+        if matches!(manifest.id.as_str(), "extrude" | "revolve") && matches!(field.key.as_str(), "target" | "targets") {
+            conditions.push(Present {key:"targets".into(), value:field.key == "targets"});
+        }
+        if manifest.id == "revolve" && matches!(field.key.as_str(), "axis" | "axis_offset") {
+            conditions.push(Equals {key:"axis_ref".into(), value:Value::Null, default:Value::Null});
+        }
+        if !conditions.is_empty() { field.when = Some(conditions); }
     }
 }
 
@@ -429,5 +551,63 @@ impl Numbers {
         } else {
             self.eval(v.as_str().ok_or("Expected a dimension expression")?)
         }
+    }
+}
+
+#[cfg(test)]
+mod field_contract_tests {
+    use super::*;
+
+    #[test]
+    fn conditional_metadata_preserves_saved_builtin_pins_and_null_semantics() {
+        let registry = Registry::builtin().unwrap();
+        for (id, version, hash) in [
+            ("sketch", "1.1.0", "15bfee8a2214e93b"),
+            ("extrude", "1.3.0", "5181284565f93e7e"),
+            ("revolve", "1.2.0", "e6db3c4c63514637"),
+            ("plane", "1.0.0", "6d8bc9cdb93e0e50"),
+            ("boolean", "1.0.0", "c94be3b52dc86914"),
+        ] {
+            let mut document = Document::default();
+            let feature = registry.create(id, &mut document).unwrap();
+            assert_eq!(feature.plugin_version, version);
+            assert_eq!(feature.plugin_hash, hash);
+            assert!(registry.plugins[id].matches(&feature));
+        }
+        let fields = &registry.plugins["revolve"].manifest.fields;
+        let field = |key| fields.iter().find(|f| f.key == key).unwrap();
+        let mut params = json!({"mode":"Remove","axis_ref":null});
+        assert!(field("target").visible(&params));
+        assert!(!field("targets").visible(&params));
+        assert!(field("axis_offset").visible(&params));
+        params["targets"] = Value::Null;
+        assert!(!field("target").visible(&params), "Even a null targets key selects the explicit schema");
+        assert!(field("targets").visible(&params));
+        params["axis_ref"] = json!({"kind":"origin","axis":"X"});
+        assert!(!field("axis_offset").visible(&params));
+        params["mode"] = json!("New");
+        assert!(!field("targets").visible(&params));
+        let mut document = Document::default();
+        let mut plane = registry.create("plane", &mut document).unwrap();
+        plane.params.as_object_mut().unwrap().remove("mode");
+        plane.params["offset"] = json!("5");
+        document.features.push(plane);
+        let evaluated = crate::engine::Runtime::new(registry).evaluate(&document).unwrap();
+        assert!(evaluated.scene.error.is_none());
+        assert_eq!(evaluated.scene.planes["f1"].origin[2], 5., "A missing mode retains the pinned Offset default");
+    }
+
+    #[test]
+    fn external_overrides_do_not_inherit_builtin_conditions_and_typos_are_rejected() {
+        let mut registry = Registry::builtin().unwrap();
+        let mut manifest: Value = serde_json::from_str(include_str!("../tests/fixtures/conditional-plugin.json")).unwrap();
+        manifest["id"] = json!("plane");
+        registry.add(&manifest.to_string(), include_str!("../tests/fixtures/conditional-plugin.rhai")).unwrap();
+        let package = &registry.plugins["plane"];
+        let field = package.manifest.fields.iter().find(|f| f.key == "target").unwrap();
+        assert!(field.visible(&json!({"mode":"Cut"})));
+        assert!(!field.visible(&json!({"mode":"Offset"})));
+        manifest["fields"][1]["when"][0]["key"] = json!("misspelled_mode");
+        assert!(registry.add(&manifest.to_string(), "fn build(p) { p }").unwrap_err().contains("conditions"));
     }
 }
