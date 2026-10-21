@@ -189,3 +189,49 @@ measurements. The resource figures above remain the earlier small-part baseline;
 they were not remeasured as a performance gate for the expanded sketch editor.
 The full portable native runtime remains an evaluation dependency; slim packaging
 and matched Rust component replacements have not been promoted.
+
+## Native feature/property UI expansion
+
+The Rust catalog exposes 57 native types backed by 59 cached native schemas.
+This establishes creation/property access, not complete task-dialog parity.
+`feature_workflows.py` uses the same Rust property compiler as the editor and
+checks catalog/seed property names against native metadata. Windows x64 and
+Pixel Linux ARM64 runs cover revolutions, grooves, lofts, sweeps, chamfer, shell,
+draft, holes, patterns, mirror, MultiTransform, datums/binders, additive and
+subtractive primitives and helices. Thirty-three saved models undergo a real
+shape-parameter or parent-geometry change, changed-volume checks, Undo/Redo and
+a second save/reopen. The suite also checks conditional threaded-hole fields,
+read-only guards, atomic failed geometry, preview cancellation, guarded leaf
+deletion, native vertex identities and container visibility.
+
+Real Pixel interaction changed an existing pad to 12 mm, previewed 14 mm then
+canceled back to 12 mm, and created a two-distance chamfer on native Edge4 with
+Size 2 mm and Size2 0.75 mm. Independent native reopening confirmed the editable
+features and references. The pad volume was 12937.5 cubic millimeters; the chamfer
+volume was 12909.375, matching the triangular cut along the selected 37.5 mm edge.
+The UI exposes conditional fields after native metadata refresh.
+
+Native baseline caveat: the pinned FreeCAD Hole can normalize an independent
+ThreadDepth of 5 mm to Depth 8 mm during native Undo/Redo, even with Dimension
+thread-depth mode. A direct native-only reproduction matched the adapter. The
+adapter preserves this behavior; the stable combined-options fixture uses equal
+8 mm depths. Visibility also retains its native Output/NoModify behavior and is
+handled by explicit view actions rather than parameter previews.
+
+See UI-COVERAGE.md for remaining workflow gates. Advanced sketch curves/external
+references, atomic MultiTransform step authoring, complete interchange, assemblies
+and executable UI extensions remain unfinished.
+
+The Pixel UI also edited a native Scaled Factor to 1.8 through the numeric widget
+and created a new scaled pattern from an existing protrusion. The saved new
+pattern retained its Originals link, Factor 2, native Body Tip/display identity
+and volume 896 cubic millimeters. Creation now explicitly publishes and shows
+the new solid Tip after native link setters; existing-feature edits preserve
+the task's original Tip and visibility.
+
+A small debug Pixel document in a maximized 1080 by 2157 client used 112936 KiB
+Rust editor RSS, 103300 KiB native worker RSS and 2752 KiB runtime shim RSS.
+All three measured zero CPU during five idle seconds and no swap. The larger
+client and different small model make this a new observation, not a direct
+performance comparison with the earlier 1000 by 800 Body case. Moderate parts,
+assemblies and interactive latency still require their own measurements.

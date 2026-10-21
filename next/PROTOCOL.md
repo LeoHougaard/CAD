@@ -252,3 +252,48 @@ Normals use the same native Shape coordinate frame. Apply only the rotation of
 Implementation may refine parameter details while this first gate is developed;
 changes must be reflected here and shared by the worker, host and workflow
 checks. No independently invented GUI model is allowed.
+
+## Native feature schemas and property forms
+
+`feature_schema` takes a native `type` and returns `{type, properties,
+property_types, property_metadata, expressions}`. The worker creates its schema
+cache before accepting requests and closes every temporary document. Reads do
+not create objects, acquire a preview lease or affect document history.
+
+Object snapshots include the same property metadata. Each property reports its
+native group, documentation, editor mode/status, read-only/hidden flags and,
+for enumerations, current choices. Live metadata is authoritative for conditional
+fields. For example, choosing a Hole thread type unlocks its thread size and
+threading options. Schema defaults are initial suggestions, not live document
+state. The Rust editor writes explicit changes only and sets controlling options
+before their dependent dimensions and choices. On successful preview the form
+refreshes native normalized values and removes overrides for fields that became
+read-only. New solid feature commands publish/show their native Body Tip after
+all links are assigned. Existing-feature tasks carry the baseline `body`, `tip`
+and `tip_visibility` so changing linked inputs preserves downstream display.
+
+Computed Shape/history, Sketch geometry/constraint lists, expression engines and
+underscore-prefixed native bookkeeping cannot be assigned through generic `set`.
+Dedicated sketch/expression operations retain their existing contracts.
+`binder_support` takes `object` and `value`, a list of native sublinks, and sets
+Support only on ShapeBinder/SubShapeBinder. This task-specific input is marked
+`task_editable` even where FreeCAD marks the generic property read-only.
+
+Native Visibility is an Output/NoModify display property. It does not create its
+own native undo entry and native transaction rollback does not provide the same
+history behavior as modeling properties. The editor uses explicit tree/View
+Show/Hide actions and excludes Visibility from parameter previews. Callers must
+preserve these native display semantics rather than assume every property is a
+modeling-history entry.
+
+`remove_object` removes a native leaf. Dependent objects and nonempty Bodies are
+rejected before deletion. Removing the current solid tip restores its native
+BaseFeature as Tip. This operation does not infer new dependencies or silently
+cascade through linked models.
+
+Snapshots include native `effective_visibility`, accounting for geometric
+container ancestors. Reference objects also carry `reference_display` with their
+native global placement, type, finite presentation size, visibility and actual
+subelement where one exists. Infinite datum Shapes are never tessellated to make
+viewport proxies. The proxy remains display data; attachments use native object
+and subelement references. Topology replies include native Vertex names/points.

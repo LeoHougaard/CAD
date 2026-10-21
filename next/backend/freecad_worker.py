@@ -22,10 +22,10 @@ import PartDesign  # Register the native feature classes in headless mode.
 VERSION = 1
 OPERATIONS = ["capabilities", "new", "open", "inspect", "transaction", "undo",
               "redo", "save", "mesh", "topology", "close", "preview",
-              "preview_commit", "preview_cancel", "sketch_begin", "sketch_finish", "sketch_cancel"]
+              "preview_commit", "preview_cancel", "sketch_begin", "sketch_finish", "sketch_cancel", "feature_schema"]
 EDIT_OPERATIONS = ["add_object", "set", "expression", "geometry", "constraint",
                    "datum", "move_geometry", "construction", "delete_geometry", "delete_constraint",
-                   "constraint_state", "trim_geometry"]
+                   "constraint_state", "trim_geometry", "remove_object", "binder_support"]
 OBJECT_TYPES = {
     "App::Part", "PartDesign::Body", "Sketcher::SketchObject",
     "PartDesign::Pad", "PartDesign::Pocket", "PartDesign::Fillet",
@@ -34,10 +34,17 @@ OBJECT_TYPES = {
     "PartDesign::AdditiveLoft", "PartDesign::SubtractiveLoft",
     "PartDesign::AdditivePipe", "PartDesign::SubtractivePipe",
     "PartDesign::Plane", "PartDesign::Line", "PartDesign::Point",
+    "PartDesign::CoordinateSystem", "PartDesign::Hole", "PartDesign::Thickness", "PartDesign::Draft",
+    "PartDesign::LinearPattern", "PartDesign::PolarPattern", "PartDesign::Mirrored",
+    "PartDesign::MultiTransform", "PartDesign::Scaled", "PartDesign::ShapeBinder", "PartDesign::SubShapeBinder",
     "Part::Box", "Part::Cylinder", "Part::Sphere", "Part::Cone",
     "Part::Torus", "Part::Cut", "Part::Fuse", "Part::Common", "Part::MultiFuse",
     "Part::Fillet", "Part::Chamfer", "Part::Extrusion", "Part::Revolution",
 }
+OBJECT_TYPES.update("PartDesign::" + operation + shape
+                    for operation in ("Additive", "Subtractive")
+                    for shape in ("Box", "Cylinder", "Sphere", "Cone", "Ellipsoid", "Torus", "Prism", "Wedge", "Helix"))
+_feature_schemas = {}
 _revisions = {}
 _poisoned = set()
 _previews = {}
@@ -128,25 +135,38 @@ def property_type(obj, prop):
 
 
 def decode_property(doc, type_id, value):
-    if type_id in ("App::PropertyLink", "App::PropertyLinkChild", "App::PropertyLinkGlobal"):
+    if type_id in ("App::PropertyLink", "App::PropertyLinkChild", "App::PropertyLinkGlobal", "App::PropertyXLink", "App::PropertyLinkHidden"):
         return None if value is None else object_in(doc, value["link"])
-    if type_id in ("App::PropertyLinkSub", "App::PropertyLinkSubChild", "App::PropertyLinkSubGlobal"):
+    if type_id in ("App::PropertyLinkSub", "App::PropertyLinkSubChild", "App::PropertyLinkSubGlobal", "App::PropertyXLinkSub"):
         if value is None:
             return None
         return (object_in(doc, value["link"]), value.get("subelements", []))
-    if type_id in ("App::PropertyLinkList", "App::PropertyLinkListChild", "App::PropertyLinkListGlobal"):
-        return [object_in(doc, item["link"]) for item in value]
-    if type_id in ("App::PropertyLinkSubList", "App::PropertyLinkSubListChild", "App::PropertyLinkSubListGlobal"):
-        values = value if isinstance(value, list) else [value]
-        return [(object_in(doc, item["link"]), item.get("subelements", [])) for item in values]
+    if type_id in ("App::PropertyLinkList", "App::PropertyLinkListChild", "App::PropertyLinkListGlobal", "App::PropertyLinkListHidden"):
+        return [object_in(doc, item["link"]) for item in (value or [])]
+    if type_id in ("App::PropertyLinkSubList", "App::PropertyLinkSubListChild", "App::PropertyLinkSubListGlobal", "App::PropertyXLinkSubList"):
+        values = [] if value is None else value if isinstance(value, list) else [value]
+        # Native LinkSubList drops tuples with an empty subelement list. The
+        # empty subname denotes the whole object and must be retained explicitly.
+        return [(object_in(doc, item["link"]), item.get("subelements") or [""]) for item in values]
     if type_id in ("App::PropertyVector", "App::PropertyVectorDistance", "App::PropertyPosition"):
         return vector(value)
+    if type_id == "App::PropertyVectorList":
+        return [vector(item) for item in value]
+    if type_id == "App::PropertyMap" and isinstance(value, dict) and all(
+            isinstance(k, str) and isinstance(v, str) for k, v in value.items()):
+        return value
+    if type_id == "App::PropertyColor" and isinstance(value, list) and len(value) in (3, 4):
+        return tuple(number(component) for component in value)
+    if type_id == "Part::PropertyFilletEdges" and isinstance(value, list):
+        if any(not isinstance(item, list) or len(item) != 3 or type(item[0]) is not int for item in value):
+            fail("invalid_request", "Fillet edges require [edge index, radius1, radius2] triples")
+        return [(item[0], number(item[1]), number(item[2])) for item in value]
     if type_id == "App::PropertyPlacement":
         rotation = value.get("rotation", [0, 0, 0, 1])
         if not isinstance(rotation, list) or len(rotation) != 4:
             fail("invalid_request", "Placement rotation requires quaternion [x,y,z,w]")
         return App.Placement(vector(value["position"]), App.Rotation(*(number(v) for v in rotation)))
-    scalars = {"String", "Bool", "Integer", "IntegerConstraint", "Float", "FloatConstraint",
+    scalars = {"String", "UUID", "Bool", "Integer", "IntegerConstraint", "Float", "FloatConstraint",
                "Enumeration", "Length", "Distance", "Angle", "Area", "Volume", "Quantity",
                "QuantityConstraint", "Percent", "Precision", "Speed", "Acceleration"}
     lists = {"StringList", "IntegerList", "FloatList", "BoolList"}
@@ -165,6 +185,8 @@ def encode(value):
         return value if math.isfinite(value) else None
     if isinstance(value, (tuple, list)):
         return [encode(v) for v in value]
+    if isinstance(value, dict) and all(isinstance(k, str) for k in value):
+        return {k: encode(v) for k, v in value.items()}
     if isinstance(value, App.Vector):
         return [value.x, value.y, value.z]
     if isinstance(value, App.Placement):
@@ -179,7 +201,7 @@ def encode(value):
 
 
 def encode_property(type_id, value):
-    if type_id.startswith("App::PropertyLinkSub"):
+    if type_id.startswith(("App::PropertyLinkSub", "App::PropertyXLinkSub")):
         def sublink(item):
             return None if item[0] is None else {"link": item[0].Name, "subelements": list(item[1])}
         if value is None:
@@ -188,6 +210,59 @@ def encode_property(type_id, value):
             return [sublink(item) for item in value]
         return sublink(value)
     return encode(value)
+
+
+def property_metadata(obj, prop):
+    status = list(obj.getPropertyStatus(prop))
+    mode = list(obj.getEditorMode(prop))
+    type_id = obj.getTypeIdOfProperty(prop)
+    # Shape and the sketch lists are native computed data, despite lacking the
+    # ReadOnly editor flag. Their supported changes have dedicated operations.
+    computed = prop.startswith("_") or type_id in {"Part::PropertyPartShape", "Part::PropertyShapeHistory", "Sketcher::PropertyGeometryList", "Part::PropertyGeometryList",
+                           "Sketcher::PropertyConstraintList", "App::PropertyExpressionEngine"}
+    result = {"group": obj.getGroupOfProperty(prop), "documentation": obj.getDocumentationOfProperty(prop),
+              "status": status, "read_only": computed or "ReadOnly" in mode or "ReadOnly" in status,
+              "hidden": "Hidden" in mode or "Hidden" in status, "editor_mode": mode}
+    if type_id == "App::PropertyEnumeration":
+        result["enumerations"] = list(obj.getEnumerationsOfProperty(prop))
+    if prop == "Support" and obj.TypeId in {"PartDesign::ShapeBinder", "PartDesign::SubShapeBinder"}:
+        result["task_editable"] = True
+    return result
+
+
+def property_snapshot(obj):
+    result = {"properties": {}, "property_types": {}, "property_metadata": {},
+              "expressions": dict(obj.ExpressionEngine) if hasattr(obj, "ExpressionEngine") else {}}
+    for prop in obj.PropertiesList:
+        type_id = obj.getTypeIdOfProperty(prop)
+        result["property_types"][prop] = type_id
+        result["property_metadata"][prop] = property_metadata(obj, prop)
+        try:
+            result["properties"][prop] = encode_property(type_id, getattr(obj, prop))
+        except (TypeError, AttributeError):
+            pass
+    return result
+
+
+def writable_property(obj, prop, expression=False):
+    type_id = property_type(obj, prop)
+    if expression and obj.isDerivedFrom("Sketcher::SketchObject") and prop == "Constraints":
+        return type_id
+    if property_metadata(obj, prop)["read_only"]:
+        fail("read_only_property", "Native property is read-only: " + prop)
+    return type_id
+
+
+def initialize_feature_schemas():
+    # Native object creation can interfere with application-wide transactions.
+    # Build the JSON cache before accepting requests, then retain no native doc.
+    for type_id in sorted(OBJECT_TYPES):
+        doc = App.newDocument("FeatureSchema")
+        try:
+            obj = doc.addObject(type_id, "Feature")
+            _feature_schemas[type_id] = {"type": type_id, **property_snapshot(obj)}
+        finally:
+            App.closeDocument(doc.Name)
 
 
 def bounds(shape):
@@ -230,13 +305,45 @@ def topology(shape, deflection=0.1):
                       "orientation": edge.Orientation,
                       "faces": ["Face" + str(i) for i, face in enumerate(native_faces, 1)
                                 if any(face.isSame(ancestor) for ancestor in adjacent)]})
-    return {"coordinate_frame": "native_shape", "bounds": bounds(shape), "faces": faces, "edges": edges}
+    vertices = [{"subelement": "Vertex" + str(index), "point": encode(vertex.Point),
+                 "mapped_name": shape.getElementMappedName("Vertex" + str(index)) or None}
+                for index, vertex in enumerate(shape.Vertexes, 1)]
+    return {"coordinate_frame": "native_shape", "bounds": bounds(shape), "faces": faces, "edges": edges,
+            "vertices": vertices}
 
 
 def world_from_shape(obj):
     if hasattr(obj, "getGlobalPlacement") and hasattr(obj, "Placement"):
         return encode(obj.getGlobalPlacement().multiply(obj.Placement.inverse()))
     return encode(App.Placement())
+
+
+def effective_visibility(obj):
+    containers = [obj]
+    seen = {obj.Name}
+    parent = obj.getParentGeoFeatureGroup()
+    while parent is not None and parent.Name not in seen:
+        containers.append(parent)
+        seen.add(parent.Name)
+        parent = parent.getParentGeoFeatureGroup()
+    # Origin features belong geometrically to the Body, while their native
+    # immediate owner Origin also controls their display visibility.
+    containers.extend(parent for parent in obj.InList if parent.TypeId == "App::Origin")
+    return all(bool(getattr(parent, "Visibility", True)) for parent in containers)
+
+
+def reference_display(obj):
+    kinds = {"App::Origin": "origin", "App::Line": "line", "App::Plane": "plane", "App::Point": "point",
+             "PartDesign::Plane": "plane", "PartDesign::Line": "line", "PartDesign::Point": "point",
+             "PartDesign::CoordinateSystem": "coordinate_system"}
+    kind = kinds.get(obj.TypeId)
+    if kind is None:
+        return None
+    return {"kind": kind, "placement": encode(obj.getGlobalPlacement()),
+            "visible": effective_visibility(obj),
+            "size": [float(getattr(obj, "Length", 20)), float(getattr(obj, "Width", 20))],
+            "subelement": {"plane": "Face1", "line": "Edge1", "point": "Vertex1"}.get(kind, ""),
+            "line_axis": "x" if obj.TypeId == "App::Line" else "z"}
 
 
 def oriented_normal(face, u, v):
@@ -308,7 +415,7 @@ def body_states(doc):
     result = {}
     for body in bodies:
         tip = body.Tip
-        displayed = (tip is not None and not consumed[body.Name] and body.Visibility and tip.Visibility
+        displayed = (tip is not None and not consumed[body.Name] and effective_visibility(tip)
                      and hasattr(tip, "Shape") and not tip.Shape.isNull() and len(tip.Shape.Solids) > 0)
         result[body.Name] = {"tip": tip.Name if tip else None,
                              "consumed_by": sorted(consumed[body.Name]),
@@ -321,21 +428,18 @@ def snapshot(doc, revision=None):
     bodies = body_states(doc)
     for obj in doc.Objects:
         entry = {"name": obj.Name, "type": obj.TypeId, "label": obj.Label,
+                 "effective_visibility": effective_visibility(obj),
                  "valid": obj.isValid(), "status": obj.getStatusString(),
-                 "state": list(obj.State), "properties": {}, "property_types": {}}
+                 "state": list(obj.State), **property_snapshot(obj)}
         owner = owner_body(obj)
         entry["body"] = owner.Name if owner else None
         if obj.Name in bodies:
             entry["body_state"] = bodies[obj.Name]
         if hasattr(obj, "getGlobalPlacement"):
             entry["global_placement"] = encode(obj.getGlobalPlacement())
-        for prop in obj.PropertiesList:
-            try:
-                type_id = obj.getTypeIdOfProperty(prop)
-                entry["properties"][prop] = encode_property(type_id, getattr(obj, prop))
-                entry["property_types"][prop] = type_id
-            except (TypeError, AttributeError):
-                pass
+        reference = reference_display(obj)
+        if reference is not None:
+            entry["reference_display"] = reference
         if hasattr(obj, "Shape"):
             shape = obj.Shape
             empty = shape.isNull()
@@ -391,9 +495,12 @@ def validate(doc, whole=False):
             fail("invalid_model", obj.Name + ": native shape is invalid")
         if obj.isDerivedFrom("PartDesign::Boolean") and len(obj.Shape.Solids) == 0:
             fail("invalid_model", obj.Name + ": native Boolean result contains no solid")
-        if obj.TypeId in OBJECT_TYPES and obj.TypeId not in {
+        transformation_step = any(parent.isDerivedFrom("PartDesign::MultiTransform") and
+                                  obj in parent.Transformations for parent in obj.InList)
+        if not transformation_step and obj.TypeId in OBJECT_TYPES and obj.TypeId not in {
             "App::Part", "PartDesign::Body", "Sketcher::SketchObject",
-            "PartDesign::Plane", "PartDesign::Line", "PartDesign::Point",
+            "PartDesign::Plane", "PartDesign::Line", "PartDesign::Point", "PartDesign::CoordinateSystem",
+            "PartDesign::ShapeBinder", "PartDesign::SubShapeBinder",
         } and hasattr(obj, "Shape") and obj.Shape.isNull():
             fail("invalid_model", obj.Name + ": native result is null")
 
@@ -441,9 +548,32 @@ def apply_edit(doc, edit):
             fail("invalid_request", "FreeCAD changed the requested object name")
         return {"object": obj.Name}
     obj = object_in(doc, edit["object"])
-    if op == "set":
+    if op == "binder_support":
+        if obj.TypeId not in {"PartDesign::ShapeBinder", "PartDesign::SubShapeBinder"}:
+            fail("invalid_request", "Binder support requires a native ShapeBinder or SubShapeBinder")
+        # FreeCAD reserves Support from generic property editors but its native
+        # binder creation/editing command assigns this property explicitly.
+        obj.Support = decode_property(doc, property_type(obj, "Support"), edit["value"])
+    elif op == "remove_object":
+        owner = owner_body(obj)
+        dependents = [item.Name for item in obj.InList if item != owner and not (
+            item.isDerivedFrom("App::Part") and obj in item.Group)]
+        if dependents:
+            fail("dependent_objects", "Native dependents prevent deletion: " + ", ".join(dependents))
+        if obj.isDerivedFrom("PartDesign::Body") and obj.Group:
+            fail("dependent_objects", "Delete the Body's native features before deleting the Body")
+        restore_tip = owner is not None and owner != obj and owner.Tip == obj
+        previous = getattr(obj, "BaseFeature", None) if restore_tip else None
+        if previous is not None and owner_body(previous) != owner:
+            fail("invalid_request", "Native base feature is outside the deleted tip's Body")
+        doc.removeObject(obj.Name)
+        if restore_tip:
+            owner.Tip = previous
+            if previous is not None:
+                previous.Visibility = True
+    elif op == "set":
         prop = edit["property"]
-        type_id = property_type(obj, prop)
+        type_id = writable_property(obj, prop)
         value = decode_property(doc, type_id, edit["value"])
         if obj.isDerivedFrom("PartDesign::Boolean") and prop == "Group":
             set_boolean_tools(obj, value)
@@ -456,7 +586,7 @@ def apply_edit(doc, edit):
     elif op == "expression":
         prop = edit["property"]
         # Native expression paths can address components, e.g. Placement.Base.x.
-        property_type(obj, prop.split(".")[0].split("[")[0])
+        writable_property(obj, prop.split(".")[0].split("[")[0], expression=True)
         expression = edit["expression"]
         if expression is not None and not isinstance(expression, str):
             fail("invalid_request", "Expression must be a string or null")
@@ -844,6 +974,11 @@ def dispatch(request):
                 "occt_version": Part.OCC_VERSION, "process_id": os.getpid(), "operations": OPERATIONS,
                 "object_types": sorted(OBJECT_TYPES), "geometry_kinds": ["line", "circle", "arc", "point"],
                 "edit_operations": EDIT_OPERATIONS}
+    if op == "feature_schema":
+        type_id = request.get("type")
+        if type_id not in _feature_schemas:
+            fail("unsupported_object_type", "Unsupported native object type: " + str(type_id))
+        return _feature_schemas[type_id]
     # Native transactions are coordinated by FreeCAD's application, including
     # across documents. Another document's write can commit the open gesture.
     # Keep a worker-wide write lease until its owner commits or cancels.
@@ -971,6 +1106,7 @@ def dispatch(request):
 
 
 def main():
+    initialize_feature_schemas()
     for line in sys.stdin:
         request = None
         try:

@@ -62,9 +62,10 @@ recomputes the whole model and commits one document undo step; Cancel restores
 the sketch session baseline. An invalid consumed profile remains in edit after
 Finish fails, so it can be repaired, undone or canceled.
 
-After Finish, choose Extrude or Pocket. The feature list reopens sketches for
-further edits. Double-click a solid feature to edit its length or radius. Fillet
-uses a selected visible edge. Feature values normally create native previews.
+After Finish, choose Extrude or Pocket. Single-click selects a tree object;
+Ctrl/Shift-click adds or removes objects. Double-click reopens a sketch or feature
+for editing. Properties opens native parameters for Bodies and reference objects
+as well. Fillet uses selected native edges. Feature values normally create native previews.
 Apply commits one undo step; Cancel or Escape restores the baseline. An invalid
 value cannot be applied. When native redo history exists, feature recomputation
 is deferred until Apply so Cancel preserves redo. See
@@ -80,6 +81,10 @@ multiple tools, history, reopening and consumed-tool edits; broader coverage
 remains in the [verification record](VERIFICATION.md).
 
 Right-drag orbits, middle-drag pans, and the wheel zooms. F fits the model.
+View provides seven standard directions, shaded/edge/wireframe display, native
+face/edge/vertex filters and Show/Hide. The tree includes references and guarded
+leaf deletion. Native planes and axes use bounded presentation graphics, preserving
+their actual native identities for attachment and selection.
 Ctrl+S saves the document; Ctrl+Shift+S opens the FCStd Save as dialog.
 Ctrl+Z and Ctrl+Shift+Z use native Undo/Redo.
 The editor asks before discarding unsaved changes. Native calls and display
@@ -93,15 +98,37 @@ declarative features, including their parameters. `--packages DIR` loads a
 caller-selected collection. Executable plugins and custom UI extensions are
 future work.
 
-The editor covers the sketch tools above, native dimensions and constraints,
-face attachment, extrusion, pockets and single-edge fillets. It does not yet cover
-all FreeCAD sketch tools or complete Onshape workflows. Splines, external sketch
-geometry, advanced features, assemblies, feature-tree rollback/reorder,
-executable plugins and robust file locking between processes remain open.
-Multi-Body display/interaction verification remains open while GUI checks run.
-General documents and moderate-part resource behavior need broader gates.
+The Features menu now opens native property forms for the declared Part and
+PartDesign families, including revolve/groove, lofts, sweeps, helices, holes,
+dress-ups, patterns, primitives and reference geometry. Properties edits existing
+objects. The pinned native schema supplies property types, choices, documentation
+and status; the form writes only user overrides and expressions. Use Find
+property or All properties to reach additional native options. Contextual seeds
+use selected native profiles, subelements and Body origin references.
+
+These forms extend functional access; they do not establish complete native task
+dialog or feature coverage. [UI-COVERAGE.md](UI-COVERAGE.md) records the missing
+workflows, including remaining sketch tools, external geometry, history editing,
+assemblies, exchange and executable extensions. Multi-Body and advanced feature
+GUI acceptance remain separate from native workflow fixtures. General documents
+and moderate-part resource behavior need broader gates.
 The [verification record](VERIFICATION.md) separates real GUI checks, independent
 native saved-file checks and remaining work.
+
+The same Rust discovery and edit compilers are available to agents:
+
+```sh
+cad-next-packages --feature-catalog
+cad-next-packages --feature-seed - < selection-context.json
+cad-next-packages --native-properties - < property-changes.json
+```
+
+Feature seed requests contain `type`, `state`, `name` and optional `body`,
+`selected_object` and `selections`. Property requests use the editor's
+`{type,name,body,create,properties,expressions}` structure. Existing-feature tasks
+also capture `tip` and `tip_visibility` to preserve downstream history display. These commands return
+properties or native edit arrays; callers submit them through the same guarded
+document boundary. They do not mutate documents themselves.
 
 ## Run the verified foundation
 
@@ -122,6 +149,7 @@ The sketch command compiler and edit-session suites run through the same host:
 ```sh
 python next/tests/sketch_commands_workflows.py --host next/target/debug/cad-next --compiler next/target/debug/cad-next-sketch --runtime next/target/runtime.json --output next/target/sketch-command-documents
 python next/tests/sketch_editor_workflows.py --host next/target/debug/cad-next --runtime next/target/runtime.json --output next/target/sketch-editor-documents
+python next/tests/feature_workflows.py --host next/target/debug/cad-next --compiler next/target/debug/cad-next-packages --runtime next/target/runtime.json --output next/target/feature-documents
 cargo test --manifest-path next/Cargo.toml --features desktop --locked
 ```
 

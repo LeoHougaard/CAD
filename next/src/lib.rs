@@ -3,7 +3,9 @@
 pub mod body_commands;
 #[cfg(feature = "desktop")]
 pub mod editor;
+pub mod feature_commands;
 pub mod packages;
+pub mod property_commands;
 pub mod sketch_commands;
 #[cfg(feature = "desktop")]
 pub mod viewport;

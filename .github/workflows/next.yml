@@ -66,3 +66,4 @@ jobs:
           python next/tests/sketch_commands_workflows.py --host "$host" --compiler "$sketch_compiler" --runtime next/target/runtime.json --output next/target/sketch-command-documents
           python next/tests/sketch_editor_workflows.py --host "$host" --runtime next/target/runtime.json --output next/target/sketch-editor-documents
           python next/tests/body_workflows.py --host "$host" --compiler "$compiler" --runtime next/target/runtime.json --output next/target/body-documents
+          python next/tests/feature_workflows.py --host "$host" --compiler "$compiler" --runtime next/target/runtime.json --output next/target/feature-documents

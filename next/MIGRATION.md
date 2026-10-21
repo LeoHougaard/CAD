@@ -89,9 +89,13 @@ checks validate geometry and retained history. These cases establish bounded
 workflow evidence, not complete multi-Body or FreeCAD parity.
 
 See [tested workflows and remaining gates](VERIFICATION.md). Full FreeCAD
-functionality is not yet exposed by the Rust UI. Splines, external sketch
-geometry, advanced features, rollback/reorder, assemblies and executable plugins
-remain open. This application work does not constitute a Rust geometry-kernel
+functionality is not yet exposed by the Rust UI. The Rust feature catalog now
+exposes typed native forms for revolutions, lofts, sweeps, holes, dress-ups,
+patterns, primitives and references. Conditional property values, expressions,
+links and native metadata share the guarded command boundary. Workflow fixtures
+cover specific cases, not every task option. Splines, external sketch geometry,
+remaining advanced workflows, rollback/reorder, assemblies and executable plugins
+remain open. See [UI-COVERAGE.md](UI-COVERAGE.md). This application work does not constitute a Rust geometry-kernel
 replacement.
 
 Local pipes keep native handles and failure ownership in one worker process and

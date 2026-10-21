@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 #[derive(Default)]
 pub(super) struct BodyUi {
     pub(super) active: Option<String>,
+    pub(super) selected: Vec<String>,
     pending: Option<String>,
 }
 
@@ -32,6 +33,77 @@ fn label(object: &Value) -> &str {
         .as_str()
         .or_else(|| object["name"].as_str())
         .unwrap_or_default()
+}
+
+fn reference_object(object: &Value) -> bool {
+    matches!(
+        object["type"].as_str().unwrap_or_default(),
+        "App::Origin"
+            | "App::Line"
+            | "App::Plane"
+            | "App::CoordinateSystem"
+            | "PartDesign::Plane"
+            | "PartDesign::Line"
+            | "PartDesign::Point"
+            | "PartDesign::CoordinateSystem"
+            | "PartDesign::ShapeBinder"
+            | "PartDesign::SubShapeBinder"
+    )
+}
+fn select_tree_name(selected: &mut Vec<String>, name: &str, additive: bool) {
+    if additive {
+        if let Some(index) = selected.iter().position(|selected| selected == name) {
+            selected.remove(index);
+        } else {
+            selected.push(name.to_owned());
+        }
+    } else {
+        *selected = vec![name.to_owned()];
+    }
+}
+fn deletion_edits(state: &Value, names: &[String]) -> Vec<Value> {
+    // Dependents usually follow their inputs in document order. Native dependency
+    // checks still own rejection and the complete operation remains atomic.
+    objects(state)
+        .iter()
+        .rev()
+        .filter_map(|object| {
+            let name = object["name"].as_str()?;
+            names
+                .iter()
+                .any(|selected| selected == name)
+                .then(|| json!({"op":"remove_object","object":name}))
+        })
+        .collect()
+}
+fn tree_visibility_edits(state: &Value, name: &str, show: bool) -> Vec<Value> {
+    let mut targets = vec![name.to_owned()];
+    if show {
+        if let Some(body) = body_of(state, name)
+            && body != name
+        {
+            targets.push(body);
+        }
+        if let Some(object) = objects(state).iter().find(|object| object["name"] == name)
+            && object["type"] == "PartDesign::Body"
+            && let Some(tip) = object["body_state"]["tip"].as_str()
+        {
+            targets.push(tip.to_owned());
+        }
+    }
+    targets.sort();
+    targets.dedup();
+    targets
+        .into_iter()
+        .filter_map(|name| {
+            let current = objects(state)
+                .iter()
+                .find(|object| object["name"] == name)?["properties"]["Visibility"]
+                .as_bool()?;
+            (current != show)
+                .then(|| json!({"op":"set","object":name,"property":"Visibility","value":show}))
+        })
+        .collect()
 }
 
 fn initial_target(
@@ -64,6 +136,9 @@ fn initial_target(
 }
 
 impl Editor {
+    pub(super) fn tree_selections(&self) -> &[String] {
+        &self.body_ui.selected
+    }
     pub(super) fn sync_bodies(&mut self, op: &str, success: bool) {
         if success && matches!(op, "new" | "open") {
             self.body_ui = BodyUi::default();
@@ -72,8 +147,15 @@ impl Editor {
             && let Some(pending) = self.body_ui.pending.take()
             && success
         {
+            self.body_ui.selected = vec![pending.clone()];
+            self.selected_object = Some(pending.clone());
             self.body_ui.active = Some(pending);
         }
+        self.body_ui.selected.retain(|name| {
+            objects(&self.state)
+                .iter()
+                .any(|object| object["name"] == *name)
+        });
         if !self
             .body_ui
             .active
@@ -146,8 +228,17 @@ impl Editor {
             .and_then(|name| objects(&self.state).iter().find(|o| o["name"] == name))
             .cloned();
         let mut selected = Vec::new();
-        for selection in &self.viewport.selections {
-            if let Some(body) = body_of(&self.state, &selection.object)
+        let selected_objects: Vec<&str> = if self.viewport.selections.is_empty() {
+            self.body_ui.selected.iter().map(String::as_str).collect()
+        } else {
+            self.viewport
+                .selections
+                .iter()
+                .map(|selection| selection.object.as_str())
+                .collect()
+        };
+        for object in selected_objects {
+            if let Some(body) = body_of(&self.state, object)
                 && all
                     .iter()
                     .any(|b| b["name"] == body && available(b, editing))
@@ -333,6 +424,33 @@ impl Editor {
             draft.valid = false;
         }
     }
+    fn tree_selectable(&self) -> bool {
+        !self.busy
+            && self.sketch_ui.session.is_none()
+            && self.sketch_ui.drag.is_none()
+            && self.sketch_ui.dimension.is_none()
+            && self.pending_file.is_none()
+            && self.file_dialog.is_none()
+            && !self.overwrite
+    }
+    fn tree_mutable(&self) -> bool {
+        self.tree_selectable() && self.draft.is_none()
+    }
+    fn select_tree_object(&mut self, name: &str, additive: bool) {
+        select_tree_name(&mut self.body_ui.selected, name, additive);
+        self.selected_object = self.tree_selections().last().cloned();
+        self.viewport.clear_selection();
+        if self.draft.is_none() {
+            self.sketch = None;
+            self.viewport.set_sketch(None);
+            self.sketch_ui.clear_points();
+            if let Some(selected) = &self.selected_object
+                && let Some(body) = body_of(&self.state, selected)
+            {
+                self.body_ui.active = Some(body);
+            }
+        }
+    }
     pub(super) fn body_tree(&mut self, ctx: &egui::Context) {
         let all = bodies(&self.state);
         egui::Window::new("Features")
@@ -347,95 +465,162 @@ impl Editor {
                     .show(ui, |ui| {
                         for body in &all {
                             let name = body["name"].as_str().unwrap_or_default();
-                            let consumed = body["body_state"]["consumed_by"]
-                                .as_array()
-                                .is_some_and(|c| !c.is_empty());
-                            let text =
-                                format!("{}{}", label(body), if consumed { " | tool" } else { "" });
-                            if ui
-                                .selectable_label(
-                                    self.body_ui.active.as_deref() == Some(name),
-                                    egui::RichText::new(text).strong(),
-                                )
-                                .clicked()
-                                && !self.busy
-                                && self.draft.is_none()
-                                && self.sketch_ui.session.is_none()
-                            {
-                                self.body_ui.active = Some(name.into());
-                                self.selected_object = Some(name.into());
-                                self.viewport.clear_selection();
-                            }
+                            self.feature_row(ui, body);
                             let rows: Vec<Value> = objects(&self.state)
                                 .iter()
-                                .filter(|o| {
-                                    o["name"] != name
+                                .filter(|object| {
+                                    object["name"] != name
                                         && body_of(
                                             &self.state,
-                                            o["name"].as_str().unwrap_or_default(),
+                                            object["name"].as_str().unwrap_or_default(),
                                         )
                                         .as_deref()
                                             == Some(name)
                                 })
                                 .cloned()
                                 .collect();
-                            ui.indent(name, |ui| {
-                                for object in rows {
-                                    self.feature_row(ui, &object);
-                                }
-                            });
+                            ui.indent(name, |ui| self.tree_rows(ui, &rows, name));
                         }
                         let unowned: Vec<Value> = objects(&self.state)
                             .iter()
-                            .filter(|o| {
-                                o["type"] != "PartDesign::Body"
-                                    && body_of(&self.state, o["name"].as_str().unwrap_or_default())
-                                        .is_none()
+                            .filter(|object| {
+                                object["type"] != "PartDesign::Body"
+                                    && body_of(
+                                        &self.state,
+                                        object["name"].as_str().unwrap_or_default(),
+                                    )
+                                    .is_none()
                             })
                             .cloned()
                             .collect();
-                        for object in unowned {
-                            self.feature_row(ui, &object);
-                        }
+                        self.tree_rows(ui, &unowned, "document");
                         if objects(&self.state).is_empty() {
                             ui.weak("No features");
                         }
                     });
             });
     }
+    fn tree_rows(&mut self, ui: &mut egui::Ui, rows: &[Value], group: &str) {
+        for object in rows.iter().filter(|object| !reference_object(object)) {
+            self.feature_row(ui, object);
+        }
+        let references: Vec<_> = rows
+            .iter()
+            .filter(|object| reference_object(object))
+            .collect();
+        if !references.is_empty() {
+            egui::CollapsingHeader::new("References")
+                .id_salt(("references", group))
+                .default_open(false)
+                .show(ui, |ui| {
+                    for object in references {
+                        self.feature_row(ui, object);
+                    }
+                });
+        }
+    }
     fn feature_row(&mut self, ui: &mut egui::Ui, object: &Value) {
-        let sketch = object["type"] == "Sketcher::SketchObject";
-        if !sketch && !solid(object) && object["type"] != "PartDesign::Boolean" {
+        let name = object["name"].as_str().unwrap_or_default();
+        if name.is_empty() {
             return;
         }
-        let name = object["name"].as_str().unwrap_or_default();
-        let response =
-            ui.selectable_label(self.selected_object.as_deref() == Some(name), label(object));
-        if response.clicked()
-            && !self.busy
-            && self.draft.is_none()
-            && (self.sketch_ui.session.is_none() || self.sketch.as_deref() == Some(name))
-        {
-            self.selected_object = Some(name.into());
-            if let Some(body) = body_of(&self.state, name) {
-                self.body_ui.active = Some(body);
-            }
-            if sketch {
-                self.request_sketch(name);
-            }
+        let is_body = object["type"] == "PartDesign::Body";
+        let is_sketch = object["type"] == "Sketcher::SketchObject";
+        let consumed = object["body_state"]["consumed_by"]
+            .as_array()
+            .is_some_and(|consumers| !consumers.is_empty());
+        let text = if consumed {
+            format!("{} | tool", label(object))
+        } else {
+            label(object).to_owned()
+        };
+        let text = if is_body {
+            egui::RichText::new(text).strong()
+        } else {
+            egui::RichText::new(text)
+        };
+        let selected = self
+            .tree_selections()
+            .iter()
+            .any(|selected| selected == name)
+            || self.selected_object.as_deref() == Some(name);
+        let response = ui.selectable_label(selected, text);
+        if response.clicked() && self.tree_selectable() {
+            let additive = ui.input(|input| {
+                input.modifiers.ctrl || input.modifiers.shift || input.modifiers.command
+            });
+            self.select_tree_object(name, additive);
         }
-        if !sketch
-            && response.double_clicked()
-            && !self.busy
-            && self.draft.is_none()
-            && self.sketch_ui.session.is_none()
+        if response.secondary_clicked()
+            && self.tree_selectable()
+            && !self
+                .body_ui
+                .selected
+                .iter()
+                .any(|selected| selected == name)
         {
-            if object["type"] == "PartDesign::Boolean" {
+            self.select_tree_object(name, false);
+        }
+        if response.double_clicked() && self.tree_mutable() {
+            if is_sketch {
+                self.request_sketch(name);
+            } else if object["type"] == "PartDesign::Boolean" {
                 self.start_boolean(Some(name));
             } else {
                 self.edit_feature(name);
             }
         }
+        let mutable = self.tree_mutable();
+        response.context_menu(|ui| {
+            ui.add_enabled_ui(mutable, |ui| {
+                if ui.button("Properties").clicked() {
+                    self.edit_native_properties(name);
+                    ui.close();
+                }
+                if is_sketch && ui.button("Edit sketch").clicked() {
+                    self.request_sketch(name);
+                    ui.close();
+                }
+                if object["type"] == "PartDesign::Boolean" && ui.button("Edit Boolean").clicked() {
+                    self.start_boolean(Some(name));
+                    ui.close();
+                }
+                if object["properties"]["Visibility"].is_boolean() {
+                    let show = object["properties"]["Visibility"] == false;
+                    if ui.button(if show { "Show" } else { "Hide" }).clicked() {
+                        let edits = tree_visibility_edits(&self.state, name, show);
+                        if !edits.is_empty() {
+                            self.transaction(
+                                if show {
+                                    "Show native object"
+                                } else {
+                                    "Hide native object"
+                                },
+                                edits,
+                            );
+                        }
+                        ui.close();
+                    }
+                }
+                if ui.button("Delete").clicked() {
+                    let names = if self
+                        .body_ui
+                        .selected
+                        .iter()
+                        .any(|selected| selected == name)
+                    {
+                        self.body_ui.selected.clone()
+                    } else {
+                        vec![name.to_owned()]
+                    };
+                    let edits = deletion_edits(&self.state, &names);
+                    if !edits.is_empty() {
+                        self.transaction("Delete native objects", edits);
+                    }
+                    ui.close();
+                }
+            });
+        });
     }
 }
 
@@ -443,6 +628,67 @@ impl Editor {
 mod tests {
     use super::*;
 
+    #[test]
+    fn native_tree_selection_preserves_click_order_and_toggles_independent_objects() {
+        let mut selected = vec![];
+        select_tree_name(&mut selected, "SketchA", false);
+        select_tree_name(&mut selected, "SketchB", true);
+        select_tree_name(&mut selected, "DatumPlane", true);
+        assert_eq!(selected, ["SketchA", "SketchB", "DatumPlane"]);
+        select_tree_name(&mut selected, "SketchA", true);
+        assert_eq!(selected, ["SketchB", "DatumPlane"]);
+        select_tree_name(&mut selected, "Pad", false);
+        assert_eq!(selected, ["Pad"]);
+    }
+    #[test]
+    fn references_are_grouped_without_excluding_non_solid_native_features() {
+        let native = [
+            json!({"type":"App::Origin"}),
+            json!({"type":"App::Line"}),
+            json!({"type":"App::Plane"}),
+            json!({"type":"PartDesign::Plane"}),
+            json!({"type":"PartDesign::SubShapeBinder"}),
+            json!({"type":"Sketcher::SketchObject","shape":{"solids":0}}),
+            json!({"type":"PartDesign::AdditiveLoft","shape":{"solids":0}}),
+            json!({"type":"Part::Feature","shape":{"solids":0}}),
+        ];
+        let (references, features): (Vec<_>, Vec<_>) =
+            native.iter().partition(|object| reference_object(object));
+        assert_eq!(references.len(), 5);
+        assert_eq!(features.len(), 3);
+        assert_eq!(references.len() + features.len(), native.len());
+    }
+    #[test]
+    fn native_tree_delete_is_atomic_edit_batch_in_reverse_document_order() {
+        let state = json!({"objects":[{"name":"Body"},{"name":"Sketch"},{"name":"Pad"}]});
+        assert_eq!(
+            deletion_edits(&state, &["Sketch".into(), "Pad".into(), "Sketch".into()]),
+            vec![
+                json!({"op":"remove_object","object":"Pad"}),
+                json!({"op":"remove_object","object":"Sketch"})
+            ]
+        );
+    }
+    #[test]
+    fn native_reference_visibility_and_body_tip_visibility_remain_separate() {
+        let state = json!({"objects":[
+            {"name":"Body","type":"PartDesign::Body","body":"Body","body_state":{"tip":"Pad"},"properties":{"Visibility":false}},
+            {"name":"Datum","type":"PartDesign::Plane","body":"Body","properties":{"Visibility":true}},
+            {"name":"OldPad","body":"Body","properties":{"Visibility":false}},
+            {"name":"Pad","body":"Body","properties":{"Visibility":false}}]});
+        assert_eq!(
+            tree_visibility_edits(&state, "Datum", false),
+            vec![json!({"op":"set","object":"Datum","property":"Visibility","value":false})]
+        );
+        assert_eq!(
+            tree_visibility_edits(&state, "Body", true),
+            vec![
+                json!({"op":"set","object":"Body","property":"Visibility","value":true}),
+                json!({"op":"set","object":"Pad","property":"Visibility","value":true})
+            ]
+        );
+        assert_eq!(state["objects"][0]["properties"]["Visibility"], false);
+    }
     #[test]
     fn selected_pair_overrides_an_unrelated_active_body() {
         let state = json!({"objects":[

@@ -3,11 +3,13 @@
 mod bodies;
 mod constraints;
 mod drawing;
+mod properties;
 mod sketch;
 #[cfg(test)]
 mod tests;
+mod view;
 
-use crate::body_commands::{body_of, display_objects};
+use crate::body_commands::display_objects;
 use crate::sketch_commands::Tool as Draw;
 use bodies::BodyUi;
 use sketch::SketchUi;
@@ -36,6 +38,7 @@ struct Reply {
     scenes: Vec<(Value, Value)>,
     error: Option<String>,
     elapsed: Duration,
+    data: Value,
 }
 
 fn call(worker: &mut WorkerSession, op: &str, parameters: Value) -> Result<Value, String> {
@@ -62,6 +65,7 @@ fn model_thread(
                 scenes: Vec::new(),
                 error: Some(error.to_string()),
                 elapsed: Duration::ZERO,
+                data: Value::Null,
             });
             ctx.request_repaint();
             return;
@@ -74,6 +78,28 @@ fn model_thread(
         // Preserve the old document until a replacement loads successfully.
         // Opening the same path twice returns the worker's already_open error.
         let result = call(&mut worker, &job.op, job.parameters);
+        if job.op == "feature_schema" {
+            let (accepted, data, error) = match result {
+                Ok(data) => (true, data, None),
+                Err(error) => (false, Value::Null, Some(error)),
+            };
+            if output
+                .send(Reply {
+                    op: job.op,
+                    accepted,
+                    state: current.clone(),
+                    scenes: Vec::new(),
+                    error,
+                    elapsed: start.elapsed(),
+                    data,
+                })
+                .is_err()
+            {
+                break;
+            }
+            ctx.request_repaint();
+            continue;
+        }
         let accepted = result.is_ok();
         let mut error = None;
         match result {
@@ -110,6 +136,9 @@ fn model_thread(
         let mut scenes = Vec::new();
         let mut display_failed = false;
         for object in display_objects(&current) {
+            if current["sketch_edit"]["object"] == object {
+                continue;
+            }
             let parameters =
                 json!({"document":current["document"],"object":object,"deflection":0.03});
             match (
@@ -144,6 +173,7 @@ fn model_thread(
             scenes,
             error,
             elapsed: start.elapsed(),
+            data: Value::Null,
         };
         if output.send(reply).is_err() {
             break;
@@ -153,7 +183,9 @@ fn model_thread(
 }
 
 fn feature_edits(registry: &Registry, draft: &Draft) -> Result<Vec<Value>, String> {
-    if draft.id == "native.property" {
+    if draft.id == "native.properties" {
+        crate::property_commands::build(&draft.parameters)
+    } else if draft.id == "native.property" {
         Ok(vec![
             json!({"op":"set","object":draft.parameters["object"],"property":draft.parameters["property"],"value":draft.parameters["value"]}),
         ])
@@ -222,6 +254,7 @@ pub struct Editor {
     selected_object: Option<String>,
     sketch_ui: SketchUi,
     body_ui: BodyUi,
+    property_ui: properties::PropertyUi,
     draft: Option<Draft>,
     sequence: u64,
     error: Option<String>,
@@ -269,6 +302,7 @@ impl Editor {
             selected_object: None,
             sketch_ui: SketchUi::default(),
             body_ui: BodyUi::default(),
+            property_ui: properties::PropertyUi::default(),
             draft: None,
             sequence: 0,
             error: None,
@@ -374,9 +408,15 @@ impl Editor {
         while let Ok(reply) = self.replies.try_recv() {
             self.busy = false;
             let success = reply.accepted;
+            if reply.op == "feature_schema" {
+                self.error = reply.error;
+                self.native_schema_reply(reply.data, success);
+                continue;
+            }
             self.error = reply.error;
             self.state = reply.state;
             self.viewport.set_scenes(reply.scenes);
+            self.viewport.set_references(&self.state);
             if success
                 && self.fit_next
                 && (reply.op == "preview"
@@ -415,6 +455,9 @@ impl Editor {
                     && let Some(d) = &mut self.draft
                 {
                     d.valid = self.error.is_none();
+                    if d.id == "native.properties" {
+                        self.sync_native_schema();
+                    }
                 }
                 if matches!(reply.op.as_str(), "preview_commit" | "preview_cancel")
                     && self.draft.is_some()
@@ -471,65 +514,12 @@ impl Editor {
         self.transaction("Create sketch", edits);
     }
     fn start_feature(&mut self, id: &str) {
-        let body = match self.body() {
-            Some(b) => b,
-            None => {
-                self.error = Some("Create a sketch first".into());
-                return;
-            }
-        };
-        let name = self.unique(if id == "feature.pad" {
-            "Extrude"
-        } else if id == "feature.pocket" {
-            "Pocket"
-        } else {
-            "Fillet"
+        self.start_native_feature(match id {
+            "feature.pad" => "PartDesign::Pad",
+            "feature.pocket" => "PartDesign::Pocket",
+            "feature.fillet" => "PartDesign::Fillet",
+            other => other,
         });
-        let parameters = if id == "feature.fillet" {
-            let Some(selection) = &self.viewport.selected else {
-                self.error = Some("Select an edge".into());
-                return;
-            };
-            if !selection.subelement.starts_with("Edge") {
-                self.error = Some("Select an edge".into());
-                return;
-            }
-            let body = body_of(&self.state, &selection.object).unwrap_or(body);
-            self.body_ui.active = Some(body.clone());
-            json!({"name":name,"body":body,"source":selection.object,"edge":selection.subelement,"radius":2.})
-        } else {
-            let profile = self.sketch.clone().or_else(|| {
-                self.selected_object.clone().filter(|n| {
-                    objects(&self.state)
-                        .iter()
-                        .any(|o| o["name"] == *n && o["type"] == "Sketcher::SketchObject")
-                })
-            });
-            let Some(profile) = profile else {
-                self.error = Some("Choose a sketch in the feature list".into());
-                return;
-            };
-            let body = body_of(&self.state, &profile).unwrap_or(body);
-            self.body_ui.active = Some(body.clone());
-            json!({"name":name,"body":body,"profile":profile,"length":10.})
-        };
-        self.draft = Some(Draft {
-            id: id.into(),
-            name,
-            token: format!("editor-{}-{}", std::process::id(), self.sequence),
-            parameters,
-            changed: Some(Instant::now() - Duration::from_secs(1)),
-            valid: false,
-            all_parameters: false,
-            deferred: self.state["redo_count"].as_u64().unwrap_or(0) > 0,
-            committing: false,
-        });
-        self.sketch = None;
-        self.viewport.set_sketch(None);
-        self.sketch_ui.tool = Draw::Select;
-        self.sketch_ui.clear_points();
-        self.viewport.iso();
-        self.fit_next = true;
     }
     fn preview(&mut self) {
         let Some(d) = &mut self.draft else {
@@ -550,32 +540,7 @@ impl Editor {
         }
     }
     fn edit_feature(&mut self, name: &str) {
-        let Some(object) = objects(&self.state).iter().find(|o| o["name"] == name) else {
-            return;
-        };
-        let Some(property) = ["Length", "Radius"]
-            .into_iter()
-            .find(|p| object["properties"][*p].is_number())
-        else {
-            return;
-        };
-        let parameters =
-            json!({"object":name,"property":property,"value":object["properties"][property]});
-        self.sequence += 1;
-        self.draft = Some(Draft {
-            id: "native.property".into(),
-            name: format!("Edit {name}"),
-            token: format!("editor-{}-{}", std::process::id(), self.sequence),
-            parameters,
-            changed: None,
-            valid: false,
-            all_parameters: false,
-            deferred: self.state["redo_count"].as_u64().unwrap_or(0) > 0,
-            committing: false,
-        });
-        self.sketch = None;
-        self.viewport.set_sketch(None);
-        self.sketch_ui.tool = Draw::Select;
+        self.edit_native_properties(name);
     }
     fn start_package(&mut self, id: &str) {
         if id == "body.boolean" {
@@ -686,6 +651,7 @@ impl Editor {
                 if !commit {
                     self.fit_next = false;
                     self.draft = None;
+                    self.property_ui = properties::PropertyUi::default();
                 }
                 return;
             }
@@ -776,9 +742,7 @@ impl Editor {
                     if ui.button("Iso").clicked() {
                         self.viewport.iso();
                     }
-                    if ui.button("Top").clicked() {
-                        self.viewport.top();
-                    }
+                    self.view_controls(ui);
                 });
             });
             ui.horizontal_wrapped(|ui| {
@@ -810,6 +774,7 @@ impl Editor {
                             self.start_feature("feature.fillet");
                         }
                         ui.add_enabled_ui(self.sketch_ui.session.is_none(), |ui| {
+                            self.native_feature_menu(ui);
                             ui.menu_button("Packages", |ui| {
                                 let packages: Vec<_> = self
                                     .registry
@@ -852,8 +817,15 @@ impl Editor {
                         ui.label(self.draft.as_ref().unwrap().name.clone());
                         self.boolean_fields(ui);
                     }
+                    let native = self
+                        .draft
+                        .as_ref()
+                        .is_some_and(|d| d.id == "native.properties");
+                    if native {
+                        self.native_property_fields(ui);
+                    }
                     let draft = self.draft.as_mut().unwrap();
-                    if !boolean {
+                    if !boolean && !native {
                         ui.label(&draft.name);
                     }
                     if draft.deferred {
@@ -864,7 +836,7 @@ impl Editor {
                         .as_object()
                         .unwrap()
                         .keys()
-                        .filter(|_| !boolean)
+                        .filter(|_| !boolean && !native)
                         .cloned()
                         .collect();
                     ui.add_enabled_ui(!self.busy, |ui| {
@@ -1055,7 +1027,14 @@ impl Editor {
         self.viewport.sketch_select_enabled = self.sketch_ui.tool == Draw::Select
             && self.sketch_ui.drag.is_none()
             && !self.sketch_ui.trim;
+        let before = self.viewport.selected.clone();
         self.viewport.ui(ui);
+        if self.viewport.selected != before
+            && let Some(selection) = &self.viewport.selected
+        {
+            self.body_ui.selected.clear();
+            self.selected_object = Some(selection.object.clone());
+        }
         self.sketch_canvas(ui);
     }
 }

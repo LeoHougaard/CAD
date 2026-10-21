@@ -28,29 +28,46 @@ pub fn display_objects(state: &Value) -> Vec<String> {
         .iter()
         .filter(|entry| entry["type"] == "PartDesign::Body")
         .collect();
-    if !bodies.is_empty() {
-        let mut result = Vec::new();
-        for body in bodies {
-            if let Some(object) = body["body_state"]["display_object"].as_str()
-                && !result.iter().any(|existing| existing == object)
-            {
-                result.push(object.to_owned());
-            }
+    let mut result = Vec::new();
+    for body in bodies {
+        if let Some(object) = body["body_state"]["display_object"].as_str()
+            && !result.iter().any(|existing| existing == object)
+        {
+            result.push(object.to_owned());
         }
-        return result;
     }
-    // Compatibility with standalone native Part geometry and protocol fixtures.
-    // Production Part Studio documents use the native Body metadata above.
-    all.iter()
-        .find(|entry| {
-            entry["shape"]["solids"].as_u64().unwrap_or(0) > 0
-                && entry["shape"]["valid"] != false
-                && entry["properties"]["Visibility"] != false
-                && entry["body"].as_str().is_none()
-        })
-        .and_then(|entry| entry["name"].as_str())
-        .map(|name| vec![name.to_owned()])
-        .unwrap_or_default()
+    // Standalone Part objects can coexist with Bodies. Their native visibility
+    // decides display; Body history is never used as a standalone fallback.
+    for entry in all.iter().filter(|entry| {
+        entry["type"]
+            .as_str()
+            .is_some_and(|kind| kind.starts_with("Part::"))
+            && entry["shape"]["solids"].as_u64().unwrap_or(0) > 0
+            && entry["shape"]["valid"] != false
+            && entry["properties"]["Visibility"] != false
+            && entry["effective_visibility"] != false
+            && entry["body"].as_str().is_none()
+    }) {
+        if let Some(name) = entry["name"].as_str() {
+            result.push(name.to_owned());
+        }
+    }
+    for entry in all.iter().filter(|entry| {
+        entry["type"] == "Sketcher::SketchObject"
+            && entry["shape"]["null"] == false
+            && entry["properties"]["Visibility"] != false
+            && entry["effective_visibility"] != false
+            && entry["body"].as_str().is_none_or(|body| {
+                all.iter()
+                    .find(|o| o["name"] == body)
+                    .is_none_or(|o| o["properties"]["Visibility"] != false)
+            })
+    }) {
+        if let Some(name) = entry["name"].as_str() {
+            result.push(name.to_owned());
+        }
+    }
+    result
 }
 
 fn identifier(value: &str) -> bool {
@@ -130,6 +147,19 @@ mod tests {
             ),
             ["Box"]
         );
+    }
+
+    #[test]
+    fn standalone_parts_coexist_with_body_tips_and_respect_native_visibility() {
+        let state = json!({"objects":[
+            {"name":"Body","type":"PartDesign::Body","body_state":{"display_object":"Pad"}},
+            {"name":"Pad","type":"PartDesign::Pad","body":"Body","shape":{"solids":1}},
+            {"name":"Box","type":"Part::Box","shape":{"solids":1},"properties":{"Visibility":true}},
+            {"name":"Cylinder","type":"Part::Cylinder","shape":{"solids":1}},
+            {"name":"Hidden","type":"Part::Sphere","shape":{"solids":1},"properties":{"Visibility":false}},
+            {"name":"Historical","type":"PartDesign::Pad","shape":{"solids":1}}
+        ]});
+        assert_eq!(display_objects(&state), ["Pad", "Box", "Cylinder"]);
     }
 
     #[test]

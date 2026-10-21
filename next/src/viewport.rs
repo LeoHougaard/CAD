@@ -4,6 +4,9 @@ use glam::{Quat, Vec3};
 use serde_json::Value;
 use std::{collections::BTreeMap, sync::Arc};
 mod gl_renderer;
+mod navigation;
+mod references;
+pub use navigation::{DisplayMode, SelectionMode, StandardView};
 mod sketch;
 pub use crate::sketch_commands::SketchElement;
 
@@ -24,6 +27,12 @@ struct Edge {
     points: Vec<Vec3>,
     name: String,
 }
+struct Vertex {
+    object: Arc<str>,
+    isolated: bool,
+    name: String,
+    point: Vec3,
+}
 struct SketchCurve {
     handles: Vec<(i32, Vec3)>,
     points: Vec<Vec3>,
@@ -42,6 +51,12 @@ pub struct Viewport {
     renderer: Option<Arc<gl_renderer::Renderer>>,
     triangles: Vec<Triangle>,
     edges: Vec<Edge>,
+    vertices: Vec<Vertex>,
+    topology_references: BTreeMap<String, Vec<String>>,
+    references: Vec<references::Reference>,
+    reference_revisions: BTreeMap<String, Option<u64>>,
+    pub display_mode: DisplayMode,
+    pub selection_mode: SelectionMode,
     sketch: Option<Value>,
     curves: Vec<SketchCurve>,
     sketch_origin: Vec3,
@@ -65,6 +80,12 @@ impl Default for Viewport {
             renderer: None,
             triangles: vec![],
             edges: vec![],
+            vertices: vec![],
+            topology_references: BTreeMap::new(),
+            references: vec![],
+            reference_revisions: BTreeMap::new(),
+            display_mode: DisplayMode::Edges,
+            selection_mode: SelectionMode::All,
             sketch: None,
             curves: vec![],
             sketch_origin: Vec3::ZERO,
@@ -166,9 +187,15 @@ impl Viewport {
             })
             .collect();
         let valid = |selection: &Selection| {
-            revisions.get(&selection.object).is_some_and(|revision| {
-                self.scene_revisions.get(&selection.object) == Some(revision)
-            })
+            revisions
+                .get(&selection.object)
+                .or_else(|| self.reference_revisions.get(&selection.object))
+                .is_some_and(|revision| {
+                    self.scene_revisions
+                        .get(&selection.object)
+                        .or_else(|| self.reference_revisions.get(&selection.object))
+                        == Some(revision)
+                })
         };
         self.selections.retain(&valid);
         if self
@@ -181,6 +208,8 @@ impl Viewport {
         self.scene_revisions = revisions;
         self.triangles.clear();
         self.edges.clear();
+        self.vertices.clear();
+        self.topology_references.clear();
         for (mesh, topology) in scenes {
             self.append_scene(mesh, topology);
         }
@@ -189,6 +218,24 @@ impl Viewport {
         let Some(object) = mesh["object"].as_str().filter(|object| !object.is_empty()) else {
             return;
         };
+        let references = ["faces", "edges", "vertices"]
+            .into_iter()
+            .flat_map(|kind| {
+                topology[kind]
+                    .as_array()
+                    .or_else(|| {
+                        (kind == "faces")
+                            .then(|| mesh["faces"].as_array())
+                            .flatten()
+                    })
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|element| element["subelement"].as_str())
+                    .map(str::to_owned)
+            })
+            .collect();
+        self.topology_references
+            .insert(object.to_owned(), references);
         let object: Arc<str> = Arc::from(object);
         let (origin, rotation) = placement(&mesh["world_from_shape"]);
         let positions: Vec<Vec3> = mesh["positions"]
@@ -245,6 +292,24 @@ impl Viewport {
             }
         }
         let (origin, rotation) = placement(&topology["world_from_shape"]);
+        let isolated = mesh["triangles"].as_array().is_none_or(Vec::is_empty)
+            && topology["edges"].as_array().is_none_or(Vec::is_empty);
+        self.vertices.extend(
+            topology["vertices"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|vertex| {
+                    let point = vertex.get("point").or_else(|| vertex.get("position"))?;
+                    let point = origin + rotation * vector(point);
+                    point.is_finite().then(|| Vertex {
+                        object: Arc::clone(&object),
+                        isolated,
+                        name: vertex["subelement"].as_str().unwrap_or("").to_owned(),
+                        point,
+                    })
+                }),
+        );
         self.edges.extend(
             topology["edges"]
                 .as_array()
@@ -359,13 +424,6 @@ impl Viewport {
         });
     }
 
-    pub fn top(&mut self) {
-        self.rotation = Quat::IDENTITY;
-    }
-    pub fn iso(&mut self) {
-        self.rotation = Quat::from_rotation_z(std::f32::consts::FRAC_PI_4)
-            * Quat::from_rotation_x(54.73561_f32.to_radians());
-    }
     pub fn align_sketch(&mut self) {
         self.rotation = self.sketch_rotation;
         self.center = self.sketch_origin;
@@ -375,7 +433,19 @@ impl Viewport {
             .triangles
             .iter()
             .flat_map(|t| t.points)
+            .chain(
+                self.edges
+                    .iter()
+                    .flat_map(|edge| edge.points.iter().copied()),
+            )
+            .chain(self.vertices.iter().map(|vertex| vertex.point))
+            .chain(
+                self.references
+                    .iter()
+                    .flat_map(|reference| reference.bounds_points()),
+            )
             .chain(self.curves.iter().flat_map(|c| c.points.iter().copied()))
+            .filter(|point| point.is_finite())
             .collect();
         if points.is_empty() {
             self.center = self.sketch_origin;
@@ -389,6 +459,10 @@ impl Viewport {
             max = max.max(*p);
         }
         self.center = (min + max) * 0.5;
+        if (max - min).length_squared() < 1e-12 {
+            self.scale = 8.;
+            return;
+        }
         let mut extent = Vec3::ZERO;
         for p in points {
             extent = extent.max((self.rotation.conjugate() * (p - self.center)).abs());
@@ -460,10 +534,23 @@ impl Viewport {
         front: Option<(usize, f32)>,
         triangles: &[ProjectedTriangle],
     ) -> bool {
+        self.point_visible(&edge.object, depth, front, triangles)
+    }
+    fn point_visible(
+        &self,
+        object: &str,
+        depth: f32,
+        front: Option<(usize, f32)>,
+        triangles: &[ProjectedTriangle],
+    ) -> bool {
+        if self.display_mode == DisplayMode::Wireframe {
+            return true;
+        }
+
         let Some((index, front_depth)) = front else {
             return true;
         };
-        let same_object = self.triangles[triangles[index].face].object == edge.object;
+        let same_object = self.triangles[triangles[index].face].object.as_ref() == object;
         // Tessellation can put a native edge slightly behind its own display surface.
         // Applying that screen-space allowance across Bodies would expose hidden edges.
         let tolerance = if same_object {
@@ -475,8 +562,35 @@ impl Viewport {
     }
     fn pick(&self, pos: Pos2, triangles: &[ProjectedTriangle]) -> Option<Selection> {
         let front = front_triangle(pos, triangles);
+        if matches!(
+            self.selection_mode,
+            SelectionMode::Vertices | SelectionMode::All
+        ) {
+            let hit = self
+                .vertices
+                .iter()
+                .filter(|vertex| self.selection_mode == SelectionMode::Vertices || vertex.isolated)
+                .filter_map(|vertex| {
+                    let (point, depth) = self.project(vertex.point);
+                    let distance = point.distance(pos);
+                    (distance <= 6. && self.point_visible(&vertex.object, depth, front, triangles))
+                        .then_some((vertex, distance, depth))
+                })
+                .min_by(|a, b| a.1.total_cmp(&b.1).then_with(|| b.2.total_cmp(&a.2)));
+            if let Some((vertex, _, _)) = hit {
+                return Some(Selection {
+                    object: vertex.object.to_string(),
+                    subelement: vertex.name.clone(),
+                });
+            }
+        }
         let mut edge_hit: Option<(Selection, f32, f32)> = None;
-        for edge in &self.edges {
+        for edge in self.edges.iter().filter(|_| {
+            matches!(
+                self.selection_mode,
+                SelectionMode::All | SelectionMode::Edges
+            )
+        }) {
             for line in edge.points.windows(2) {
                 let a = self.project(line[0]);
                 let b = self.project(line[1]);
@@ -499,15 +613,24 @@ impl Viewport {
                 }
             }
         }
-        edge_hit.map(|(selection, _, _)| selection).or_else(|| {
-            front.map(|(index, _)| {
-                let triangle = &self.triangles[triangles[index].face];
-                Selection {
-                    object: triangle.object.to_string(),
-                    subelement: triangle.face.clone(),
+        edge_hit
+            .map(|(selection, _, _)| selection)
+            .or_else(|| self.pick_reference(pos, front, triangles))
+            .or_else(|| {
+                if !matches!(
+                    self.selection_mode,
+                    SelectionMode::All | SelectionMode::Faces
+                ) {
+                    return None;
                 }
+                front.map(|(index, _)| {
+                    let triangle = &self.triangles[triangles[index].face];
+                    Selection {
+                        object: triangle.object.to_string(),
+                        subelement: triangle.face.clone(),
+                    }
+                })
             })
-        })
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui) -> Option<Selection> {
@@ -544,7 +667,11 @@ impl Viewport {
                 .fold(1_f32, f32::max)
                 * 1.1;
             let mut vertices = Vec::with_capacity(triangles.len() * 18);
-            for triangle in &triangles {
+            for triangle in triangles.iter().filter(|triangle| {
+                let source = &self.triangles[triangle.face];
+                self.display_mode != DisplayMode::Wireframe
+                    || self.selected_element(&source.object, &source.face)
+            }) {
                 for ((point, depth), color) in triangle
                     .points
                     .iter()
@@ -567,6 +694,9 @@ impl Viewport {
         // Test each small edge segment against the visible surface.
         for edge in &self.edges {
             let selected = self.selected_element(&edge.object, &edge.name);
+            if self.display_mode == DisplayMode::Shaded && !selected {
+                continue;
+            }
             let stroke = Stroke::new(
                 if selected { 2.5_f32 } else { 1.1_f32 },
                 if selected {
@@ -591,6 +721,33 @@ impl Viewport {
                 }
             }
         }
+        for vertex in &self.vertices {
+            let selected = self.selected_element(&vertex.object, &vertex.name);
+            if self.selection_mode != SelectionMode::Vertices
+                && !selected
+                && !(self.selection_mode == SelectionMode::All && vertex.isolated)
+            {
+                continue;
+            }
+            let (point, depth) = self.project(vertex.point);
+            if self.point_visible(
+                &vertex.object,
+                depth,
+                depth_index.front(point, &triangles),
+                &triangles,
+            ) {
+                painter.circle_filled(
+                    point,
+                    if selected { 4. } else { 2.5 },
+                    if selected {
+                        Color32::from_rgb(95, 221, 207)
+                    } else {
+                        Color32::from_rgb(174, 187, 193)
+                    },
+                );
+            }
+        }
+        self.draw_references(&painter, &triangles, &depth_index);
         self.draw_sketch(&painter);
         self.draw_dimensions(&painter);
         let origin = rect.left_bottom() + Vec2::new(36., -36.);

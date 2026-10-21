@@ -24,11 +24,12 @@ no blanket parity commitment here.
 | Display, picking and input | Rust editor, OpenGL display and selection; native meshes/topology remain display inputs. | Occlusion, native identities, attached coordinates, multiple Bodies, gesture ownership and input during recomputation. |
 | Feature packages and agent protocol | Rust declarative loader, edit builders and persistent NDJSON host; Python native adapter. | Typed requests, errors, revision/ownership rules, equivalent agent/UI edits and extensibility without duplicate document history. |
 
-Functional gaps include complete extrude/pocket termination and direction options;
-revolve/groove, loft, sweep, patterns, shell/thickness and remaining dress-ups;
+Functional gates remain for complete extrude/pocket termination and directions;
+all revolve/groove, loft, sweep, pattern, shell/thickness and dress-up workflows;
 splines, external sketch geometry and reference tools; history rollback/reorder;
-assemblies and executable extensions. A native type appearing in an allowlist
-does not establish an end-to-end workflow.
+assemblies and executable extensions. The Rust feature catalog and typed native property forms expose these families;
+a native type appearing in an allowlist or form does not establish a complete
+end-to-end workflow. See [UI-COVERAGE.md](UI-COVERAGE.md).
 
 A next candidate for a complete bounded port is preview and sketch-session
 orchestration: gesture ownership, revision checks, replay journals, cancellation
