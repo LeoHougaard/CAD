@@ -297,3 +297,61 @@ native global placement, type, finite presentation size, visibility and actual
 subelement where one exists. Infinite datum Shapes are never tessellated to make
 viewport proxies. The proxy remains display data; attachments use native object
 and subelement references. Topology replies include native Vertex names/points.
+
+
+## Advanced native sketches and ordered transforms
+
+`geometry` additionally accepts `ellipse` (`center`, `major`, `minor` absolute
+points), `ellipse_arc` and `hyperbola_arc` (those points plus
+`start_parameter`/`end_parameter`), `parabola_arc` (`center`, positive `focal`,
+optional `angle` radians, start/end native parameters), and `bspline` (`poles`,
+optional native `degree`, `periodic`, `weights`, `knots`, `multiplicities`).
+FreeCAD constructs and solves them. These are native curve definitions, not a
+Rust kernel. Constraint constructors are checked against the pinned native
+`constraint_signatures` capability before entering the native binding; unknown
+names or argument forms cannot be passed through unchecked.
+
+`expose_internal` takes sketch `object` and geometry `index`. Native Sketcher
+creates editable construction geometry and its InternalAlignment constraints.
+Ellipse axes are native diameter lines; spline poles are native construction
+circle centers. Never invent extra point identifiers on a curve.
+
+`external_geometry` takes sketch `object`, `source` object and native `subelement`,
+with optional booleans `defining` and `intersection`. `external_state` changes
+those flags and `delete_external` removes a projection; both take the flattened
+external `index`. Native persistent references own mapping and parent updates.
+Sketch snapshots add `externals` wrappers with `index`, signed `geometry_index`
+(-3 minus index), source/native persistent-reference metadata, flags and solved
+`geometry`. Geometry entries include bounded native display samples and explicit
+`handles: [{index, point, position, draggable}]`. Read permission and dragging
+permission differ: projected handles can constrain internal geometry but cannot
+be dragged. Re-read solved IDs after an edit. All-external dimensions are added
+as native reference measurements by appending `constraint_state` with
+`driving:false` in the same transaction.
+
+The Rust property compiler accepts an ordered `transformations` array for
+MultiTransform. Each child has `type`, stable `name`, `create`, explicit
+`properties` and `expressions`. `removed_transformations` lists retired children.
+The shared compiler creates child tasks, assigns the parent's native ordered
+Transformations link, then unlinks/deletes retired children and restores the
+captured Body Tip/visibility. Child Originals/BaseFeature links belong to the
+parent operation. Preview, Commit, Cancel and Undo retain one native transaction
+owner; child steps do not form an independent Rust history.
+
+## Geometry exchange
+
+`import_exchange` is an ordinary guarded transaction edit with a `path` ending in
+`.step`, `.stp`, `.iges` or `.igs`. Native STEP import preserves App::Part
+hierarchy; native IGES import can produce faces/shells without solids. The edit
+returns added object names. Failed or empty imports roll back with the batch.
+
+`export_exchange` takes `document`, `expected_revision`, `path`, an explicit
+nonempty `objects` name list and optional `overwrite:false`. Active preview or
+sketch ownership blocks exchange. It returns unchanged document/revision plus
+`exported_objects`, format/path and `placement:"selected_root_local"`. Native
+export retains selected roots' local placement; select the enclosing Part to
+retain its hierarchy and placement. A same-directory temporary output is
+atomically published. Existing output requires explicit replacement; an output
+created by another writer also blocks publication. Export does not mutate the
+native document or mark it dirty. Original FCStd and imported files remain
+unchanged unless that exact destination is explicitly selected for replacement.

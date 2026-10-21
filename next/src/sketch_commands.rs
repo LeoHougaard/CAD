@@ -26,6 +26,14 @@ pub enum Tool {
     Rectangle,
     Circle,
     Arc,
+    Ellipse,
+    EllipseArc,
+    #[serde(rename = "bspline")]
+    BSpline,
+    #[serde(rename = "periodic_bspline")]
+    PeriodicBSpline,
+    HyperbolaArc,
+    ParabolaArc,
 }
 
 impl Tool {
@@ -33,7 +41,9 @@ impl Tool {
         match self {
             Self::Select => 0,
             Self::Point => 1,
-            Self::Arc => 3,
+            Self::Arc | Self::Ellipse | Self::PeriodicBSpline => 3,
+            Self::EllipseArc | Self::HyperbolaArc => 5,
+            Self::ParabolaArc => 4,
             _ => 2,
         }
     }
@@ -92,6 +102,9 @@ pub fn draw_edits(
     for point in points {
         finite_point(point)?;
     }
+    if crate::sketch_curve_commands::advanced(tool) {
+        return crate::sketch_curve_commands::draw(object, tool, points, construction);
+    }
     let expected = match tool {
         Tool::Select => return Err("Choose a drawing tool".into()),
         Tool::Point => 1,
@@ -99,6 +112,7 @@ pub fn draw_edits(
         Tool::Arc => 3,
         Tool::Polyline if points.len() >= 2 => points.len(),
         Tool::Polyline => return Err("A polyline needs at least two points".into()),
+        _ => unreachable!(),
     };
     if points.len() != expected {
         return Err(format!("{tool:?} needs {expected} points"));
@@ -202,7 +216,7 @@ pub fn draw_edits(
             edits.push(json!({"op":"geometry", "object":object, "kind":"arc",
                 "start":points[0], "mid":points[1], "end":points[2], "construction":construction}));
         }
-        Tool::Select => unreachable!(),
+        _ => unreachable!(),
     }
     Ok(edits)
 }
@@ -210,6 +224,7 @@ pub fn draw_edits(
 struct Sketch<'a> {
     name: &'a str,
     geometry: &'a [Value],
+    externals: &'a [Value],
     constraints: usize,
 }
 
@@ -227,15 +242,35 @@ impl<'a> Sketch<'a> {
         Ok(Self {
             name: object_name,
             geometry,
+            externals: snapshot["sketch"]["externals"]
+                .as_array()
+                .map(Vec::as_slice)
+                .unwrap_or_default(),
             constraints,
         })
     }
 
     fn geometry(&self, element: SketchElement) -> Result<&Value, String> {
-        self.geometry
-            .iter()
+        self.all_geometry()
             .find(|geo| geo["index"].as_i64() == Some(i64::from(element.index)))
             .ok_or_else(|| "Selected geometry is no longer in this sketch".into())
+    }
+
+    fn all_geometry(&self) -> impl Iterator<Item = &'a Value> + '_ {
+        self.geometry
+            .iter()
+            .filter(|geometry| geometry["index"].as_i64().is_some_and(|index| index >= 0))
+            .chain(self.externals.iter().filter_map(|wrapper| {
+                // Flattened native cache indices differ from source link indices.
+                // Only the explicitly paired signed solver index is selectable.
+                let flat = i32::try_from(wrapper["index"].as_i64()?).ok()?;
+                let index = i32::try_from(wrapper["geometry_index"].as_i64()?).ok()?;
+                let geometry = &wrapper["geometry"];
+                (flat >= 0
+                    && Some(index) == (-3_i32).checked_sub(flat)
+                    && geometry["index"].as_i64() == Some(i64::from(index)))
+                .then_some(geometry)
+            }))
     }
 
     fn kind(&self, element: SketchElement) -> Result<&str, String> {
@@ -253,13 +288,45 @@ impl<'a> Sketch<'a> {
         {
             return Ok([0.; 3]);
         }
+        if element.point <= 0 {
+            return Err("Select a native sketch point or curve handle".into());
+        }
+        let mut position = None;
+        for geometry in self.all_geometry() {
+            for handle in geometry["handles"].as_array().into_iter().flatten() {
+                let index = handle.get("index").unwrap_or(&geometry["index"]);
+                if index.as_i64() != Some(i64::from(element.index))
+                    || handle["point"].as_i64() != Some(i64::from(element.point))
+                {
+                    continue;
+                }
+                if geometry["index"].as_i64().is_some_and(|index| index <= -3) && element.index >= 0
+                {
+                    return Err("External handles must retain their native solver indices".into());
+                }
+                let found = vector(&handle["position"])?;
+                if position.is_some_and(|previous| previous != found) {
+                    return Err("Native point handle positions disagree; refresh the sketch".into());
+                }
+                position = Some(found);
+            }
+        }
+        if let Some(position) = position {
+            // Drag permission is independent of constraint reference permission.
+            return Ok(position);
+        }
         let geo = self.geometry(element)?;
+        if geo.get("handles").is_some() {
+            return Err("The native snapshot does not expose this point handle".into());
+        }
         let key = match (self.kind(element)?, element.point) {
             ("line" | "arc", 1) => "start",
             ("line" | "arc", 2) => "end",
             ("arc" | "circle", 3) => "center",
             ("point", 1) => "position",
-            _ => return Err("Select an endpoint, circle center or sketch origin".into()),
+            _ => {
+                return Err("Select an exposed native point, curve handle or sketch origin".into());
+            }
         };
         vector(&geo[key])
     }
@@ -269,8 +336,19 @@ impl<'a> Sketch<'a> {
             return Err("Select whole sketch entities for this constraint".into());
         }
         let kind = self.kind(element)?;
-        if !["line", "circle", "arc"].contains(&kind) {
-            return Err("Select a line, circle or arc".into());
+        if ![
+            "line",
+            "circle",
+            "arc",
+            "ellipse",
+            "ellipse_arc",
+            "bspline",
+            "hyperbola_arc",
+            "parabola_arc",
+        ]
+        .contains(&kind)
+        {
+            return Err("Select a native sketch curve".into());
         }
         Ok(kind)
     }
@@ -350,6 +428,9 @@ pub fn constrain(
     if value.is_some_and(|value| value.trim().is_empty()) {
         return Err("Enter a dimension with units, for example 10 mm or 45 deg".into());
     }
+    if dimensional && value.is_some() && selection.iter().all(|element| element.index < 0) {
+        return Err("Dimensions between fixed references are measured; create a reference dimension without a driving value".into());
+    }
     let args = match kind {
         "Horizontal" | "Vertical" => {
             if selection.len() == 1 {
@@ -387,8 +468,8 @@ pub fn constrain(
             if kind == "Parallel" {
                 sketch.line(first)?;
                 sketch.line(second)?;
-            } else if (first_kind == "line") != (second_kind == "line") {
-                return Err("Equal needs two lines, or two circles/arcs".into());
+            } else if !equal_compatible(first_kind, second_kind) {
+                return Err("Equal needs two compatible lines, circular curves or conics".into());
             }
             json!([first.index, second.index])
         }
@@ -397,10 +478,12 @@ pub fn constrain(
             if first.point == 0 && second.point != 0 {
                 std::mem::swap(&mut first, &mut second);
             }
-            if first.index == second.index || first.index < 0 || second.index < 0 {
+            if first.index == second.index {
                 return Err("Select two distinct curves".into());
             }
-            if first.point == 3 || second.point == 3 {
+            sketch.kind(first)?;
+            sketch.kind(second)?;
+            if !matches!(first.point, 0..=2) || !matches!(second.point, 0..=2) {
                 return Err("Select curve endpoints or whole curves, rather than centers".into());
             }
             if kind == "Tangent" && sketch.kind(first)? == "line" && sketch.kind(second)? == "line"
@@ -451,12 +534,17 @@ pub fn constrain(
         "Block" => {
             let mut edits = Vec::new();
             for element in selection {
+                if element.index < 0 {
+                    return Err(if element.index == -1 {
+                        "The sketch origin is already fixed"
+                    } else {
+                        "External geometry is controlled by its source and cannot be blocked"
+                    }
+                    .into());
+                }
                 if element.point == 0 {
                     edits.push(constraint(sketch.name, "Block", json!([element.index])));
                 } else {
-                    if element.index < 0 {
-                        return Err("The sketch origin is already fixed".into());
-                    }
                     let point = sketch.point(*element)?;
                     edits.push(constraint(
                         sketch.name,
@@ -571,6 +659,18 @@ fn measure(kind: &str, vector: [f64; 2]) -> f64 {
     }
 }
 
+fn equal_compatible(first: &str, second: &str) -> bool {
+    [
+        &["line"][..],
+        &["circle", "arc"][..],
+        &["ellipse", "ellipse_arc"][..],
+        &["hyperbola_arc"][..],
+        &["parabola_arc"][..],
+    ]
+    .iter()
+    .any(|family| family.contains(&first) && family.contains(&second))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -663,5 +763,101 @@ mod tests {
         assert!(constrain(&sketch(), "Radius", &[e(0, 0)], Some("3 mm")).is_err());
         assert!(constrain(&sketch(), "Horizontal", &[e(0, 0)], Some("3 mm")).is_err());
         assert!(constrain(&sketch(), "Distance", &[e(99, 0)], None).is_err());
+    }
+
+    fn advanced_sketch() -> Value {
+        json!({"name":"Sketch","sketch":{"constraint_count":4,"geometry":[
+            {"index":0,"kind":"ellipse","handles":[
+                {"index":0,"point":3,"position":[5,7,0],"draggable":false}]},
+            {"index":1,"kind":"bspline","points":[[1,2,0],[8,4,0]],"handles":[
+                {"index":1,"point":1,"position":[1,2,0],"draggable":false},
+                {"index":1,"point":2,"position":[8,4,0],"draggable":false}]},
+            {"index":2,"kind":"hyperbola_arc","handles":[
+                {"index":2,"point":1,"position":[4,3,0]}]},
+            {"index":3,"kind":"parabola_arc","handles":[
+                {"index":3,"point":2,"position":[6,3,0]}]},
+            {"index":4,"kind":"ellipse_arc","handles":[
+                {"index":4,"point":1,"position":[4,1,0]}]}
+        ],"externals":[
+            {"index":0,"geometry_index":-3,"source_index":9,"geometry":{
+                "index":-3,"kind":"line","start":[0,10,0],"end":[20,10,0],"handles":[
+                    {"index":-3,"point":1,"position":[0,10,0],"draggable":false},
+                    {"index":-3,"point":2,"position":[20,10,0],"draggable":false}]}},
+            {"index":1,"geometry_index":-4,"source_index":0,"geometry":{
+                "index":-4,"kind":"circle","radius":2,"handles":[
+                    {"index":-4,"point":3,"position":[12,4,0],"draggable":false}]}},
+            {"index":2,"geometry_index":-5,"source_index":0,"geometry":{
+                "index":-5,"kind":"ellipse_arc","handles":[
+                    {"index":-5,"point":1,"position":[0,1,0],"draggable":false}]}},
+            {"index":3,"geometry_index":-6,"source_index":4,"geometry":{
+                "index":-6,"kind":"point","position":[25,8,0],"handles":[
+                    {"index":-6,"point":1,"position":[25,8,0],"draggable":false}]}}
+        ]}})
+    }
+
+    #[test]
+    fn external_solver_ids_and_fixed_handles_remain_constraint_references() {
+        let snapshot = advanced_sketch();
+        let distance =
+            constrain(&snapshot, "Distance", &[e(1, 1), e(-3, 0)], Some("4 mm")).unwrap();
+        assert_eq!(distance[0]["args"], json!([1, 1, -3, 8.]));
+        let coincidence = constrain(&snapshot, "Coincident", &[e(1, 2), e(-3, 2)], None).unwrap();
+        assert_eq!(coincidence[0]["args"], json!([1, 2, -3, 2]));
+        let vertex = constrain(&snapshot, "Coincident", &[e(1, 1), e(-6, 1)], None).unwrap();
+        assert_eq!(vertex[0]["args"], json!([1, 1, -6, 1]));
+        let vertex_dimension = constrain(&snapshot, "DistanceX", &[e(-6, 1)], None).unwrap();
+        assert_eq!(vertex_dimension[0]["args"], json!([-6, 1, 25.]));
+        let tangent = constrain(&snapshot, "Tangent", &[e(-3, 0), e(4, 1)], None).unwrap();
+        assert_eq!(tangent[0]["args"], json!([4, 1, -3]));
+        let perpendicular =
+            constrain(&snapshot, "Perpendicular", &[e(1, 1), e(-3, 0)], None).unwrap();
+        assert_eq!(perpendicular[0]["args"], json!([1, 1, -3]));
+        let radius = constrain(&snapshot, "Radius", &[e(-4, 0)], None).unwrap();
+        assert_eq!(radius[0]["args"], json!([-4, 2.]));
+        assert!(constrain(&snapshot, "Block", &[e(-3, 0)], None).is_err());
+        assert!(constrain(&snapshot, "Block", &[e(-4, 3)], None).is_err());
+        assert!(constrain(&snapshot, "Radius", &[e(-4, 0)], Some("4 mm")).is_err());
+        let mut mismatched = snapshot;
+        mismatched["sketch"]["externals"][0]["index"] = json!(8);
+        assert!(constrain(&mismatched, "Distance", &[e(-3, 0)], None).is_err());
+    }
+
+    #[test]
+    fn advanced_curves_use_only_exposed_native_handles_and_compatible_equal_families() {
+        let mut snapshot = advanced_sketch();
+        let ellipse_center = constrain(&snapshot, "DistanceX", &[e(0, 3)], Some("8 mm")).unwrap();
+        assert_eq!(ellipse_center[0]["args"], json!([0, 3, 5.]));
+        for index in 1..=4 {
+            let point = if index == 3 { 2 } else { 1 };
+            assert!(
+                constrain(
+                    &snapshot,
+                    "PointOnObject",
+                    &[e(index, point), e(-3, 0)],
+                    None
+                )
+                .is_ok()
+            );
+            assert!(constrain(&snapshot, "Block", &[e(index, 0)], None).is_ok());
+        }
+        let equal = constrain(&snapshot, "Equal", &[e(0, 0), e(-5, 0)], None).unwrap();
+        assert_eq!(equal[0]["args"], json!([0, -5]));
+        snapshot["sketch"]["geometry"]
+            .as_array_mut()
+            .unwrap()
+            .extend([
+                json!({"index":5,"kind":"parabola_arc","handles":[]}),
+                json!({"index":6,"kind":"bspline","handles":[]}),
+                json!({"index":7,"kind":"hyperbola_arc","handles":[]}),
+            ]);
+        assert!(constrain(&snapshot, "Equal", &[e(3, 0), e(5, 0)], None).is_ok());
+        assert!(constrain(&snapshot, "Equal", &[e(1, 0), e(6, 0)], None).is_err());
+        assert!(constrain(&snapshot, "Equal", &[e(2, 0), e(7, 0)], None).is_ok());
+        assert!(constrain(&snapshot, "Equal", &[e(2, 0), e(5, 0)], None).is_err());
+        assert!(constrain(&snapshot, "Equal", &[e(0, 0), e(-4, 0)], None).is_err());
+        assert!(constrain(&snapshot, "Equal", &[e(1, 0), e(1, 1)], None).is_err());
+        snapshot["sketch"]["geometry"][1]["handles"] = json!([]);
+        assert!(constrain(&snapshot, "Coincident", &[e(1, 1), e(-3, 1)], None).is_err());
+        assert_eq!(Tool::PeriodicBSpline.required_points(), 3);
     }
 }

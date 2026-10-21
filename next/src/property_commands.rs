@@ -55,6 +55,10 @@ pub fn writable(schema: &Value, property: &str) -> bool {
 /// Only changed values are written. Native computed/default properties never
 /// round-trip through the UI, and clearing an expression precedes its new value.
 pub fn build(parameters: &Value) -> Result<Vec<Value>, String> {
+    if parameters["transformations"].is_array() {
+        return crate::transform_commands::build(parameters);
+    }
+
     let name = parameters["name"]
         .as_str()
         .filter(|s| !s.is_empty())

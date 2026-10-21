@@ -95,6 +95,21 @@ fn native_constraint(snapshot: &Value, index: usize) -> Option<&Value> {
         .find(|constraint| constraint["index"].as_u64() == Some(index as u64))
 }
 
+fn geometry(snapshot: &Value, index: i32) -> Option<&Value> {
+    snapshot["sketch"]["geometry"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .chain(
+            snapshot["sketch"]["externals"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|entry| &entry["geometry"]),
+        )
+        .find(|entry| entry["index"].as_i64() == Some(index as i64))
+}
+
 fn related_geometry(snapshot: &Value, constraint: &Value) -> Vec<SketchElement> {
     let mut selection = Vec::new();
     for (entity, point) in [
@@ -112,13 +127,7 @@ fn related_geometry(snapshot: &Value, constraint: &Value) -> Vec<SketchElement> 
             .as_i64()
             .and_then(|value| i32::try_from(value).ok())
             .unwrap_or(0);
-        let exists = snapshot["sketch"]["geometry"]
-            .as_array()
-            .is_some_and(|geometry| {
-                geometry
-                    .iter()
-                    .any(|geometry| geometry["index"].as_i64() == Some(index as i64))
-            });
+        let exists = geometry(snapshot, index).is_some();
         if exists || (index == -1 && point == 1) {
             let element = SketchElement { index, point };
             if !selection.contains(&element) {
@@ -142,6 +151,7 @@ impl Editor {
         self.sketch_ui.clear_points();
         self.sketch_ui.tool = Tool::Select;
         self.sketch_ui.trim = false;
+        self.sketch_ui.external = false;
     }
 
     fn highlight_constraint(&mut self, snapshot: &Value, index: usize) {
@@ -177,13 +187,7 @@ impl Editor {
             return;
         };
         let geometry_kind = |element: SketchElement| {
-            snapshot["sketch"]["geometry"]
-                .as_array()
-                .and_then(|geometry| {
-                    geometry
-                        .iter()
-                        .find(|geometry| geometry["index"].as_i64() == Some(element.index as i64))
-                })
+            geometry(&snapshot, element.index)
                 .and_then(|geometry| geometry["kind"].as_str())
                 .unwrap_or_default()
         };
@@ -229,6 +233,13 @@ impl Editor {
                     .and_then(Value::as_f64)
                     .unwrap_or(0.);
                 self.prepare_constraint_tool();
+                if !selection.is_empty() && selection.iter().all(|element| element.index < 0) {
+                    let index = snapshot["sketch"]["constraint_count"].as_u64().unwrap_or(0);
+                    let mut edits = edits;
+                    edits.push(json!({"op":"constraint_state", "object":self.sketch, "index":index, "driving":false}));
+                    self.transaction("Add reference dimension", edits);
+                    return;
+                }
                 self.sketch_ui.dimension = Some(DimensionEdit {
                     index: None,
                     kind: kind.into(),

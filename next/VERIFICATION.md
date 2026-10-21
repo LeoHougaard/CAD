@@ -176,8 +176,7 @@ in [README.md](README.md).
 
 ## Remaining gates
 
-The interactive tools above do not include splines, external sketch geometry or
-all FreeCAD sketch tools. Advanced features, assemblies,
+The interactive tools do not yet cover all FreeCAD sketch tools. Advanced task workflows, assemblies,
 feature-tree rollback/reorder and executable plugins remain open. Broader
 constraint, selection, trim, dragging and attachment cases need GUI checks.
 Feature previews defer recomputation until Apply when existing native redo would
@@ -192,7 +191,7 @@ and matched Rust component replacements have not been promoted.
 
 ## Native feature/property UI expansion
 
-The Rust catalog exposes 57 native types backed by 59 cached native schemas.
+The Rust catalog exposes 57 native feature types backed by 60 cached native schemas (including Body, Sketch and imported Part::Feature).
 This establishes creation/property access, not complete task-dialog parity.
 `feature_workflows.py` uses the same Rust property compiler as the editor and
 checks catalog/seed property names against native metadata. Windows x64 and
@@ -218,9 +217,9 @@ adapter preserves this behavior; the stable combined-options fixture uses equal
 8 mm depths. Visibility also retains its native Output/NoModify behavior and is
 handled by explicit view actions rather than parameter previews.
 
-See UI-COVERAGE.md for remaining workflow gates. Advanced sketch curves/external
-references, atomic MultiTransform step authoring, complete interchange, assemblies
-and executable UI extensions remain unfinished.
+See UI-COVERAGE.md for remaining workflow gates. Complete sketch/task coverage, broader interchange, assemblies and executable
+UI extensions remain unfinished. Advanced curves, external references and
+MultiTransform child tasks now have dedicated checks below.
 
 The Pixel UI also edited a native Scaled Factor to 1.8 through the numeric widget
 and created a new scaled pattern from an existing protrusion. The saved new
@@ -235,3 +234,58 @@ All three measured zero CPU during five idle seconds and no swap. The larger
 client and different small model make this a new observation, not a direct
 performance comparison with the earlier 1000 by 800 Body case. Moderate parts,
 assemblies and interactive latency still require their own measurements.
+
+
+## Advanced sketches, MultiTransform and exchange
+
+`sketch_curves_workflows.py` runs against the actual Rust sketch compiler on
+Windows x64 and Pixel Linux ARM64. It covers six advanced drawing tools, five
+closed analytical curve profiles and native Pads, periodic and rational spline
+parameters, exposed native spline pole controls and ellipse diameter lines,
+conic Equal constraints and typed dimensions. Projected references retain their
+negative native solver IDs and persistent mapping. Defining external profiles,
+intersection flags, parent updates, reference Distance/Radius/Angle dimensions,
+action/gesture ownership, invalid constructors, native Undo/Redo and editable
+save/reopen all have native checks. The constructor preflight protects a pinned
+Windows binding failure for malformed constraint names/signatures; it does not
+replace native geometric validation.
+
+Real Pixel interaction created an ellipse, dragged its center, exposed its
+native internal axes and dimensioned the major diameter to 10 mm. It also drew
+a four-pole spline, exposed native pole circles, marked the spline construction,
+finished the sketch and padded the ellipse 10 mm. Independent native reopening
+confirmed the editable sketch, constraints and Body Tip, and volume
+626.8749173022981 cubic millimeters matched pi times the solved radii and height.
+This verifies those operations; it does not establish complete Sketcher parity.
+
+`transform_workflows.py` sends the shared Rust property compiler's ordered child
+commands to native MultiTransform. It checks all four child types, repeated and
+failed preview replacement, adding/removing/reordering stable native children,
+Commit/Cancel, one native Undo/Redo, downstream Tip/visibility preservation and
+save/reopen/edit. `exchange_workflows.py` checks native STEP hierarchy and placed
+root round trips, nine IGES faces as surfaces, subsequent native cuts with
+volumes 120 -> 105 -> 90, atomic failed imports, Undo/Redo, revision/lease guards,
+original file hashes and deliberate export replacement. These suites complement
+real GUI coverage and do not assert full task-dialog or exchange-format parity.
+
+Run the added suites with the same pinned runtime:
+
+```sh
+python next/tests/sketch_curves_workflows.py --host next/target/debug/cad-next --compiler next/target/debug/cad-next-sketch --runtime next/target/runtime.json --output next/target/sketch-curve-documents
+python next/tests/transform_workflows.py --host next/target/debug/cad-next --compiler next/target/debug/cad-next-packages --runtime next/target/runtime.json --output next/target/transform-documents
+python next/tests/exchange_workflows.py --host next/target/debug/cad-next --runtime next/target/runtime.json --output next/target/exchange-documents
+```
+
+
+Pixel GUI exchange checks imported STEP and IGES, exported selected objects,
+saved FCStd, and reopened the STEP-derived document. Independent native imports
+confirmed the GUI STEP result at 150 cubic millimeters and the IGES result as
+nine faces with zero solids and area 265.398223686155 square millimeters. A
+visible native ShapeBinder in the active Body supplied Edge12 to a sketch.
+A point snapped to that projected endpoint produced one Coincident constraint
+and zero remaining freedom. After a temporary second point and Cancel, the
+separately saved/reopened native sketch snapshot exactly matched the accepted
+baseline. Visible binders are rendered separately from the solid Tip so their
+native faces/edges can be selected. Direct external geometry outside a Body's
+native scope is still rejected; the tested path creates a binder explicitly.
+The automatic native outside-Body choice dialog remains a coverage gap.

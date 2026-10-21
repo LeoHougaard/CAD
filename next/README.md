@@ -229,3 +229,14 @@ It is not a prerequisite for verifying the modeling foundation.
   [attachment](https://github.com/FreeCAD/FreeCAD/blob/1.1.4/src/Mod/Part/App/AttachExtension.cpp),
   [fillet execution](https://github.com/FreeCAD/FreeCAD/blob/1.1.4/src/Mod/PartDesign/App/FeatureFillet.cpp)
   and [shape naming](https://github.com/FreeCAD/FreeCAD/blob/1.1.4/src/Mod/Part/App/TopoShape.h).
+
+
+Advanced sketch tools include native conics and open/periodic B-splines. Curves
+remain unconstrained until dimensioned or constrained. For ellipse axes or
+spline poles, select the curve and use Curves > Expose internal geometry, then
+edit the native construction lines or circle centers. Spline clicks collect
+poles; Enter creates the curve. External projects native edges/vertices and can
+mark them defining or intersecting. MultiTransform edits its native ordered
+child steps in the parent task. Import/Export supports native STEP/IGES; selected
+root export uses native local placement. These additions are under workflow
+verification; [UI-COVERAGE.md](UI-COVERAGE.md) records remaining functionality.

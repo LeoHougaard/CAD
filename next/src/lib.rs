@@ -7,6 +7,8 @@ pub mod feature_commands;
 pub mod packages;
 pub mod property_commands;
 pub mod sketch_commands;
+pub mod sketch_curve_commands;
+pub mod transform_commands;
 #[cfg(feature = "desktop")]
 pub mod viewport;
 

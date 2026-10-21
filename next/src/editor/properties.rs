@@ -163,6 +163,12 @@ impl Editor {
         });
         self.sketch = None;
         self.viewport.set_sketch(None);
+        self.transform_ui = super::transforms::TransformUi::default();
+        if type_id == "PartDesign::MultiTransform"
+            && let Some(draft) = &mut self.draft
+        {
+            self.transform_ui.begin(&mut draft.parameters, &self.state);
+        }
         self.send("feature_schema", json!({"type":type_id}));
     }
 
@@ -211,6 +217,12 @@ impl Editor {
             deferred: self.state["redo_count"].as_u64().unwrap_or(0) > 0,
             committing: false,
         });
+        self.transform_ui = super::transforms::TransformUi::default();
+        if object["type"] == "PartDesign::MultiTransform"
+            && let Some(draft) = &mut self.draft
+        {
+            self.transform_ui.begin(&mut draft.parameters, &self.state);
+        }
         self.sketch = None;
         self.viewport.set_sketch(None);
     }
@@ -260,6 +272,16 @@ impl Editor {
             .unwrap_or_default()
             .to_owned();
         let mut changed = false;
+        let nested = draft.parameters["transformations"].is_array();
+        if nested {
+            changed |= self.transform_ui.show(
+                ui,
+                &mut draft.parameters,
+                &self.state,
+                &selected,
+                self.busy,
+            );
+        }
         egui::ScrollArea::vertical()
             .id_salt("native_properties")
             .max_height(410.)
@@ -267,6 +289,9 @@ impl Editor {
                 ui.set_min_width(340.);
                 ui.add_enabled_ui(!self.busy, |ui| {
                     for property in fields {
+                        if nested && property == "Transformations" {
+                            continue;
+                        }
                         let metadata = &schema["property_metadata"][&property];
                         let type_id = schema["property_types"][&property]
                             .as_str()
@@ -450,7 +475,7 @@ fn expression_capable(type_id: &str) -> bool {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn property_widget(
+pub(super) fn property_widget(
     ui: &mut egui::Ui,
     property: &str,
     type_id: &str,

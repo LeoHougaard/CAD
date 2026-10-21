@@ -3,10 +3,12 @@
 mod bodies;
 mod constraints;
 mod drawing;
+mod exchange;
 mod properties;
 mod sketch;
 #[cfg(test)]
 mod tests;
+mod transforms;
 mod view;
 
 use crate::body_commands::display_objects;
@@ -106,7 +108,7 @@ fn model_thread(
             Ok(result) => {
                 if result.get("state").is_some() {
                     current = result["state"].clone();
-                } else if result.get("objects").is_some() {
+                } else if result.get("objects").is_some() && result.get("document").is_some() {
                     current = result;
                 } else if result.get("revision").is_some() {
                     current["revision"] = result["revision"].clone();
@@ -255,6 +257,8 @@ pub struct Editor {
     sketch_ui: SketchUi,
     body_ui: BodyUi,
     property_ui: properties::PropertyUi,
+    transform_ui: transforms::TransformUi,
+    exchange_ui: exchange::ExchangeUi,
     draft: Option<Draft>,
     sequence: u64,
     error: Option<String>,
@@ -303,6 +307,8 @@ impl Editor {
             sketch_ui: SketchUi::default(),
             body_ui: BodyUi::default(),
             property_ui: properties::PropertyUi::default(),
+            transform_ui: transforms::TransformUi::default(),
+            exchange_ui: exchange::ExchangeUi::default(),
             draft: None,
             sequence: 0,
             error: None,
@@ -410,7 +416,11 @@ impl Editor {
             let success = reply.accepted;
             if reply.op == "feature_schema" {
                 self.error = reply.error;
-                self.native_schema_reply(reply.data, success);
+                if self.transform_ui.awaiting_schema() {
+                    self.transform_ui.schema_reply(reply.data, success);
+                } else {
+                    self.native_schema_reply(reply.data, success);
+                }
                 continue;
             }
             self.error = reply.error;
@@ -457,6 +467,9 @@ impl Editor {
                     d.valid = self.error.is_none();
                     if d.id == "native.properties" {
                         self.sync_native_schema();
+                        if let Some(draft) = &mut self.draft {
+                            self.transform_ui.sync(&mut draft.parameters, &self.state);
+                        }
                     }
                 }
                 if matches!(reply.op.as_str(), "preview_commit" | "preview_cancel")
@@ -472,6 +485,7 @@ impl Editor {
                     d.committing = false;
                 }
             }
+            self.exchange_reply(&reply.op, success);
             self.sync_bodies(&reply.op, success);
             self.sync_sketch();
             self.sketch_reply(&reply.op, success);
@@ -522,6 +536,15 @@ impl Editor {
         });
     }
     fn preview(&mut self) {
+        if let Some(draft) = &self.draft
+            && let Some(type_id) = self.transform_ui.schema_request(&draft.parameters)
+        {
+            self.send("feature_schema", json!({"type":type_id}));
+            return;
+        }
+        if self.transform_ui.awaiting_schema() {
+            return;
+        }
         let Some(d) = &mut self.draft else {
             return;
         };
@@ -701,7 +724,8 @@ impl Editor {
                     && self.draft.is_none()
                     && self.pending_file.is_none()
                     && self.file_dialog.is_none()
-                    && !self.overwrite;
+                    && !self.overwrite
+                    && !self.exchange_ui.active();
                 ui.add_enabled_ui(idle, |ui| {
                     if self.sketch_ui.session.is_none() && ui.button("New").clicked() {
                         self.request_file(FileAction::New);
@@ -715,6 +739,7 @@ impl Editor {
                     if self.sketch_ui.session.is_none() && ui.button("Save as").clicked() {
                         self.file_dialog(true);
                     }
+                    self.exchange_controls(ui);
                     ui.separator();
                     if ui
                         .add_enabled(
@@ -752,7 +777,8 @@ impl Editor {
                         && self.sketch_ui.dimension.is_none()
                         && self.draft.is_none()
                         && self.pending_file.is_none()
-                        && self.file_dialog.is_none(),
+                        && self.file_dialog.is_none()
+                        && !self.exchange_ui.active(),
                     |ui| {
                         if self.sketch_ui.session.is_none() {
                             self.body_toolbar(ui);
@@ -822,7 +848,10 @@ impl Editor {
                         .as_ref()
                         .is_some_and(|d| d.id == "native.properties");
                     if native {
-                        self.native_property_fields(ui);
+                        egui::ScrollArea::vertical()
+                            .id_salt("feature_native_task")
+                            .max_height((ctx.content_rect().height() - 220.).clamp(150., 650.))
+                            .show(ui, |ui| self.native_property_fields(ui));
                     }
                     let draft = self.draft.as_mut().unwrap();
                     if !boolean && !native {
@@ -1024,7 +1053,9 @@ impl Editor {
     }
 
     fn canvas(&mut self, ui: &mut egui::Ui) {
-        self.viewport.sketch_select_enabled = self.sketch_ui.tool == Draw::Select
+        self.viewport.solid_select_in_sketch = self.sketch_ui.external;
+        self.viewport.sketch_select_enabled = !self.sketch_ui.external
+            && self.sketch_ui.tool == Draw::Select
             && self.sketch_ui.drag.is_none()
             && !self.sketch_ui.trim;
         let before = self.viewport.selected.clone();
@@ -1046,7 +1077,11 @@ impl eframe::App for Editor {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll();
         if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close {
-            if self.busy || self.draft.is_some() || self.sketch_ui.session.is_some() {
+            if self.busy
+                || self.draft.is_some()
+                || self.sketch_ui.session.is_some()
+                || self.exchange_ui.active()
+            {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 self.error = Some("Finish or cancel the active feature before closing".into());
             } else if self.dirty {
@@ -1058,7 +1093,15 @@ impl eframe::App for Editor {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
         if ctx.input(|i| i.key_pressed(Key::Escape)) {
-            if self.draft.is_some() && !self.busy {
+            if self.exchange_ui.active() {
+                self.exchange_ui.cancel();
+            } else if self.file_dialog.is_some() {
+                self.file_dialog = None;
+            } else if self.overwrite {
+                self.overwrite = false;
+            } else if self.pending_file.is_some() {
+                self.pending_file = None;
+            } else if self.draft.is_some() && !self.busy {
                 self.finish_preview(false);
             } else {
                 self.sketch_escape();
@@ -1066,6 +1109,12 @@ impl eframe::App for Editor {
         }
         self.toolbar(ctx);
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
+            if self.sketch_ui.session.is_some()
+                && let Some(hint) = self.sketch_ui.hint()
+            {
+                ui.label(hint);
+            }
+
             ui.horizontal(|ui| {
                 if let Some(error) = &self.error {
                     ui.colored_label(Color32::from_rgb(225, 142, 138), error);
@@ -1086,7 +1135,10 @@ impl eframe::App for Editor {
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(Color32::from_rgb(5, 7, 9)))
             .show(ctx, |ui| self.canvas(ui));
-        self.panels(ctx);
+        if !self.exchange_ui.active() {
+            self.panels(ctx);
+        }
+        self.exchange_dialog(ctx);
         self.sketch_pump(ctx);
         // Text editors consume their own Undo first. Button focus must not
         // disable application shortcuts, and modals must block document writes.
@@ -1095,6 +1147,7 @@ impl eframe::App for Editor {
             && self.pending_file.is_none()
             && self.file_dialog.is_none()
             && !self.overwrite
+            && !self.exchange_ui.active()
             && self.sketch_ui.drag.is_none()
             && self.sketch_ui.dimension.is_none()
         {

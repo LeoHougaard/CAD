@@ -8,6 +8,7 @@ mod navigation;
 mod references;
 pub use navigation::{DisplayMode, SelectionMode, StandardView};
 mod sketch;
+mod sketch_curves;
 pub use crate::sketch_commands::SketchElement;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -34,10 +35,9 @@ struct Vertex {
     point: Vec3,
 }
 struct SketchCurve {
-    handles: Vec<(i32, Vec3)>,
+    native: sketch_curves::NativeCurve,
+    handles: Vec<(SketchElement, Vec3)>,
     points: Vec<Vec3>,
-    construction: bool,
-    index: usize,
 }
 struct ProjectedTriangle {
     points: [Pos2; 3],
@@ -70,6 +70,8 @@ pub struct Viewport {
     pub selections: Vec<Selection>,
     pub sketch_selection: Vec<SketchElement>,
     pub sketch_select_enabled: bool,
+    /// Pick native solid subelements during the external-reference tool.
+    pub solid_select_in_sketch: bool,
     dimension_hits: Vec<sketch::DimensionHit>,
 }
 
@@ -99,6 +101,7 @@ impl Default for Viewport {
             selections: vec![],
             sketch_selection: vec![],
             sketch_select_enabled: true,
+            solid_select_in_sketch: false,
             dimension_hits: vec![],
         };
         result.iso();
@@ -341,6 +344,12 @@ impl Viewport {
             self.clear_sketch_selection();
         }
         self.dimension_hits.clear();
+        let external_references: BTreeMap<_, _> = self
+            .curves
+            .iter()
+            .filter(|curve| curve.native.external)
+            .map(|curve| (curve.native.index, curve.native.reference.clone()))
+            .collect();
         self.curves.clear();
         if let Some(entry) = &sketch {
             let p = if entry["global_placement"].is_object() {
@@ -349,62 +358,29 @@ impl Viewport {
                 &entry["properties"]["Placement"]
             };
             (self.sketch_origin, self.sketch_rotation) = placement(p);
-            for geo in entry["sketch"]["geometry"].as_array().into_iter().flatten() {
-                let mut points = vec![];
-                match geo["kind"].as_str() {
-                    Some("line") => points.extend([vector(&geo["start"]), vector(&geo["end"])]),
-                    Some("point") => points.push(vector(&geo["position"])),
-                    Some(kind @ ("circle" | "arc")) => {
-                        let center = vector(&geo["center"]);
-                        let radius = geo["radius"].as_f64().unwrap_or(0.) as f32;
-                        let (start, sweep) = if kind == "circle" {
-                            (0., std::f32::consts::TAU)
-                        } else {
-                            let a = vector(&geo["start"]) - center;
-                            let b = vector(&geo["end"]) - center;
-                            let m = vector(&geo["mid"]) - center;
-                            let start = a.y.atan2(a.x);
-                            let end = (b.y.atan2(b.x) - start).rem_euclid(std::f32::consts::TAU);
-                            let mid = (m.y.atan2(m.x) - start).rem_euclid(std::f32::consts::TAU);
-                            (
-                                start,
-                                if mid <= end {
-                                    end
-                                } else {
-                                    end - std::f32::consts::TAU
-                                },
-                            )
-                        };
-                        let steps = (sweep.abs() * 20.).ceil().max(8.) as usize;
-                        for i in 0..=steps {
-                            let a = start + sweep * i as f32 / steps as f32;
-                            points.push(center + Vec3::new(a.cos(), a.sin(), 0.) * radius);
-                        }
-                    }
-                    _ => {}
-                }
-                let handles = match geo["kind"].as_str() {
-                    Some("line") => vec![(1, vector(&geo["start"])), (2, vector(&geo["end"]))],
-                    Some("arc") => vec![
-                        (1, vector(&geo["start"])),
-                        (2, vector(&geo["end"])),
-                        (3, vector(&geo["center"])),
-                    ],
-                    Some("circle") => vec![(3, vector(&geo["center"]))],
-                    Some("point") => vec![(1, vector(&geo["position"]))],
-                    _ => vec![],
-                }
+            let geometry = entry["sketch"]["geometry"]
+                .as_array()
                 .into_iter()
-                .map(|(point, p)| (point, self.sketch_origin + self.sketch_rotation * p))
-                .collect();
+                .flatten()
+                .filter_map(sketch_curves::NativeCurve::from_snapshot);
+            let external = entry["sketch"]["externals"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(sketch_curves::NativeCurve::from_external);
+            for native in geometry.chain(external) {
+                let world = |p: [f64; 3]| {
+                    self.sketch_origin
+                        + self.sketch_rotation * Vec3::new(p[0] as f32, p[1] as f32, p[2] as f32)
+                };
                 self.curves.push(SketchCurve {
-                    handles,
-                    points: points
-                        .into_iter()
-                        .map(|p| self.sketch_origin + self.sketch_rotation * p)
+                    handles: native
+                        .handles
+                        .iter()
+                        .map(|handle| (handle.id, world(handle.position)))
                         .collect(),
-                    construction: geo["construction"].as_bool().unwrap_or(false),
-                    index: geo["index"].as_u64().unwrap_or(0) as usize,
+                    points: native.points.iter().map(|point| world(*point)).collect(),
+                    native,
                 });
             }
         }
@@ -413,13 +389,21 @@ impl Viewport {
             if element.index == -1 {
                 return self.sketch.is_some() && element.point == 1;
             }
+            if element.index <= -3
+                && external_references
+                    .get(&element.index)
+                    .is_some_and(|previous| {
+                        !self.curves.iter().any(|curve| {
+                            curve.native.index == element.index
+                                && &curve.native.reference == previous
+                        })
+                    })
+            {
+                return false;
+            }
             self.curves.iter().any(|curve| {
-                curve.index as i32 == element.index
-                    && (element.point == 0
-                        || curve
-                            .handles
-                            .iter()
-                            .any(|(point, _)| *point == element.point))
+                (curve.native.index == element.index && element.point == 0)
+                    || curve.handles.iter().any(|(id, _)| *id == *element)
             })
         });
     }
@@ -771,7 +755,7 @@ impl Viewport {
         if response.clicked()
             && let Some(pos) = response.interact_pointer_pos()
         {
-            if self.sketch.is_some() {
+            if self.sketch.is_some() && !self.solid_select_in_sketch {
                 if self.sketch_select_enabled && self.dimension_hit(pos).is_none() {
                     let hit = self.sketch_hit(pos);
                     let toggle =
@@ -956,6 +940,66 @@ mod tests {
         assert_ne!(
             viewport.projected()[0].colors[0],
             viewport.projected()[0].colors[1]
+        );
+    }
+    #[test]
+    fn external_tool_picks_native_solid_support_while_regular_sketch_click_picks_solver_geometry() {
+        let mut viewport = Viewport::default();
+        let (mesh, topology) = native_scene("Pad", 1, [0., 0., 5.], Quat::IDENTITY);
+        viewport.set_scene(mesh, topology);
+        viewport.set_sketch(Some(json!({"name":"Sketch","sketch":{"geometry":[
+            {"index":0,"kind":"line","start":[0,2,0],"end":[6,2,0]}]}})));
+        viewport.align_sketch();
+        viewport.scale = 10.;
+        let context = egui::Context::default();
+        let frame = |viewport: &mut Viewport, events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800., 600.))),
+                events,
+                ..Default::default()
+            };
+            let _ = context.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    viewport.ui(ui);
+                });
+            });
+        };
+        frame(&mut viewport, vec![]);
+        let point = viewport.sketch_screen_point([2., 2., 0.]);
+        for solid in [false, true] {
+            viewport.solid_select_in_sketch = solid;
+            frame(
+                &mut viewport,
+                vec![
+                    egui::Event::PointerMoved(point),
+                    egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: Default::default(),
+                    },
+                ],
+            );
+            frame(
+                &mut viewport,
+                vec![egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: Default::default(),
+                }],
+            );
+            assert_eq!(
+                viewport.selected,
+                Some(Selection {
+                    object: if solid { "Pad" } else { "Sketch" }.into(),
+                    subelement: if solid { "Face1" } else { "Geometry0" }.into()
+                })
+            );
+        }
+        assert_eq!(
+            viewport.sketch_selection,
+            vec![SketchElement { index: 0, point: 0 }]
         );
     }
     fn native_scene(

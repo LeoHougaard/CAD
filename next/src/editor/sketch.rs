@@ -16,6 +16,9 @@ pub(super) struct SketchUi {
     pub(super) session: Option<String>,
     pub(super) drag: Option<Drag>,
     pub(super) trim: bool,
+    pub(super) external: bool,
+    external_defining: bool,
+    external_intersection: bool,
     pending_begin: bool,
     new_sketch: bool,
     dirty_before: bool,
@@ -38,6 +41,9 @@ impl Default for SketchUi {
             session: None,
             drag: None,
             trim: false,
+            external: false,
+            external_defining: false,
+            external_intersection: false,
             pending_begin: false,
             new_sketch: false,
             dirty_before: false,
@@ -50,6 +56,32 @@ impl Default for SketchUi {
     }
 }
 impl SketchUi {
+    pub(super) fn hint(&self) -> Option<&'static str> {
+        if self.external {
+            return Some("Select an edge or vertex to project; Esc ends projection");
+        }
+        Some(match self.tool {
+            Tool::Ellipse => [
+                "Ellipse center",
+                "Major axis endpoint",
+                "Minor axis endpoint",
+            ][self.points.len().min(2)],
+            Tool::EllipseArc | Tool::HyperbolaArc => [
+                "Curve center",
+                "Major axis endpoint",
+                "Minor axis endpoint",
+                "Arc start",
+                "Arc end",
+            ][self.points.len().min(4)],
+            Tool::ParabolaArc => {
+                ["Parabola vertex", "Focus", "Arc start", "Arc end"][self.points.len().min(3)]
+            }
+            Tool::BSpline | Tool::PeriodicBSpline => {
+                "Click spline poles; Enter creates curve; Esc cancels"
+            }
+            _ => return None,
+        })
+    }
     pub(super) fn clear_points(&mut self) {
         self.points.clear();
         self.snaps.clear();
@@ -69,6 +101,35 @@ pub(super) struct Drag {
     started: bool,
     last: Instant,
     original: Value,
+}
+
+fn external_indices(snapshot: &Value, selection: &[SketchElement], deleting: bool) -> Vec<i64> {
+    let Some(externals) = snapshot["sketch"]["externals"].as_array() else {
+        return vec![];
+    };
+    let mut entries: Vec<_> = externals
+        .iter()
+        .filter(|entry| {
+            selection
+                .iter()
+                .any(|s| entry["geometry_index"].as_i64() == Some(s.index as i64))
+        })
+        .filter_map(|entry| {
+            Some((
+                entry["index"].as_i64()?,
+                entry["persistent_reference"].as_str(),
+            ))
+        })
+        .collect();
+    entries.sort_by_key(|entry| std::cmp::Reverse(entry.0));
+    let mut refs = std::collections::BTreeSet::new();
+    entries
+        .into_iter()
+        .filter(|(_, reference)| {
+            !deleting || reference.is_none_or(|reference| refs.insert(reference))
+        })
+        .map(|entry| entry.0)
+        .collect()
 }
 
 impl Editor {
@@ -235,15 +296,103 @@ impl Editor {
                 ("Arc", Tool::Arc),
             ] {
                 if ui
-                    .selectable_label(self.sketch_ui.tool == tool && !self.sketch_ui.trim, label)
+                    .selectable_label(
+                        self.sketch_ui.tool == tool
+                            && !self.sketch_ui.trim
+                            && !self.sketch_ui.external,
+                        label,
+                    )
                     .clicked()
                 {
+                    if tool != Tool::Select {
+                        self.viewport.clear_sketch_selection();
+                        self.sketch_ui.selected_constraint = None;
+                    }
+                    self.sketch_ui.external = false;
                     self.sketch_ui.tool = tool;
                     self.sketch_ui.trim = false;
                     self.sketch_ui.clear_points();
                 }
             }
+            ui.menu_button("Curves", |ui| {
+                for (label, tool) in [
+                    ("Ellipse", Tool::Ellipse),
+                    ("Elliptic arc", Tool::EllipseArc),
+                    ("B-spline", Tool::BSpline),
+                    ("Periodic B-spline", Tool::PeriodicBSpline),
+                    ("Hyperbolic arc", Tool::HyperbolaArc),
+                    ("Parabolic arc", Tool::ParabolaArc),
+                ] {
+                    if ui
+                        .selectable_label(self.sketch_ui.tool == tool, label)
+                        .clicked()
+                    {
+                        self.viewport.clear_sketch_selection();
+                        self.sketch_ui.selected_constraint = None;
+                        self.sketch_ui.external = false;
+                        self.sketch_ui.trim = false;
+                        self.sketch_ui.tool = tool;
+                        self.sketch_ui.clear_points();
+                        ui.close();
+                    }
+                }
+                ui.separator();
+                if ui
+                    .add_enabled(
+                        !self.viewport.sketch_selection.is_empty(),
+                        egui::Button::new("Expose internal geometry"),
+                    )
+                    .clicked()
+                {
+                    self.expose_internal_geometry();
+                    ui.close();
+                }
+            });
+            if matches!(self.sketch_ui.tool, Tool::BSpline | Tool::PeriodicBSpline)
+                && ui
+                    .add_enabled(
+                        self.sketch_ui.points.len() >= self.sketch_ui.tool.required_points(),
+                        egui::Button::new("Create curve (Enter)"),
+                    )
+                    .clicked()
+            {
+                self.commit_curve(false);
+            }
+            ui.menu_button(
+                if self.sketch_ui.external {
+                    "External •"
+                } else {
+                    "External"
+                },
+                |ui| {
+                    if ui
+                        .selectable_label(self.sketch_ui.external, "Project edge or vertex")
+                        .clicked()
+                    {
+                        self.sketch_ui.external = !self.sketch_ui.external;
+                        self.sketch_ui.tool = Tool::Select;
+                        self.sketch_ui.trim = false;
+                        self.sketch_ui.clear_points();
+                    }
+                    ui.checkbox(
+                        &mut self.sketch_ui.external_defining,
+                        "Defining profile geometry",
+                    );
+                    ui.checkbox(&mut self.sketch_ui.external_intersection, "Intersection");
+                    if ui
+                        .add_enabled(
+                            !self.viewport.sketch_selection.is_empty(),
+                            egui::Button::new("Apply flags to selected references"),
+                        )
+                        .clicked()
+                    {
+                        self.set_external_flags();
+                        ui.close();
+                    }
+                },
+            );
             if ui.selectable_label(self.sketch_ui.trim, "Trim").clicked() {
+                self.sketch_ui.external = false;
                 self.sketch_ui.trim = !self.sketch_ui.trim;
                 self.sketch_ui.tool = Tool::Select;
                 self.sketch_ui.clear_points();
@@ -281,6 +430,50 @@ impl Editor {
             self.transaction("Toggle construction geometry", edits);
         }
     }
+    fn selected_external_indices(&self, deleting: bool) -> Vec<i64> {
+        self.sketch_snapshot()
+            .map(|snapshot| external_indices(&snapshot, &self.viewport.sketch_selection, deleting))
+            .unwrap_or_default()
+    }
+    fn set_external_flags(&mut self) {
+        let edits = self.selected_external_indices(false).into_iter().map(|index| json!({"op":"external_state","object":self.sketch,"index":index,"defining":self.sketch_ui.external_defining,"intersection":self.sketch_ui.external_intersection})).collect::<Vec<_>>();
+        if !edits.is_empty() {
+            self.transaction("Edit external geometry", edits);
+        }
+    }
+    fn expose_internal_geometry(&mut self) {
+        let mut indices: Vec<_> = self
+            .viewport
+            .sketch_selection
+            .iter()
+            .filter(|s| s.index >= 0)
+            .map(|s| s.index)
+            .collect();
+        indices.sort();
+        indices.dedup();
+        if !indices.is_empty() {
+            self.transaction(
+                "Expose native internal geometry",
+                indices
+                    .into_iter()
+                    .map(|index| json!({"op":"expose_internal","object":self.sketch,"index":index}))
+                    .collect(),
+            );
+        }
+    }
+    fn project_external_selection(&mut self) {
+        let Some(selection) = self.viewport.selected.clone() else {
+            return;
+        };
+        if self.sketch.as_deref() == Some(selection.object.as_str())
+            || !(selection.subelement.starts_with("Edge")
+                || selection.subelement.starts_with("Vertex"))
+        {
+            self.error = Some("Select an edge or vertex of another object to project".into());
+            return;
+        }
+        self.transaction("Project external geometry", vec![json!({"op":"external_geometry","object":self.sketch,"source":selection.object,"subelement":selection.subelement,"defining":self.sketch_ui.external_defining,"intersection":self.sketch_ui.external_intersection})]);
+    }
     fn delete_geometry(&mut self) {
         let Some(object) = self.sketch.clone() else {
             return;
@@ -295,14 +488,17 @@ impl Editor {
         indices.sort();
         indices.dedup();
         indices.reverse();
-        if !indices.is_empty() {
-            self.transaction(
-                "Delete sketch geometry",
-                indices
-                    .into_iter()
-                    .map(|index| json!({"op":"delete_geometry","object":object,"index":index}))
-                    .collect(),
-            );
+        let mut edits: Vec<_> = indices
+            .into_iter()
+            .map(|index| json!({"op":"delete_geometry","object":object,"index":index}))
+            .collect();
+        edits.extend(
+            self.selected_external_indices(true)
+                .into_iter()
+                .map(|index| json!({"op":"delete_external","object":object,"index":index})),
+        );
+        if !edits.is_empty() {
+            self.transaction("Delete sketch geometry", edits);
             self.viewport.clear_sketch_selection();
             self.sketch_ui.selected_constraint = None;
         }
@@ -332,11 +528,17 @@ impl Editor {
         Some((point, None))
     }
     fn draw_point(&mut self, point: [f64; 3], snap: Option<SketchElement>, infer: bool) {
+        self.sketch_ui.points.push(point);
+        self.sketch_ui.snaps.push(snap);
+        if matches!(self.sketch_ui.tool, Tool::BSpline | Tool::PeriodicBSpline) {
+            return;
+        }
+        self.commit_curve(infer);
+    }
+    fn commit_curve(&mut self, infer: bool) {
         let Some(object) = self.sketch.clone() else {
             return;
         };
-        self.sketch_ui.points.push(point);
-        self.sketch_ui.snaps.push(snap);
         let tool = self.sketch_ui.tool;
         if self.sketch_ui.points.len() < tool.required_points() {
             return;
@@ -365,7 +567,10 @@ impl Editor {
             Tool::Line | Tool::Polyline | Tool::Arc => {
                 vec![(0, count, 1), (tool.required_points() - 1, count, 2)]
             }
-            Tool::Circle => vec![(0, count, 3)],
+            Tool::Circle | Tool::Ellipse | Tool::EllipseArc | Tool::HyperbolaArc => {
+                vec![(0, count, 3)]
+            }
+            Tool::BSpline => vec![(0, count, 1), (self.sketch_ui.points.len() - 1, count, 2)],
             Tool::Rectangle => {
                 let p = &self.sketch_ui.points;
                 let minx = p[0][0].min(p[1][0]);
@@ -431,6 +636,12 @@ impl Editor {
         };
         let pos = ui.input(|i| i.pointer.interact_pos());
         let alt = ui.input(|i| i.modifiers.alt);
+        if self.sketch_ui.external {
+            if response.clicked() && !self.busy {
+                self.project_external_selection();
+            }
+            return;
+        }
         if let Some(pos) = pos
             && response.hovered()
             && self.sketch_ui.tool != Tool::Select
@@ -506,7 +717,11 @@ impl Editor {
             let Some(start) = ui.input(|i| i.pointer.press_origin()) else {
                 return;
             };
-            if let Some(element) = self.viewport.sketch_hit(start).filter(|h| h.index >= 0) {
+            if let Some(element) = self
+                .viewport
+                .sketch_hit(start)
+                .filter(|h| self.viewport.sketch_draggable(*h))
+            {
                 let Some(origin) = self.viewport.sketch_point(start) else {
                     return;
                 };
@@ -567,6 +782,7 @@ impl Editor {
         }
         self.sketch_ui.clear_points();
         self.sketch_ui.tool = Tool::Select;
+        self.sketch_ui.external = false;
         self.sketch_ui.trim = false;
         self.sketch_ui.box_start = None;
     }
@@ -645,6 +861,12 @@ impl Editor {
                 }
                 return;
             }
+            if matches!(self.sketch_ui.tool, Tool::BSpline | Tool::PeriodicBSpline)
+                && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Enter))
+            {
+                self.commit_curve(false);
+                return;
+            }
             if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::D)) {
                 self.smart_dimension();
                 return;
@@ -658,6 +880,11 @@ impl Editor {
             ] {
                 if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, key)) {
                     self.sketch_ui.clear_points();
+                    if tool != Tool::Select {
+                        self.viewport.clear_sketch_selection();
+                        self.sketch_ui.selected_constraint = None;
+                    }
+                    self.sketch_ui.external = false;
                     self.sketch_ui.tool = tool;
                     self.sketch_ui.trim = false;
                 }
@@ -667,5 +894,38 @@ impl Editor {
                 self.toggle_construction();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn deleting_projected_face_carriers_uses_one_native_delete_per_reference() {
+        let snapshot = json!({"sketch":{"externals":[
+            {"index":0,"geometry_index":-3,"persistent_reference":"First.Face6"},
+            {"index":1,"geometry_index":-4,"persistent_reference":"First.Face6"},
+            {"index":2,"geometry_index":-5,"persistent_reference":"Second.Edge1"},
+            {"index":3,"geometry_index":-6,"persistent_reference":"Second.Edge2"}]}});
+        let selection = vec![
+            SketchElement {
+                index: -3,
+                point: 0,
+            },
+            SketchElement {
+                index: -4,
+                point: 2,
+            },
+            SketchElement {
+                index: -5,
+                point: 0,
+            },
+            SketchElement { index: 0, point: 0 },
+        ];
+        assert_eq!(external_indices(&snapshot, &selection, true), vec![2, 1]);
+        assert_eq!(
+            external_indices(&snapshot, &selection, false),
+            vec![2, 1, 0]
+        );
     }
 }

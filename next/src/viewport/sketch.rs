@@ -19,8 +19,9 @@ impl Viewport {
 
     /// A solved point in native sketch coordinates. Whole lines use their midpoint;
     /// whole arcs use their midpoint and whole circles use the positive-X radius point.
+    /// Other whole curves use a native display sample; point handles use exact solved values.
     pub fn geometry_point(&self, element: SketchElement) -> Option<[f64; 3]> {
-        let sketch = self.sketch.as_ref()?;
+        self.sketch.as_ref()?;
         if element
             == (SketchElement {
                 index: -1,
@@ -29,30 +30,69 @@ impl Viewport {
         {
             return Some([0.; 3]);
         }
-        let geometry = sketch["sketch"]["geometry"]
-            .as_array()?
-            .iter()
-            .find(|geo| geo["index"].as_i64() == Some(element.index as i64))?;
+        if element.point != 0 {
+            return super::sketch_curves::native_handle(
+                self.curves.iter().map(|curve| &curve.native),
+                element,
+            )
+            .map(|handle| handle.position);
+        }
+        let geometry = self.native_geometry(element.index)?;
         let point =
             |value: &Value| Some([value[0].as_f64()?, value[1].as_f64()?, value[2].as_f64()?]);
-        match (geometry["kind"].as_str()?, element.point) {
-            ("line" | "arc", 1) => point(&geometry["start"]),
-            ("line" | "arc", 2) => point(&geometry["end"]),
-            ("circle" | "arc", 3) => point(&geometry["center"]),
-            ("point", 0 | 1) => point(&geometry["position"]),
-            ("line", 0) => {
+        match geometry["kind"].as_str()? {
+            "point" => point(&geometry["position"]),
+            "line" => {
                 let a = point(&geometry["start"])?;
                 let b = point(&geometry["end"])?;
                 Some(std::array::from_fn(|i| (a[i] + b[i]) * 0.5))
             }
-            ("arc", 0) => point(&geometry["mid"]),
-            ("circle", 0) => {
+            "arc" => point(&geometry["mid"]),
+            "circle" => {
                 let mut center = point(&geometry["center"])?;
                 center[0] += geometry["radius"].as_f64()?;
                 Some(center)
             }
-            _ => None,
+            _ => self
+                .curves
+                .iter()
+                .find(|curve| curve.native.index == element.index)
+                .and_then(|curve| curve.native.points.get(curve.native.points.len() / 2))
+                .copied(),
         }
+    }
+
+    fn native_geometry(&self, index: i32) -> Option<&Value> {
+        let sketch = &self.sketch.as_ref()?["sketch"];
+        sketch["geometry"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .chain(
+                sketch["externals"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|wrapper| &wrapper["geometry"]),
+            )
+            .find(|geo| geo["index"].as_i64() == Some(i64::from(index)))
+    }
+
+    /// Only native handles explicitly verified for movement are drag targets.
+    pub fn sketch_draggable(&self, element: SketchElement) -> bool {
+        if element.index < 0 {
+            return false;
+        }
+        if element.point == 0 {
+            return self.curves.iter().any(|curve| {
+                curve.native.index == element.index
+                    && matches!(curve.native.kind.as_str(), "line" | "circle" | "arc")
+            });
+        }
+        self.curves
+            .iter()
+            .flat_map(|curve| &curve.native.handles)
+            .any(|handle| handle.id == element && handle.draggable)
     }
 
     /// Native point identifiers have priority over whole edges within a seven-point handle radius.
@@ -60,16 +100,10 @@ impl Viewport {
         self.sketch.as_ref()?;
         let mut best: Option<(f32, SketchElement)> = None;
         for curve in &self.curves {
-            for (point, world) in &curve.handles {
+            for (id, world) in &curve.handles {
                 let distance = self.project(*world).0.distance(pos);
                 if distance <= 7. && best.as_ref().is_none_or(|(d, _)| distance < *d) {
-                    best = Some((
-                        distance,
-                        SketchElement {
-                            index: curve.index as i32,
-                            point: *point,
-                        },
-                    ));
+                    best = Some((distance, *id));
                 }
             }
         }
@@ -107,7 +141,7 @@ impl Viewport {
                 (distance <= 6.).then_some((
                     distance,
                     SketchElement {
-                        index: curve.index as i32,
+                        index: curve.native.index,
                         point: 0,
                     },
                 ))
@@ -143,7 +177,7 @@ impl Viewport {
                     points.iter().all(|point| rect.contains(*point))
                 };
                 selected.then_some(SketchElement {
-                    index: curve.index as i32,
+                    index: curve.native.index,
                     point: if points.len() == 1 { 1 } else { 0 },
                 })
             })
@@ -201,10 +235,16 @@ impl Viewport {
             let selected = self
                 .sketch_selection
                 .iter()
-                .any(|element| element.index == curve.index as i32 && element.point == 0);
+                .any(|element| element.index == curve.native.index && element.point == 0);
             let color = if selected {
                 selected_color
-            } else if curve.construction {
+            } else if curve.native.external {
+                if curve.native.defining {
+                    Color32::from_rgb(202, 140, 194)
+                } else {
+                    Color32::from_rgb(161, 122, 192)
+                }
+            } else if curve.native.construction {
                 Color32::from_rgb(150, 127, 188)
             } else if constrained {
                 Color32::from_rgb(83, 198, 185)
@@ -213,24 +253,20 @@ impl Viewport {
             };
             let points: Vec<Pos2> = curve.points.iter().map(|p| self.project(*p).0).collect();
             let stroke = Stroke::new(if selected { 2.5_f32 } else { 1.8_f32 }, color);
-            if curve.construction {
+            if curve.native.construction && !(curve.native.external && curve.native.defining) {
                 painter.extend(Shape::dashed_line(&points, stroke, 7., 4.));
             } else {
                 painter.add(Shape::line(points, stroke));
             }
-            for (point, world) in &curve.handles {
+            for (id, world) in &curve.handles {
                 let position = self.project(*world).0;
-                let handle_selected = selected
-                    || self.sketch_selection.contains(&SketchElement {
-                        index: curve.index as i32,
-                        point: *point,
-                    });
+                let handle_selected = selected || self.sketch_selection.contains(id);
                 let handle_color = if handle_selected {
                     selected_color
                 } else {
                     color
                 };
-                if *point == 3 {
+                if id.point == 3 {
                     painter.circle_stroke(position, 3.5, Stroke::new(1.2_f32, handle_color));
                     painter.line_segment(
                         [position - Vec2::new(5., 0.), position + Vec2::new(5., 0.)],
@@ -282,12 +318,14 @@ impl Viewport {
             let glyph = match constraint["type"].as_str().unwrap_or("") {
                 "Horizontal" => "H",
                 "Vertical" => "V",
-                "Parallel" => "∥",
-                "Perpendicular" => "⊥",
+                "Parallel" => "ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã¢â‚¬Â¹ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¥",
+                "Perpendicular" => "ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¥",
                 "Equal" => "=",
                 "Tangent" => "T",
-                "Coincident" => "·",
-                "Block" => "■",
+                "Coincident" => "ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â·",
+                "Block" => {
+                    "ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â "
+                }
                 _ => continue,
             };
             let index = constraint["first"].as_i64().unwrap_or(-2000) as i32;
@@ -295,7 +333,7 @@ impl Viewport {
             let Some(position) = self.native_sketch_position(index, point).or_else(|| {
                 self.curves
                     .iter()
-                    .find(|curve| curve.index as i32 == index)
+                    .find(|curve| curve.native.index == index)
                     .and_then(|curve| {
                         curve
                             .points
@@ -321,13 +359,12 @@ impl Viewport {
         if index == -1 && point == 1 {
             return Some(self.sketch_origin);
         }
-        self.curves
-            .iter()
-            .find(|curve| curve.index as i32 == index)?
-            .handles
-            .iter()
-            .find(|(native_point, _)| *native_point == point)
-            .map(|(_, position)| *position)
+        let local = self.geometry_point(SketchElement { index, point })?;
+        Some(
+            self.sketch_origin
+                + self.sketch_rotation
+                    * Vec3::new(local[0] as f32, local[1] as f32, local[2] as f32),
+        )
     }
 
     pub(super) fn draw_dimensions(&mut self, painter: &egui::Painter) {
@@ -374,15 +411,19 @@ impl Viewport {
                 let endpoints = if first_point == 0 {
                     self.curves
                         .iter()
-                        .find(|curve| curve.index as i32 == first && curve.points.len() == 2)
+                        .find(|curve| curve.native.index == first && curve.points.len() == 2)
                         .map(|curve| (curve.points[0], curve.points[1]))
                 } else {
                     self.native_sketch_position(first, first_point).map(|a| {
-                        let b = if kind == "Distance" && second >= 0 && second_point == 0 {
+                        let b = if kind == "Distance"
+                            && second != -1
+                            && second != -2
+                            && second_point == 0
+                        {
                             self.curves
                                 .iter()
                                 .find(|curve| {
-                                    curve.index as i32 == second && curve.points.len() == 2
+                                    curve.native.index == second && curve.points.len() == 2
                                 })
                                 .and_then(|curve| {
                                     let direction = curve.points[1] - curve.points[0];
@@ -453,14 +494,7 @@ impl Viewport {
                     }
                 }
             } else if matches!(kind, "Radius" | "Diameter") {
-                if let Some(geo) = sketch["sketch"]["geometry"]
-                    .as_array()
-                    .and_then(|geometry| {
-                        geometry
-                            .iter()
-                            .find(|geo| geo["index"].as_i64() == Some(first as i64))
-                    })
-                {
+                if let Some(geo) = self.native_geometry(first) {
                     let center = vector(&geo["center"]);
                     let radius = geo["radius"].as_f64().unwrap_or(0.) as f32;
                     if radius > 0. {
@@ -489,7 +523,11 @@ impl Viewport {
                             direction,
                             format!(
                                 "{}{value:.2} mm",
-                                if kind == "Diameter" { "Ø" } else { "R" }
+                                if kind == "Diameter" {
+                                    "ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â¹Ãƒâ€¦Ã¢â‚¬Å“"
+                                } else {
+                                    "R"
+                                }
                             ),
                         ));
                     }
@@ -498,7 +536,7 @@ impl Viewport {
                 let line = |index: i32| {
                     self.curves
                         .iter()
-                        .find(|curve| curve.index as i32 == index && curve.points.len() == 2)
+                        .find(|curve| curve.native.index == index && curve.points.len() == 2)
                         .map(|curve| (curve.points[0], curve.points[1]))
                 };
                 if let Some((a, b)) = line(first) {
@@ -558,7 +596,10 @@ impl Viewport {
                         label = Some((
                             position,
                             (position - center).normalized(),
-                            format!("{:.1}°", value.to_degrees()),
+                            format!(
+                                "{:.1}ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â°",
+                                value.to_degrees()
+                            ),
                         ));
                     }
                 }
@@ -877,5 +918,148 @@ mod tests {
                 .label
                 .intersects(viewport.dimension_hits[1].label)
         );
+    }
+    fn external_line(token: &str) -> Value {
+        json!({"index":0,"geometry_index":-3,"source_index":4,
+            "source":{"link":"Source","subelements":["Edge7"]},"persistent_reference":token,
+            "defining":true,"intersection":false,"projection":true,"missing":false,"frozen":false,
+            "geometry":{"index":-3,"kind":"line","construction":true,
+                "start":[10,-10,0],"end":[30,-10,0],"points":[[10,-10,0],[30,-10,0]],
+                "handles":[{"index":-3,"point":1,"position":[10,-10,0],"draggable":false},
+                    {"index":-3,"point":2,"position":[30,-10,0],"draggable":false}]}})
+    }
+    #[test]
+    fn native_external_solver_ids_are_pickable_without_aliasing_internal_geometry_or_origin() {
+        let mut viewport = viewport();
+        let mut sketch = snapshot();
+        sketch["sketch"]["externals"] = json!([external_line("Source.;g1;SKT")]);
+        viewport.set_sketch(Some(sketch.clone()));
+        for (coordinate, element) in [
+            (
+                [10., -10., 0.],
+                SketchElement {
+                    index: -3,
+                    point: 1,
+                },
+            ),
+            (
+                [20., -10., 0.],
+                SketchElement {
+                    index: -3,
+                    point: 0,
+                },
+            ),
+            (
+                [30., -10., 0.],
+                SketchElement {
+                    index: -3,
+                    point: 2,
+                },
+            ),
+        ] {
+            assert_eq!(
+                viewport.sketch_hit(viewport.sketch_screen_point(coordinate)),
+                Some(element)
+            );
+            assert_eq!(viewport.geometry_point(element), Some(coordinate));
+            assert!(!viewport.sketch_draggable(element));
+        }
+        assert_eq!(
+            viewport.geometry_point(SketchElement { index: 0, point: 1 }),
+            Some([10., 10., 0.])
+        );
+        assert_eq!(
+            viewport.geometry_point(SketchElement {
+                index: -1,
+                point: 1
+            }),
+            Some([0.; 3])
+        );
+        assert_eq!(
+            viewport.geometry_point(SketchElement {
+                index: -2,
+                point: 1
+            }),
+            None
+        );
+        let rectangle = Rect::from_two_pos(
+            viewport.sketch_screen_point([9., -11., 0.]),
+            viewport.sketch_screen_point([31., -9., 0.]),
+        );
+        assert_eq!(
+            viewport.sketch_in_rect(rectangle, false),
+            vec![SketchElement {
+                index: -3,
+                point: 0
+            }]
+        );
+        let selected = SketchElement {
+            index: -3,
+            point: 2,
+        };
+        viewport.select_sketch_element(Some(selected), false);
+        sketch["revision"] = json!(2);
+        viewport.set_sketch(Some(sketch.clone()));
+        assert_eq!(viewport.sketch_selection, vec![selected]);
+        // A topology/source change reusing a flat external index must not keep a stale reference selected.
+        sketch["sketch"]["externals"][0]["persistent_reference"] =
+            json!("Source.;different-native-reference;SKT");
+        viewport.set_sketch(Some(sketch));
+        assert!(viewport.sketch_selection.is_empty());
+    }
+    #[test]
+    fn advanced_native_samples_handles_and_control_geometry_keep_native_identity() {
+        let mut viewport = Viewport::default();
+        viewport.set_sketch(Some(json!({"name":"Advanced","global_placement":{"position":[100,200,300],"rotation":[0,0,1,0]},
+            "sketch":{"geometry":[
+                {"index":0,"kind":"ellipse","points":[[13,10,0],[10,12,0],[7,10,0],[10,8,0],[13,10,0]],
+                    "handles":[{"index":0,"point":3,"position":[10,10,0],"draggable":true}]},
+                {"index":1,"kind":"bspline","points":[[10,-10,0],[20,-8,0],[30,-10,0]],
+                    "handles":[{"index":1,"point":1,"position":[10,-10,0],"draggable":true},
+                        {"index":1,"point":2,"position":[30,-10,0],"draggable":true}]},
+                {"index":2,"kind":"circle","construction":true,"points":[[20.25,-3,0],[20,-2.75,0],[19.75,-3,0],[20,-3.25,0],[20.25,-3,0]],
+                    "handles":[{"index":2,"point":3,"position":[20,-3,0],"draggable":true}]}]}})));
+        viewport.align_sketch();
+        assert_eq!(viewport.curves[1].native.points.len(), 3);
+        for (coordinate, element) in [
+            ([10., 10., 0.], SketchElement { index: 0, point: 3 }),
+            ([10., 12., 0.], SketchElement { index: 0, point: 0 }),
+            ([20., -8., 0.], SketchElement { index: 1, point: 0 }),
+            ([20., -3., 0.], SketchElement { index: 2, point: 3 }),
+        ] {
+            assert_eq!(
+                viewport.sketch_hit(viewport.sketch_screen_point(coordinate)),
+                Some(element)
+            );
+        }
+        assert_eq!(
+            viewport.geometry_point(SketchElement { index: 1, point: 3 }),
+            None
+        );
+        assert_eq!(
+            viewport.geometry_point(SketchElement { index: 0, point: 1 }),
+            None
+        );
+        assert!(viewport.sketch_draggable(SketchElement { index: 0, point: 3 }));
+        assert!(viewport.sketch_draggable(SketchElement { index: 1, point: 1 }));
+        assert!(viewport.sketch_draggable(SketchElement { index: 2, point: 3 }));
+        assert!(!viewport.sketch_draggable(SketchElement { index: 0, point: 0 }));
+        assert!(!viewport.sketch_draggable(SketchElement { index: 1, point: 0 }));
+    }
+    #[test]
+    fn dimension_to_external_line_uses_native_perpendicular_foot() {
+        let mut viewport = viewport();
+        let mut sketch = snapshot();
+        sketch["sketch"]["externals"] = json!([external_line("Source.;g1;SKT")]);
+        sketch["sketch"]["constraints"] = json!([{"index":11,"type":"Distance","first":0,"first_pos":1,"second":-3,"second_pos":0,"value":20}]);
+        viewport.set_sketch(Some(sketch));
+        let context = egui::Context::default();
+        let _ = context.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| viewport.draw_dimensions(ui.painter()));
+        });
+        let hit = &viewport.dimension_hits[0];
+        assert_eq!(hit.index, 11);
+        assert!(hit.segments[0][0].distance(viewport.sketch_screen_point([10., -10., 0.])) < 1e-5);
+        assert!(hit.segments[1][0].distance(viewport.sketch_screen_point([10., 10., 0.])) < 1e-5);
     }
 }

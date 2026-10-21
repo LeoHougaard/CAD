@@ -17,17 +17,20 @@ import FreeCAD as App
 import Part
 import Sketcher
 import PartDesign  # Register the native feature classes in headless mode.
+import sketch_geometry as SketchGeometry
+import exchange as Exchange
 
 
 VERSION = 1
 OPERATIONS = ["capabilities", "new", "open", "inspect", "transaction", "undo",
               "redo", "save", "mesh", "topology", "close", "preview",
-              "preview_commit", "preview_cancel", "sketch_begin", "sketch_finish", "sketch_cancel", "feature_schema"]
+              "preview_commit", "preview_cancel", "sketch_begin", "sketch_finish", "sketch_cancel", "feature_schema", "export_exchange"]
 EDIT_OPERATIONS = ["add_object", "set", "expression", "geometry", "constraint",
                    "datum", "move_geometry", "construction", "delete_geometry", "delete_constraint",
-                   "constraint_state", "trim_geometry", "remove_object", "binder_support"]
+                   "constraint_state", "trim_geometry", "remove_object", "binder_support",
+                   "expose_internal", "external_geometry", "external_state", "delete_external", "import_exchange"]
 OBJECT_TYPES = {
-    "App::Part", "PartDesign::Body", "Sketcher::SketchObject",
+    "App::Part", "Part::Feature", "PartDesign::Body", "Sketcher::SketchObject",
     "PartDesign::Pad", "PartDesign::Pocket", "PartDesign::Fillet",
     "PartDesign::Chamfer", "PartDesign::Revolution", "PartDesign::Groove",
     "PartDesign::Boolean",
@@ -355,23 +358,8 @@ def oriented_normal(face, u, v):
 
 
 def sketch_geometry(obj):
-    result = []
-    for index, geo in enumerate(obj.Geometry):
-        entry = {"index": index, "geometry_type": geo.TypeId, "kind": "unsupported",
-                 "construction": obj.getConstruction(index)}
-        if isinstance(geo, Part.LineSegment):
-            entry.update(kind="line", start=encode(geo.StartPoint), end=encode(geo.EndPoint))
-        elif isinstance(geo, (Part.Circle, Part.ArcOfCircle)):
-            entry.update(center=encode(geo.Center), radius=geo.Radius, axis=encode(geo.Axis))
-            if isinstance(geo, Part.ArcOfCircle):
-                entry.update(kind="arc", start=encode(geo.StartPoint), end=encode(geo.EndPoint),
-                             mid=encode(geo.value((geo.FirstParameter + geo.LastParameter) / 2)))
-            else:
-                entry["kind"] = "circle"
-        elif isinstance(geo, Part.Point):
-            entry.update(kind="point", position=[geo.X, geo.Y, geo.Z])
-        result.append(entry)
-    return result
+    return [SketchGeometry.geometry_entry(geo, index, obj.getConstruction(index))
+            for index, geo in enumerate(obj.Geometry)]
 
 
 def preview_metadata(doc):
@@ -454,6 +442,7 @@ def snapshot(doc, revision=None):
                                "conflicting_constraints": list(obj.ConflictingConstraints),
                                "redundant_constraints": list(obj.RedundantConstraints),
                                "geometry": sketch_geometry(obj),
+                               "externals": SketchGeometry.externals(obj),
                                "constraints": [{"index": i, "type": c.Type, "first": c.First,
                                                 "first_pos": c.FirstPos, "second": c.Second,
                                                 "second_pos": c.SecondPos, "third": c.Third,
@@ -526,6 +515,11 @@ def set_boolean_tools(feature, tools):
 
 def apply_edit(doc, edit):
     op = edit.get("op", edit.get("kind"))
+    if op == "import_exchange":
+        try:
+            return Exchange.import_into(doc, edit)
+        except Exchange.ExchangeError as error:
+            fail(error.code, str(error))
     if op == "add_object":
         type_id, key = edit["type"], name(edit["name"])
         if type_id not in OBJECT_TYPES:
@@ -591,6 +585,13 @@ def apply_edit(doc, edit):
         if expression is not None and not isinstance(expression, str):
             fail("invalid_request", "Expression must be a string or null")
         obj.setExpression(prop, expression)
+    elif op in {"external_geometry", "external_state", "delete_external"}:
+        if not obj.isDerivedFrom("Sketcher::SketchObject"):
+            fail("invalid_request", "External geometry requires a native SketchObject")
+        try:
+            SketchGeometry.external_edit(obj, edit)
+        except (SketchGeometry.GeometryError, ValueError, TypeError, KeyError) as error:
+            fail("invalid_geometry", str(error))
     elif op in ("geometry", "constraint"):
         if not obj.isDerivedFrom("Sketcher::SketchObject"):
             fail("invalid_request", "Geometry and constraints require a native SketchObject")
@@ -604,6 +605,11 @@ def apply_edit(doc, edit):
                 geo = Part.Arc(vector(edit["start"]), vector(edit["mid"]), vector(edit["end"]))
             elif kind == "point":
                 geo = Part.Point(vector(edit["position"]))
+            elif kind in {"ellipse", "ellipse_arc", "bspline", "hyperbola_arc", "parabola_arc"}:
+                try:
+                    geo = SketchGeometry.make_geometry(edit)
+                except Exception as error:
+                    fail("invalid_geometry", str(error))
             else:
                 fail("unsupported_geometry", "Unsupported sketch geometry: " + str(kind))
             index = obj.addGeometry(geo, bool(edit.get("construction", False)))
@@ -611,12 +617,16 @@ def apply_edit(doc, edit):
             args = edit.get("args", [])
             if not isinstance(args, list) or not all(isinstance(v, (str, int, float)) and not isinstance(v, bool) for v in args):
                 fail("invalid_request", "Constraint args must be native string/number arguments")
+            try:
+                SketchGeometry.validate_constraint(edit["kind"], args)
+            except SketchGeometry.GeometryError as error:
+                fail("invalid_request", str(error))
             index = obj.addConstraint(Sketcher.Constraint(edit["kind"], *args))
         if index < 0:
             fail("invalid_model", "Native sketch edit failed")
         return {"object": obj.Name, "index": index}
     elif op in ("datum", "move_geometry", "construction", "delete_geometry", "delete_constraint",
-                "constraint_state", "trim_geometry"):
+                "constraint_state", "trim_geometry", "expose_internal"):
         if not obj.isDerivedFrom("Sketcher::SketchObject"):
             fail("invalid_request", "This edit requires a native SketchObject")
         constraint = op in ("datum", "delete_constraint", "constraint_state")
@@ -653,6 +663,8 @@ def apply_edit(doc, edit):
                     setter(index, edit[field])
         elif op == "trim_geometry":
             obj.trim(index, vector(edit["position"]))
+        elif op == "expose_internal":
+            obj.exposeInternalGeometry(index)
         elif op == "delete_geometry":
             obj.delGeometry(index)
         else:
@@ -667,6 +679,7 @@ def transaction(doc, request):
     edits = request["edits"]
     if not isinstance(edits, list) or not edits:
         fail("invalid_request", "Transaction requires a nonempty edits list")
+    preflight_constraints(edits)
     if doc.Name in _sketch_sessions:
         return sketch_transaction(doc, request)
     doc.openTransaction(request.get("label", "Edit"))
@@ -695,13 +708,24 @@ def transaction(doc, request):
             "edits": results, "state": state}
 
 
+def preflight_constraints(edits):
+    for edit in edits:
+        if isinstance(edit, dict) and edit.get("op") == "constraint":
+            try:
+                SketchGeometry.validate_constraint(edit.get("kind"), edit.get("args", []))
+            except SketchGeometry.GeometryError as error:
+                fail("invalid_request", str(error))
+
+
 def sketch_edits(session, edits):
     if not isinstance(edits, list) or not edits:
         fail("invalid_request", "Sketch editing requires a nonempty edits list")
+    preflight_constraints(edits)
     for edit in edits:
         if not isinstance(edit, dict) or edit.get("object") != session["object"] or edit.get("op") not in {
             "set", "expression", "geometry", "constraint", "datum", "move_geometry", "construction",
-            "delete_geometry", "delete_constraint", "constraint_state", "trim_geometry",
+            "delete_geometry", "delete_constraint", "constraint_state", "trim_geometry", "expose_internal",
+            "external_geometry", "external_state", "delete_external",
         }:
             fail("sketch_active", "Only edits to the active sketch are allowed during sketch editing")
 
@@ -908,6 +932,7 @@ def preview(doc, request):
     edits = request.get("edits")
     if not isinstance(edits, list) or not edits:
         fail("invalid_request", "Preview requires a nonempty edits list")
+    preflight_constraints(edits)
     label = request.get("label", active["label"] if active else "Edit")
     if not isinstance(label, str):
         fail("invalid_request", "Preview label must be a string")
@@ -972,7 +997,9 @@ def dispatch(request):
     if op == "capabilities":
         return {"protocol_version": VERSION, "freecad_version": list(App.Version()),
                 "occt_version": Part.OCC_VERSION, "process_id": os.getpid(), "operations": OPERATIONS,
-                "object_types": sorted(OBJECT_TYPES), "geometry_kinds": ["line", "circle", "arc", "point"],
+                "object_types": sorted(OBJECT_TYPES), "geometry_kinds": ["line", "circle", "arc", "point",
+                    "ellipse", "ellipse_arc", "bspline", "hyperbola_arc", "parabola_arc"],
+                "constraint_signatures": SketchGeometry.CONSTRAINT_SIGNATURES,
                 "edit_operations": EDIT_OPERATIONS}
     if op == "feature_schema":
         type_id = request.get("type")
@@ -984,11 +1011,11 @@ def dispatch(request):
     # Keep a worker-wide write lease until its owner commits or cancels.
     if _sketch_sessions and op in {"new", "open", "transaction", "undo", "redo", "save", "close",
                                   "preview", "preview_commit", "preview_cancel",
-                                  "sketch_begin", "sketch_finish", "sketch_cancel"}:
+                                  "sketch_begin", "sketch_finish", "sketch_cancel", "export_exchange"}:
         if op in {"new", "open"} or request.get("document") not in _sketch_sessions:
             fail("sketch_active", "Finish or cancel sketch editing before another document write")
     if _previews and op in {"new", "open", "transaction", "undo", "redo", "save", "close",
-                            "preview", "preview_commit", "preview_cancel", "sketch_begin", "sketch_finish", "sketch_cancel"}:
+                            "preview", "preview_commit", "preview_cancel", "sketch_begin", "sketch_finish", "sketch_cancel", "export_exchange"}:
         if op in {"new", "open"} or request.get("document") not in _previews:
             fail("preview_active", "Finish or cancel the active preview before another document write")
     if op in ("new", "open"):
@@ -1024,11 +1051,19 @@ def dispatch(request):
         fail("unsupported_operation", "Unsupported operation: " + str(op))
     doc = document(request, writable=op in ("transaction", "undo", "redo", "save", "close",
                                            "preview", "preview_commit", "preview_cancel",
-                                           "sketch_begin", "sketch_finish", "sketch_cancel"))
+                                           "sketch_begin", "sketch_finish", "sketch_cancel", "export_exchange"))
     if op == "inspect":
         return snapshot(doc)
     if op == "transaction":
         return transaction(doc, request)
+    if op == "export_exchange":
+        validate(doc)
+        try:
+            result = Exchange.export_from(doc, request)
+        except Exchange.ExchangeError as error:
+            fail(error.code, str(error))
+        result["exported_objects"] = result.pop("objects")
+        return {"document": doc.Name, "revision": _revisions[doc.Name], **result}
     if op in ("sketch_begin", "sketch_finish", "sketch_cancel"):
         return sketch_session(doc, request)
     if op in ("preview", "preview_commit", "preview_cancel"):
