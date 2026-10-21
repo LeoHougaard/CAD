@@ -636,7 +636,7 @@ impl Viewport {
                     leader + direction * 28.,
                     format!(
                         "{}{value:.2} mm",
-                        if kind == "Diameter" { "?" } else { "R" }
+                        if kind == "Diameter" { "Ø" } else { "R" }
                     ),
                     color,
                 );
