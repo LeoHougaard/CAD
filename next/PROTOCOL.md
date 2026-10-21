@@ -10,7 +10,8 @@ parameters. Responses repeat version and id, contain `ok`, and contain either
 
 The initial operations are `capabilities`, `new`, `open`, `inspect`, `transaction`,
 `preview`, `preview_commit`, `preview_cancel`, `undo`, `redo`, `save`, `mesh`,
-`topology`, and `close`. `new` takes a document `name`; `open`
+`topology`, `sketch_begin`, `sketch_finish`, `sketch_cancel` and `close`.
+`new` takes a document `name`; `open`
 and `save` take a native file `path`; other document operations take `document`.
 `mesh` and `topology` also take the result object's `object` name and optional
 positive `deflection`, default 0.1 model units.
@@ -74,6 +75,55 @@ Preserving native redo during a canceled
 preview needs a later native adapter change; clients must show this limitation
 instead of silently losing history.
 
+## Sketch editing sessions
+
+`sketch_begin` takes `document`, `expected_revision`, native sketch `object` and
+a nonempty session `token` of at most 256 characters. Its response is a snapshot
+with `sketch_edit: {token, object}`. Beginning a session advances the revision but
+opens no native transaction, so beginning and canceling without editing preserves
+native redo. A session holds the same worker-wide write lease as a preview.
+New/Open/Save/Close and edits to other objects fail with `sketch_active`.
+
+During the session, `transaction`, `undo`, `redo`, `preview`, `preview_commit` and
+`preview_cancel` require `sketch_token` matching its token. A wrong or missing
+token returns `sketch_owner`. Preview `token` still identifies its separate drag
+gesture. Sketch edits can change geometry, constraints, datums, construction,
+constraint states, trimming, native properties and expressions on that sketch.
+The native sketch solver and nonrecursive sketch recompute run after each action.
+Downstream features are deliberately left pending: an open intermediate profile
+is editable even when a Pad consumes it.
+
+The first edit opens one native transaction for the complete session. A small
+worker-owned command journal groups accepted sketch actions. Session Undo/Redo
+abort and replay the selected action prefix against the same native document;
+they do not alter a frontend geometry/history graph. This also avoids FreeCAD's
+20-entry native undo limit discarding a long session's cancellation baseline.
+Snapshot `undo_count` and `redo_count` describe session actions until it ends.
+Drag previews replace a temporary final group; committing adds one action and
+canceling restores the action prefix. Failed actions restore the accepted prefix
+and advance revision before reporting the error. Inspect before another write.
+
+`sketch_finish` and `sketch_cancel` take `document`, `expected_revision` and the
+session `token`, and return snapshots. Finish recomputes and validates the whole
+native document before committing the session as one ordinary native undo entry.
+An invalid final profile restores the editable action prefix, leaves the session
+active and returns `invalid_model`; the user can correct it or cancel. Cancel
+aborts the native transaction and recomputes the original document without adding
+history, including any active drag preview owned by that session. Finish requires
+committing or canceling a pending drag first. A session with no edits creates no
+undo entry. The first actual edit
+branches native redo just like an ordinary transaction. Preexisting redo blocks
+a native drag preview before that first edit; a UI can defer its committed edit
+until release while keeping its pointer overlay separate from native geometry.
+
+Snapshots include `sketch_edit: null` outside a session. Mesh/topology during a
+session also include its metadata and `context_revision`. For the active sketch,
+that is the current revision. For other objects it is the revision before the
+session began: their cached solids are visual context, not regenerated results
+or selectable final geometry. `revision` still identifies the current document
+snapshot so clients can reject out-of-order responses. Whole-document finish
+validation is required before publishing regenerated final solid geometry.
+
 Initial edits are native object operations:
 
 - `add_object`: `type`, `name`; optional `body` for a PartDesign Body owner.
@@ -88,9 +138,18 @@ Initial edits are native object operations:
 - `construction`: `object`, geometry `index`, optional boolean `construction`.
   Omitting the boolean toggles the current state.
 - `delete_geometry` and `delete_constraint`: `object`, zero-based `index`.
+- `constraint_state`: `object`, constraint `index`, and at least one of
+  `driving`, `active`, `virtual` as booleans or `name` as a string. Native Sketcher
+  owns which constraint kinds can become reference dimensions. An empty name
+  removes the name. State changes are atomic with the rest of the transaction.
+- `trim_geometry`: `object`, geometry `index`, `position: [x,y,z]` in sketch
+  coordinates. Native Sketcher trims the curve at the picked segment, preserves
+  its supported constraints and renumbers geometry as needed. Read the solved
+  geometry and constraints afterward rather than retaining old indices.
 
 Each edit uses `op` as its discriminator. `geometry` also uses `kind`: `line`
-with `start`/`end`, `circle` with `center`/`radius`, or `arc` with `start`/`mid`/`end`.
+with `start`/`end`, `circle` with `center`/`radius`, `arc` with `start`/`mid`/`end`,
+or `point` with `position`.
 All points are three-number lists in native sketch coordinates. Geometry edits
 accept `construction: false` by default. Constraints use native conventions,
 including negative indices for external geometry or the sketch origin.

@@ -200,7 +200,8 @@ fn parse(source: &str) -> Result<FeaturePackage, String> {
         match edit.get("op").and_then(Value::as_str) {
             Some(
                 "add_object" | "set" | "expression" | "geometry" | "constraint" | "datum"
-                | "move_geometry" | "construction" | "delete_geometry" | "delete_constraint",
+                | "move_geometry" | "construction" | "delete_geometry" | "delete_constraint"
+                | "constraint_state" | "trim_geometry",
             ) => (),
             _ => return Err("Package edits must use a supported native edit operation".into()),
         }

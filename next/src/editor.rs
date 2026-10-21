@@ -1,7 +1,13 @@
 //! The UI owns interaction state. The worker owns all document state and history.
 
+mod constraints;
+mod drawing;
+mod sketch;
 #[cfg(test)]
 mod tests;
+
+use crate::sketch_commands::Tool as Draw;
+use sketch::SketchUi;
 
 use crate::{
     WorkerConfig, WorkerSession,
@@ -162,12 +168,6 @@ fn display_object(state: &Value) -> Option<String> {
         .map(str::to_owned)
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum Draw {
-    Select,
-    Rectangle,
-    Circle,
-}
 struct Draft {
     id: String,
     name: String,
@@ -176,6 +176,8 @@ struct Draft {
     changed: Option<Instant>,
     valid: bool,
     all_parameters: bool,
+    deferred: bool,
+    committing: bool,
 }
 #[derive(Clone, Copy)]
 enum FileAction {
@@ -193,8 +195,7 @@ pub struct Editor {
     viewport: Viewport,
     sketch: Option<String>,
     selected_object: Option<String>,
-    draw: Draw,
-    first: Option<[f64; 3]>,
+    sketch_ui: SketchUi,
     draft: Option<Draft>,
     sequence: u64,
     error: Option<String>,
@@ -206,7 +207,6 @@ pub struct Editor {
     dirty: bool,
     pending_file: Option<FileAction>,
     allow_close: bool,
-    dimensions: Vec<(usize, String, String)>,
     fit_next: bool,
 }
 
@@ -241,8 +241,7 @@ impl Editor {
             viewport,
             sketch: None,
             selected_object: None,
-            draw: Draw::Select,
-            first: None,
+            sketch_ui: SketchUi::default(),
             draft: None,
             sequence: 0,
             error: None,
@@ -257,7 +256,6 @@ impl Editor {
             dirty: false,
             pending_file: None,
             allow_close: false,
-            dimensions: Vec::new(),
             fit_next: false,
         };
         if let Some(path) = path {
@@ -275,6 +273,9 @@ impl Editor {
         if !matches!(op, "new" | "open") {
             parameters["document"] = self.state["document"].clone();
             parameters["expected_revision"] = self.state["revision"].clone();
+            if let Some(token) = &self.sketch_ui.session {
+                parameters["sketch_token"] = json!(token);
+            }
         }
         self.busy = true;
         self.error = None;
@@ -320,8 +321,8 @@ impl Editor {
         let snapshot = self.sketch_snapshot();
         if snapshot.is_none() {
             self.sketch = None;
-            self.draw = Draw::Select;
-            self.first = None;
+            self.sketch_ui.tool = Draw::Select;
+            self.sketch_ui.clear_points();
         }
         if self
             .selected_object
@@ -329,35 +330,6 @@ impl Editor {
             .is_some_and(|name| !objects(&self.state).iter().any(|o| o["name"] == *name))
         {
             self.selected_object = None;
-        }
-        self.dimensions.clear();
-        if let Some(o) = &snapshot
-            && let Some(constraints) = o["sketch"]["constraints"].as_array()
-        {
-            for c in constraints {
-                let kind = c["type"].as_str().unwrap_or_default();
-                if c["driving"] == true
-                    && [
-                        "Distance",
-                        "DistanceX",
-                        "DistanceY",
-                        "Radius",
-                        "Diameter",
-                        "Angle",
-                    ]
-                    .contains(&kind)
-                {
-                    self.dimensions.push((
-                        c["index"].as_u64().unwrap_or(0) as usize,
-                        kind.into(),
-                        format!(
-                            "{} {}",
-                            c["value"],
-                            if kind == "Angle" { "rad" } else { "mm" }
-                        ),
-                    ));
-                }
-            }
         }
         self.viewport.set_sketch(snapshot);
     }
@@ -368,7 +340,12 @@ impl Editor {
             self.error = reply.error;
             self.state = reply.state;
             self.viewport.set_scene(reply.mesh, reply.topology);
-            if success && self.fit_next && reply.op == "preview" {
+            if success
+                && self.fit_next
+                && (reply.op == "preview"
+                    || reply.op == "transaction"
+                        && self.draft.as_ref().is_some_and(|d| d.committing))
+            {
                 self.viewport.fit();
                 self.fit_next = false;
             }
@@ -402,13 +379,24 @@ impl Editor {
                 {
                     d.valid = self.error.is_none();
                 }
-                if matches!(reply.op.as_str(), "preview_commit" | "preview_cancel") {
+                if matches!(reply.op.as_str(), "preview_commit" | "preview_cancel")
+                    && self.draft.is_some()
+                {
                     self.draft = None;
                 }
             }
+            if reply.op == "transaction" && self.draft.as_ref().is_some_and(|d| d.committing) {
+                if success {
+                    self.draft = None;
+                } else if let Some(d) = &mut self.draft {
+                    d.committing = false;
+                }
+            }
             self.sync_sketch();
+            self.sketch_reply(&reply.op, success);
             if matches!(reply.op.as_str(), "undo" | "redo" | "new" | "open") {
-                self.first = None;
+                self.sketch_ui.clear_points();
+                self.sketch_ui.selected_constraint = None;
             }
             if reply.op == "transaction"
                 && self
@@ -436,10 +424,11 @@ impl Editor {
             edits.push(json!({"op":"set","object":name,"property":"AttachmentSupport","value":{"link":selection.object,"subelements":[selection.subelement]}}));
             edits.push(json!({"op":"set","object":name,"property":"MapMode","value":"FlatFace"}));
         }
+        self.prepare_new_sketch();
         self.selected_object = Some(name.clone());
         self.sketch = Some(name);
-        self.draw = Draw::Select;
-        self.first = None;
+        self.sketch_ui.tool = Draw::Select;
+        self.sketch_ui.clear_points();
         self.transaction("Create sketch", edits);
     }
     fn start_feature(&mut self, id: &str) {
@@ -489,11 +478,13 @@ impl Editor {
             changed: Some(Instant::now() - Duration::from_secs(1)),
             valid: false,
             all_parameters: false,
+            deferred: self.state["redo_count"].as_u64().unwrap_or(0) > 0,
+            committing: false,
         });
         self.sketch = None;
         self.viewport.set_sketch(None);
-        self.draw = Draw::Select;
-        self.first = None;
+        self.sketch_ui.tool = Draw::Select;
+        self.sketch_ui.clear_points();
         self.viewport.iso();
         self.fit_next = true;
     }
@@ -511,6 +502,10 @@ impl Editor {
         };
         match edits {
             Ok(edits) => {
+                if d.deferred {
+                    d.valid = true;
+                    return;
+                }
                 let params = json!({"label":d.name,"token":d.token,"edits":edits});
                 self.send("preview", params);
             }
@@ -538,10 +533,12 @@ impl Editor {
             changed: None,
             valid: false,
             all_parameters: false,
+            deferred: self.state["redo_count"].as_u64().unwrap_or(0) > 0,
+            committing: false,
         });
         self.sketch = None;
         self.viewport.set_sketch(None);
-        self.draw = Draw::Select;
+        self.sketch_ui.tool = Draw::Select;
     }
     fn start_package(&mut self, id: &str) {
         let name = self.unique("Feature");
@@ -597,9 +594,11 @@ impl Editor {
             changed: Some(Instant::now()),
             valid: false,
             all_parameters: true,
+            deferred: self.state["redo_count"].as_u64().unwrap_or(0) > 0,
+            committing: false,
         });
-        self.draw = Draw::Select;
-        self.first = None;
+        self.sketch_ui.tool = Draw::Select;
+        self.sketch_ui.clear_points();
     }
     fn file_dialog(&mut self, save: bool) {
         self.file_input = self.path.clone();
@@ -614,9 +613,34 @@ impl Editor {
         }
     }
     fn finish_preview(&mut self, commit: bool) {
+        if let Some(d) = &mut self.draft
+            && d.deferred
+        {
+            if !commit {
+                self.draft = None;
+                return;
+            }
+            let edits = if d.id == "native.property" {
+                Ok(vec![
+                    json!({"op":"set","object":d.parameters["object"],"property":d.parameters["property"],"value":d.parameters["value"]}),
+                ])
+            } else {
+                self.registry.build(&d.id, &d.parameters)
+            };
+            match edits {
+                Ok(edits) => {
+                    d.committing = true;
+                    let label = d.name.clone();
+                    self.transaction(&label, edits);
+                }
+                Err(error) => self.error = Some(error),
+            }
+            return;
+        }
         if let Some(d) = &self.draft {
             if self.state["preview"].is_null() {
                 if !commit {
+                    self.fit_next = false;
                     self.draft = None;
                 }
                 return;
@@ -661,22 +685,24 @@ impl Editor {
                         .color(Color32::from_rgb(110, 182, 177)),
                 );
                 ui.separator();
-                let idle = !self.busy
+                let idle = self.sketch_ui.drag.is_none()
+                    && self.sketch_ui.dimension.is_none()
+                    && !self.busy
                     && self.draft.is_none()
                     && self.pending_file.is_none()
                     && self.file_dialog.is_none()
                     && !self.overwrite;
                 ui.add_enabled_ui(idle, |ui| {
-                    if ui.button("New").clicked() {
+                    if self.sketch_ui.session.is_none() && ui.button("New").clicked() {
                         self.request_file(FileAction::New);
                     }
-                    if ui.button("Open").clicked() {
+                    if self.sketch_ui.session.is_none() && ui.button("Open").clicked() {
                         self.request_file(FileAction::Open);
                     }
-                    if ui.button("Save").clicked() {
+                    if self.sketch_ui.session.is_none() && ui.button("Save").clicked() {
                         self.save();
                     }
-                    if ui.button("Save as").clicked() {
+                    if self.sketch_ui.session.is_none() && ui.button("Save as").clicked() {
                         self.file_dialog(true);
                     }
                     ui.separator();
@@ -711,64 +737,46 @@ impl Editor {
                     }
                 });
             });
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.add_enabled_ui(
                     !self.busy
+                        && self.sketch_ui.drag.is_none()
+                        && self.sketch_ui.dimension.is_none()
                         && self.draft.is_none()
                         && self.pending_file.is_none()
                         && self.file_dialog.is_none(),
                     |ui| {
-                        if ui.button("Sketch").clicked() {
+                        if self.sketch_ui.session.is_none() && ui.button("Sketch").clicked() {
                             self.new_sketch();
                         }
                         if self.sketch.is_some() {
-                            if ui
-                                .selectable_label(self.draw == Draw::Rectangle, "Rectangle")
-                                .clicked()
-                            {
-                                self.draw = Draw::Rectangle;
-                                self.first = None;
-                                self.viewport.align_sketch();
-                            }
-                            if ui
-                                .selectable_label(self.draw == Draw::Circle, "Circle")
-                                .clicked()
-                            {
-                                self.draw = Draw::Circle;
-                                self.first = None;
-                                self.viewport.align_sketch();
-                            }
-                            if ui.button("Finish sketch").clicked() {
-                                self.sketch = None;
-                                self.draw = Draw::Select;
-                                self.first = None;
-                                self.viewport.set_sketch(None);
-                                self.viewport.iso();
-                            }
+                            self.sketch_toolbar(ui);
                         }
                         ui.separator();
                         if ui.button("Extrude").clicked() {
-                            self.start_feature("feature.pad");
+                            self.feature_from_sketch("feature.pad");
                         }
                         if ui.button("Pocket").clicked() {
-                            self.start_feature("feature.pocket");
+                            self.feature_from_sketch("feature.pocket");
                         }
-                        if ui.button("Fillet").clicked() {
+                        if self.sketch_ui.session.is_none() && ui.button("Fillet").clicked() {
                             self.start_feature("feature.fillet");
                         }
-                        ui.menu_button("Packages", |ui| {
-                            let packages: Vec<_> = self
-                                .registry
-                                .entries()
-                                .iter()
-                                .map(|p| (p.id.clone(), p.label.clone()))
-                                .collect();
-                            for (id, label) in packages {
-                                if ui.button(label).clicked() {
-                                    self.start_package(&id);
-                                    ui.close();
+                        ui.add_enabled_ui(self.sketch_ui.session.is_none(), |ui| {
+                            ui.menu_button("Packages", |ui| {
+                                let packages: Vec<_> = self
+                                    .registry
+                                    .entries()
+                                    .iter()
+                                    .map(|p| (p.id.clone(), p.label.clone()))
+                                    .collect();
+                                for (id, label) in packages {
+                                    if ui.button(label).clicked() {
+                                        self.start_package(&id);
+                                        ui.close();
+                                    }
                                 }
-                            }
+                            });
                         });
                     },
                 );
@@ -806,16 +814,23 @@ impl Editor {
                 for (name, label, sketch) in rows {
                     let response =
                         ui.selectable_label(self.selected_object.as_ref() == Some(&name), label);
-                    if response.clicked() && !self.busy && self.draft.is_none() {
+                    if response.clicked()
+                        && !self.busy
+                        && self.draft.is_none()
+                        && (self.sketch_ui.session.is_none()
+                            || self.sketch.as_deref() == Some(&name))
+                    {
                         self.selected_object = Some(name.clone());
                         if sketch {
-                            self.sketch = Some(name.clone());
-                            self.sync_sketch();
-                            self.viewport.align_sketch();
+                            self.request_sketch(&name);
                         }
                     }
                     if !sketch {
-                        if response.double_clicked() && !self.busy && self.draft.is_none() {
+                        if response.double_clicked()
+                            && !self.busy
+                            && self.draft.is_none()
+                            && self.sketch_ui.session.is_none()
+                        {
                             self.edit_feature(&name);
                         }
                         response.on_hover_text("Double-click to edit its native dimension.");
@@ -825,76 +840,7 @@ impl Editor {
                     ui.weak("No features");
                 }
             });
-        if self.sketch.is_some() && self.draft.is_none() {
-            egui::Window::new("Sketch dimensions")
-                .default_pos([175., 85.])
-                .default_width(235.)
-                .resizable(false)
-                .show(ctx, |ui| {
-                    if let Some(o) = self.sketch_snapshot() {
-                        ui.label(format!(
-                            "{} · {} DOF",
-                            o["name"].as_str().unwrap_or("Sketch"),
-                            o["sketch"]["degrees_of_freedom"]
-                        ));
-                        if let Some(support) = o["properties"]["AttachmentSupport"]
-                            .as_array()
-                            .and_then(|s| s.first())
-                        {
-                            let source = support["link"].as_str().unwrap_or_default();
-                            let faces = support["subelements"]
-                                .as_array()
-                                .map(|a| {
-                                    a.iter()
-                                        .filter_map(Value::as_str)
-                                        .collect::<Vec<_>>()
-                                        .join(", ")
-                                })
-                                .unwrap_or_default();
-                            ui.weak(format!("On {source} · {faces}"));
-                        }
-                    }
-                    let mut apply = None;
-                    ui.add_enabled_ui(!self.busy, |ui| {
-                        for (index, kind, value) in &mut self.dimensions {
-                            ui.horizontal(|ui| {
-                                ui.label(format!("{kind} {index}"));
-                                let r =
-                                    ui.add(egui::TextEdit::singleline(value).desired_width(90.));
-                                if ui.small_button("Set").clicked()
-                                    || r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter))
-                                {
-                                    apply = Some((*index, value.clone()));
-                                }
-                            });
-                        }
-                    });
-                    if let Some((index, value)) = apply {
-                        let object = self.sketch.clone().unwrap();
-                        self.transaction(
-                            "Edit dimension",
-                            vec![json!({"op":"datum","object":object,"index":index,"value":value})],
-                        );
-                    }
-                    ui.weak(match self.draw {
-                        Draw::Rectangle => {
-                            if self.first.is_some() {
-                                "Click opposite corner"
-                            } else {
-                                "Click first corner"
-                            }
-                        }
-                        Draw::Circle => {
-                            if self.first.is_some() {
-                                "Click radius"
-                            } else {
-                                "Click circle center"
-                            }
-                        }
-                        Draw::Select => "Rectangle or circle · dimensions in mm",
-                    });
-                });
-        }
+        self.sketch_panel(ctx);
         if self.draft.is_some() {
             let mut commit = false;
             let mut cancel = false;
@@ -905,6 +851,9 @@ impl Editor {
                 .show(ctx, |ui| {
                     let draft = self.draft.as_mut().unwrap();
                     ui.label(&draft.name);
+                    if draft.deferred {
+                        ui.weak("Apply updates the model. Cancel keeps Redo.");
+                    }
                     let fields: Vec<_> = draft
                         .parameters
                         .as_object()
@@ -1070,59 +1019,11 @@ impl Editor {
     }
 
     fn canvas(&mut self, ui: &mut egui::Ui) {
+        self.viewport.sketch_select_enabled = self.sketch_ui.tool == Draw::Select
+            && self.sketch_ui.drag.is_none()
+            && !self.sketch_ui.trim;
         self.viewport.ui(ui);
-        if self.busy || self.draft.is_some() || self.draw == Draw::Select {
-            return;
-        }
-        let Some(response) = &self.viewport.response else {
-            return;
-        };
-        if response.clicked()
-            && let Some(position) = response.interact_pointer_pos()
-            && let Some(point) = self.viewport.sketch_point(position)
-        {
-            if let Some(first) = self.first.take() {
-                let Some(snapshot) = self.sketch_snapshot() else {
-                    return;
-                };
-                let index = snapshot["sketch"]["geometry_count"].as_u64().unwrap_or(0);
-                let object = self.sketch.as_ref().unwrap();
-                let (id, parameters) = if self.draw == Draw::Rectangle {
-                    (
-                        "sketch.rectangle",
-                        json!({"object":object,"index":index,"x":first[0].min(point[0]),"y":first[1].min(point[1]),"width":(first[0]-point[0]).abs(),"height":(first[1]-point[1]).abs()}),
-                    )
-                } else {
-                    (
-                        "sketch.circle",
-                        json!({"object":object,"index":index,"x":first[0],"y":first[1],"radius":((first[0]-point[0]).powi(2)+(first[1]-point[1]).powi(2)).sqrt()}),
-                    )
-                };
-                match self.registry.build(id, &parameters) {
-                    Ok(edits) => self.transaction("Draw constrained profile", edits),
-                    Err(error) => self.error = Some(error),
-                }
-            } else {
-                self.first = Some(point);
-            }
-        }
-        if let Some(first) = self.first
-            && let Some(pos) = self.viewport.response.as_ref().and_then(|r| r.hover_pos())
-        {
-            let start = self.viewport.sketch_screen_point(first);
-            let stroke = egui::Stroke::new(1.3_f32, Color32::from_rgb(112, 183, 177));
-            if self.draw == Draw::Rectangle {
-                ui.painter().rect_stroke(
-                    egui::Rect::from_two_pos(start, pos),
-                    0.,
-                    stroke,
-                    egui::StrokeKind::Middle,
-                );
-            } else {
-                ui.painter()
-                    .circle_stroke(start, start.distance(pos), stroke);
-            }
-        }
+        self.sketch_canvas(ui);
     }
 }
 
@@ -1133,7 +1034,7 @@ impl eframe::App for Editor {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll();
         if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close {
-            if self.busy || self.draft.is_some() {
+            if self.busy || self.draft.is_some() || self.sketch_ui.session.is_some() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 self.error = Some("Finish or cancel the active feature before closing".into());
             } else if self.dirty {
@@ -1144,13 +1045,11 @@ impl eframe::App for Editor {
         if self.allow_close {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
-        if !self.busy && ctx.input(|i| i.key_pressed(Key::Escape)) {
-            if self.draft.is_some() {
+        if ctx.input(|i| i.key_pressed(Key::Escape)) {
+            if self.draft.is_some() && !self.busy {
                 self.finish_preview(false);
             } else {
-                self.draw = Draw::Select;
-                self.first = None;
-                self.viewport.selected = None;
+                self.sketch_escape();
             }
         }
         self.toolbar(ctx);
@@ -1176,6 +1075,7 @@ impl eframe::App for Editor {
             .frame(egui::Frame::NONE.fill(Color32::from_rgb(5, 7, 9)))
             .show(ctx, |ui| self.canvas(ui));
         self.panels(ctx);
+        self.sketch_pump(ctx);
         // Text editors consume their own Undo first. Button focus must not
         // disable application shortcuts, and modals must block document writes.
         if !self.busy
@@ -1183,15 +1083,20 @@ impl eframe::App for Editor {
             && self.pending_file.is_none()
             && self.file_dialog.is_none()
             && !self.overwrite
+            && self.sketch_ui.drag.is_none()
+            && self.sketch_ui.dimension.is_none()
         {
             let command = egui::Modifiers::COMMAND;
             let shifted = egui::Modifiers {
                 shift: true,
                 ..command
             };
-            if ctx.input_mut(|i| i.consume_key(shifted, Key::S)) {
+            if self.sketch_ui.session.is_none() && ctx.input_mut(|i| i.consume_key(shifted, Key::S))
+            {
                 self.file_dialog(true);
-            } else if ctx.input_mut(|i| i.consume_key(command, Key::S)) {
+            } else if self.sketch_ui.session.is_none()
+                && ctx.input_mut(|i| i.consume_key(command, Key::S))
+            {
                 self.save();
             } else if ctx.input_mut(|i| i.consume_key(shifted, Key::Z)) {
                 self.send("redo", json!({}));

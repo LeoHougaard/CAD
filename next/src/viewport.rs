@@ -4,6 +4,8 @@ use glam::{Quat, Vec3};
 use serde_json::Value;
 use std::sync::Arc;
 mod gl_renderer;
+mod sketch;
+pub use crate::sketch_commands::SketchElement;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Selection {
@@ -21,6 +23,7 @@ struct Edge {
     name: String,
 }
 struct SketchCurve {
+    handles: Vec<(i32, Vec3)>,
     points: Vec<Vec3>,
     construction: bool,
     index: usize,
@@ -48,6 +51,9 @@ pub struct Viewport {
     rect: Rect,
     pub response: Option<egui::Response>,
     pub selected: Option<Selection>,
+    pub sketch_selection: Vec<SketchElement>,
+    pub sketch_select_enabled: bool,
+    dimension_hits: Vec<sketch::DimensionHit>,
 }
 
 impl Default for Viewport {
@@ -68,6 +74,9 @@ impl Default for Viewport {
             rect: Rect::from_min_size(Pos2::ZERO, Vec2::splat(600.)),
             response: None,
             selected: None,
+            sketch_selection: vec![],
+            sketch_select_enabled: true,
+            dimension_hits: vec![],
         };
         result.iso();
         result
@@ -197,6 +206,12 @@ impl Viewport {
     }
 
     pub fn set_sketch(&mut self, sketch: Option<Value>) {
+        if self.sketch.as_ref().and_then(|s| s["name"].as_str())
+            != sketch.as_ref().and_then(|s| s["name"].as_str())
+        {
+            self.clear_sketch_selection();
+        }
+        self.dimension_hits.clear();
         self.curves.clear();
         if let Some(entry) = &sketch {
             let p = if entry["global_placement"].is_object() {
@@ -209,6 +224,7 @@ impl Viewport {
                 let mut points = vec![];
                 match geo["kind"].as_str() {
                     Some("line") => points.extend([vector(&geo["start"]), vector(&geo["end"])]),
+                    Some("point") => points.push(vector(&geo["position"])),
                     Some(kind @ ("circle" | "arc")) => {
                         let center = vector(&geo["center"]);
                         let radius = geo["radius"].as_f64().unwrap_or(0.) as f32;
@@ -238,7 +254,22 @@ impl Viewport {
                     }
                     _ => {}
                 }
+                let handles = match geo["kind"].as_str() {
+                    Some("line") => vec![(1, vector(&geo["start"])), (2, vector(&geo["end"]))],
+                    Some("arc") => vec![
+                        (1, vector(&geo["start"])),
+                        (2, vector(&geo["end"])),
+                        (3, vector(&geo["center"])),
+                    ],
+                    Some("circle") => vec![(3, vector(&geo["center"]))],
+                    Some("point") => vec![(1, vector(&geo["position"]))],
+                    _ => vec![],
+                }
+                .into_iter()
+                .map(|(point, p)| (point, self.sketch_origin + self.sketch_rotation * p))
+                .collect();
                 self.curves.push(SketchCurve {
+                    handles,
                     points: points
                         .into_iter()
                         .map(|p| self.sketch_origin + self.sketch_rotation * p)
@@ -249,6 +280,19 @@ impl Viewport {
             }
         }
         self.sketch = sketch;
+        self.sketch_selection.retain(|element| {
+            if element.index == -1 {
+                return self.sketch.is_some() && element.point == 1;
+            }
+            self.curves.iter().any(|curve| {
+                curve.index as i32 == element.index
+                    && (element.point == 0
+                        || curve
+                            .handles
+                            .iter()
+                            .any(|(point, _)| *point == element.point))
+            })
+        });
     }
 
     pub fn top(&mut self) {
@@ -467,25 +511,7 @@ impl Viewport {
                 }
             }
         }
-        for curve in &self.curves {
-            let color = if curve.construction {
-                Color32::from_rgb(129, 106, 172)
-            } else {
-                Color32::from_rgb(83, 198, 185)
-            };
-            let points: Vec<Pos2> = curve.points.iter().map(|p| self.project(*p).0).collect();
-            let stroke = Stroke::new(1.8_f32, color);
-            if curve.construction {
-                painter.extend(Shape::dashed_line(&points, stroke, 7., 4.));
-            } else {
-                painter.add(Shape::line(points, stroke));
-            }
-            if let (Some(first), Some(last)) = (curve.points.first(), curve.points.last()) {
-                for p in [first, last] {
-                    painter.circle_filled(self.project(*p).0, 2.5, color);
-                }
-            }
-        }
+        self.draw_sketch(&painter);
         self.draw_dimensions(&painter);
         let origin = rect.left_bottom() + Vec2::new(36., -36.);
         for (axis, label, color) in [
@@ -508,150 +534,30 @@ impl Viewport {
         if response.clicked()
             && let Some(pos) = response.interact_pointer_pos()
         {
-            // Sketch entities are intentionally selectable in their active edit plane.
-            let sketch_hit = self.curves.iter().find(|curve| {
-                curve.points.windows(2).any(|line| {
-                    segment_distance(pos, self.project(line[0]).0, self.project(line[1]).0).0 < 6.
-                })
-            });
-            selection = sketch_hit
-                .map(|curve| Selection {
-                    object: self
-                        .sketch
-                        .as_ref()
-                        .and_then(|s| s["name"].as_str())
-                        .unwrap_or("")
-                        .to_owned(),
-                    subelement: format!("Geometry{}", curve.index),
-                })
-                .or_else(|| {
-                    self.sketch
-                        .is_none()
-                        .then(|| self.pick(pos, &triangles))
-                        .flatten()
-                });
+            if self.sketch.is_some() {
+                if self.sketch_select_enabled && self.dimension_hit(pos).is_none() {
+                    let hit = self.sketch_hit(pos);
+                    let toggle =
+                        ui.input(|i| i.modifiers.ctrl || i.modifiers.shift || i.modifiers.command);
+                    self.select_sketch_element(hit, toggle);
+                    selection = hit.map(|element| Selection {
+                        object: self
+                            .sketch
+                            .as_ref()
+                            .and_then(|s| s["name"].as_str())
+                            .unwrap_or("")
+                            .to_owned(),
+                        subelement: format!("Geometry{}", element.index),
+                    });
+                }
+            } else {
+                selection = self.pick(pos, &triangles);
+            }
             self.selected = selection.clone();
         }
         self.response = Some(response);
         selection
     }
-    fn draw_dimensions(&self, painter: &egui::Painter) {
-        let Some(sketch) = &self.sketch else {
-            return;
-        };
-        let points: Vec<Pos2> = self
-            .curves
-            .iter()
-            .flat_map(|c| c.points.iter())
-            .map(|p| self.project(*p).0)
-            .collect();
-        let sketch_center = if points.is_empty() {
-            self.rect.center()
-        } else {
-            Rect::from_points(&points).center()
-        };
-        let color = Color32::from_rgb(184, 159, 211);
-        let stroke = Stroke::new(1_f32, color);
-        for constraint in sketch["sketch"]["constraints"]
-            .as_array()
-            .into_iter()
-            .flatten()
-        {
-            let kind = constraint["type"].as_str().unwrap_or("");
-            let Some(index) = constraint["first"].as_u64() else {
-                continue;
-            };
-            let Some(curve) = self.curves.iter().find(|c| c.index == index as usize) else {
-                continue;
-            };
-            let value = constraint["value"].as_f64().unwrap_or(0.);
-            if kind == "Distance"
-                && curve.points.len() == 2
-                && constraint["first_pos"].as_i64() == Some(0)
-            {
-                let a = self.project(curve.points[0]).0;
-                let b = self.project(curve.points[1]).0;
-                let direction = (b - a).normalized();
-                if a.distance(b) < 1. {
-                    continue;
-                }
-                let mut normal = Vec2::new(-direction.y, direction.x);
-                if normal.dot(a.lerp(b, 0.5) - sketch_center) < 0. {
-                    normal = -normal;
-                }
-                let offset = normal * 26.;
-                for endpoint in [a, b] {
-                    painter.line_segment(
-                        [endpoint + normal * 4., endpoint + offset + normal * 6.],
-                        stroke,
-                    );
-                }
-                painter.line_segment([a + offset, b + offset], stroke);
-                let tick = (direction + normal).normalized() * 4.;
-                for endpoint in [a + offset, b + offset] {
-                    painter.line_segment([endpoint - tick, endpoint + tick], stroke);
-                }
-                dimension_label(
-                    painter,
-                    a.lerp(b, 0.5) + offset,
-                    format!("{value:.2} mm"),
-                    color,
-                );
-            } else if matches!(kind, "Radius" | "Diameter") {
-                let Some(geo) = sketch["sketch"]["geometry"]
-                    .as_array()
-                    .and_then(|geometry| {
-                        geometry.iter().find(|g| g["index"].as_u64() == Some(index))
-                    })
-                else {
-                    continue;
-                };
-                let center = vector(&geo["center"]);
-                let radius = geo["radius"].as_f64().unwrap_or(0.) as f32;
-                if radius <= 0. {
-                    continue;
-                }
-                let radial = Vec3::new(1., 1., 0.).normalize() * radius;
-                let world = |p: Vec3| {
-                    self.project(self.sketch_origin + self.sketch_rotation * p)
-                        .0
-                };
-                let a = world(if kind == "Diameter" {
-                    center - radial
-                } else {
-                    center
-                });
-                let b = world(center + radial);
-                let direction = (b - a).normalized();
-                let leader = b + direction * 24.;
-                painter.line_segment([a, leader], stroke);
-                let normal = Vec2::new(-direction.y, direction.x);
-                let tick = (direction + normal).normalized() * 4.;
-                painter.line_segment([b - tick, b + tick], stroke);
-                if kind == "Diameter" {
-                    painter.line_segment([a - tick, a + tick], stroke);
-                }
-                dimension_label(
-                    painter,
-                    leader + direction * 28.,
-                    format!(
-                        "{}{value:.2} mm",
-                        if kind == "Diameter" { "Ø" } else { "R" }
-                    ),
-                    color,
-                );
-            }
-            // Coordinate and angular datums remain editable in the dimension panel.
-            // They need native dimension placement before being added to the canvas.
-        }
-    }
-}
-
-fn dimension_label(painter: &egui::Painter, position: Pos2, text: String, color: Color32) {
-    let galley = painter.layout_no_wrap(text, egui::FontId::monospace(12.), color);
-    let rect = Rect::from_center_size(position, galley.size() + Vec2::new(8., 4.));
-    painter.rect_filled(rect, 2., Color32::from_rgb(8, 10, 12));
-    painter.galley(position - galley.size() * 0.5, galley, color);
 }
 
 fn segment_distance(p: Pos2, a: Pos2, b: Pos2) -> (f32, f32) {

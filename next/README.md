@@ -27,17 +27,37 @@ next/target/debug/cad-next-editor --runtime next/target/runtime.json
 Use `.exe` on Windows. `--open part.FCStd` opens an existing native document.
 Run this as a separate application; it does not replace `dist/CAD.exe`.
 
-Create a sketch, choose Rectangle or Circle, then click two points in the
-viewport. Profiles have native dimensions and constraints. Their solved values
-appear in the sketch dimension panel. Set explicit dimensions there, then choose
-Extrude or Pocket. Selecting a planar solid face before Sketch creates native
-face support. The feature list reopens sketches for dimension edits. Double-click
-a solid feature to edit its length or radius. Fillet uses a selected visible edge.
+Create a sketch on the base plane or select a planar solid face before Sketch
+for native face support. Point, Line, Polyline, Rectangle, Circle and three-point
+Arc draw native geometry. Drawing leaves position and size free for dimensions
+and constraints. Endpoints, centers, the origin and curves provide snapping;
+lines infer horizontal/vertical constraints. Hold Alt to disable snapping and
+inference. Construction or G toggles construction geometry.
 
-Feature values create native previews. Apply commits one undo step; Cancel or
-Escape restores the baseline. An invalid value cannot be applied. Existing
-native redo history blocks previews until a committed edit branches history or
-Redo consumes it. See [preview ownership and native limits](PROTOCOL.md).
+Select points or curves, then use Constrain for horizontal, vertical, coincident,
+point-on-object, parallel, perpendicular, tangent, equal, symmetric or fixed
+constraints. D chooses a length, radius or angle from the selection; the Dimension
+menu also offers explicit horizontal/vertical distances and diameter. Double-click
+a dimension to edit it. The constraint panel supports native expressions,
+driving/reference dimensions, names, activation and deletion. The native solver's
+solved geometry and remaining freedom are authoritative.
+
+Shift-click adds or removes selections. Drag a blank area for a selection box;
+a right-to-left box also selects crossing curves. Shift adds a box to the current
+selection. Drag endpoints, centers or curve handles to edit through native
+Sketcher. Delete removes selected geometry; Trim uses the native picked-segment
+operation. Ctrl+Z and Ctrl+Shift+Z walk accepted actions within a sketch. Finish
+recomputes the whole model and commits one document undo step; Cancel restores
+the sketch session baseline. An invalid consumed profile remains in edit after
+Finish fails, so it can be repaired, undone or canceled.
+
+After Finish, choose Extrude or Pocket. The feature list reopens sketches for
+further edits. Double-click a solid feature to edit its length or radius. Fillet
+uses a selected visible edge. Feature values normally create native previews.
+Apply commits one undo step; Cancel or Escape restores the baseline. An invalid
+value cannot be applied. When native redo history exists, feature recomputation
+is deferred until Apply so Cancel preserves redo. See
+[preview ownership and native limits](PROTOCOL.md).
 
 Right-drag orbits, middle-drag pans, and the wheel zooms. F fits the model.
 Ctrl+S saves the document; Ctrl+Shift+S opens the FCStd Save as dialog.
@@ -53,13 +73,14 @@ declarative features, including their parameters. `--packages DIR` loads a
 caller-selected collection. Executable plugins and custom UI extensions are
 future work.
 
-This is a bounded editor implementation, not complete Onshape parity. Current
-interactive tools cover rectangles, circles, their dimensions, extrusion,
-pockets and single-edge fillets. Arbitrary line/arc creation, interactive
-constraint authoring, sketch dragging, multiple displayed Bodies, assemblies,
-rollback-tree editing and robust file locking between processes remain
-unfinished. General documents and moderate-part performance need broader gates.
-The [verification record](VERIFICATION.md) lists the tested workflows and limits.
+The editor covers the sketch tools above, native dimensions and constraints,
+face attachment, extrusion, pockets and single-edge fillets. It does not yet cover
+all FreeCAD sketch tools or complete Onshape workflows. Splines, external sketch
+geometry, advanced features, multiple displayed Bodies, assemblies, feature-tree
+rollback/reorder, executable plugins and robust file locking between processes
+remain open. General documents and moderate-part performance need broader gates.
+The [verification record](VERIFICATION.md) separates real GUI checks, independent
+native saved-file checks and remaining work.
 
 ## Run the verified foundation
 
@@ -75,7 +96,15 @@ python next/tools/setup_runtime.py --output next/target/runtime.json
 python next/tests/native_workflows.py --host next/target/debug/cad-next --runtime next/target/runtime.json --output next/target/native-documents
 ```
 
-On Windows, use `next/target/debug/cad-next.exe` for `--host`. Launcher configuration
+The sketch command compiler and edit-session suites run through the same host:
+
+```sh
+python next/tests/sketch_commands_workflows.py --host next/target/debug/cad-next --compiler next/target/debug/cad-next-sketch --runtime next/target/runtime.json --output next/target/sketch-command-documents
+python next/tests/sketch_editor_workflows.py --host next/target/debug/cad-next --runtime next/target/runtime.json --output next/target/sketch-editor-documents
+cargo test --manifest-path next/Cargo.toml --features desktop --locked
+```
+
+On Windows, add `.exe` to the host and compiler paths. Launcher configuration
 contains `executable`, `args` and `script`. For interactive NDJSON use, pass those
 to `cad-next --executable PATH --arg ARG --script PATH`, repeating `--arg` as needed.
 The pinned bundled Python runs the worker. `FreeCADCmd` does not execute this

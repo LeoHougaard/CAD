@@ -36,11 +36,19 @@ Native sources pinned to the selected release:
    Implement Onshape selection, sketch editing, feature previews and rollback
    as transactions against native state. Reopening a file must restore editable
    geometry and constraints without a separate frontend history.
-   The initial editor now covers constrained rectangle/circle profiles, native
-   dimensions, face attachment, extrusion, pockets, fillet previews, undo/redo
-   and FCStd reopening. Declarative feature packages share its command boundary.
-   See [tested workflows and remaining gates](VERIFICATION.md). General sketch
-   interaction, complete feature editing and executable plugins remain open.
+   The editor now provides Point, Line, Polyline, Rectangle, Circle and Arc,
+   snapping and inference, construction, interactive native constraints and
+   dimensions, expression/state editing, selection boxes, dragging, trim and
+   deletion. Sketch sessions support action Undo/Redo, whole-model validation on
+   Finish and Cancel back to the session baseline. Invalid intermediate consumed
+   profiles can be repaired without publishing broken final solids.
+   Face attachment, extrusion, pockets, fillet previews and FCStd reopening remain
+   in the same document. Declarative feature packages share its command boundary.
+   When existing redo prevents a native feature preview, the editor defers
+   recomputation until Apply so cancellation preserves that history.
+   See [tested workflows and remaining gates](VERIFICATION.md). Splines, external
+   sketch geometry, advanced features, rollback/reorder, multi-Body display,
+   assemblies and executable plugins remain open.
 3. Measure complete user actions on the Pixel. Keep input, camera movement and
    drawing independent of model recomputation. Reduce copying, unnecessary
    recomputes and unused dependencies before translating working algorithms.

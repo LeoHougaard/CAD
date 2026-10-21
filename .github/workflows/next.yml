@@ -49,10 +49,10 @@ jobs:
           cargo fmt --manifest-path next/Cargo.toml -- --check
           cargo clippy --manifest-path next/Cargo.toml --all-features --all-targets --locked -- -D warnings
           cargo test --manifest-path next/Cargo.toml --all-features --locked
-          cargo build --manifest-path next/Cargo.toml --all-features --locked
+          cargo build --manifest-path next/Cargo.toml --all-features --bins --locked
       - name: Verified native runtime
         run: python next/tools/setup_runtime.py --output next/target/runtime.json
-      - name: Real constrained sketches, attachment, fillets and history
+      - name: Native sketch editing, attachment, fillets and history
         run: |
           host=next/target/debug/cad-next
           if [ "$RUNNER_OS" = Windows ]; then host="$host.exe"; fi
@@ -61,3 +61,7 @@ jobs:
           compiler=next/target/debug/cad-next-packages
           if [ "$RUNNER_OS" = Windows ]; then compiler="$compiler.exe"; fi
           python next/tests/package_workflows.py --host "$host" --compiler "$compiler" --runtime next/target/runtime.json --output next/target/package-documents
+          sketch_compiler=next/target/debug/cad-next-sketch
+          if [ "$RUNNER_OS" = Windows ]; then sketch_compiler="$sketch_compiler.exe"; fi
+          python next/tests/sketch_commands_workflows.py --host "$host" --compiler "$sketch_compiler" --runtime next/target/runtime.json --output next/target/sketch-command-documents
+          python next/tests/sketch_editor_workflows.py --host "$host" --runtime next/target/runtime.json --output next/target/sketch-editor-documents

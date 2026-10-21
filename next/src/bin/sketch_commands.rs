@@ -1,0 +1,70 @@
+//! Local NDJSON sketch command compiler. It does not open or mutate documents.
+
+use cad_next::sketch_commands::{SketchElement, Tool, constrain, draw_edits};
+use serde::Deserialize;
+use serde_json::{Value, json};
+use std::io::{self, BufRead, Write};
+
+#[derive(Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
+enum Request {
+    Draw {
+        object: String,
+        tool: Tool,
+        points: Vec<[f64; 3]>,
+        #[serde(default)]
+        index: usize,
+        #[serde(default)]
+        construction: bool,
+    },
+    Constraint {
+        snapshot: Value,
+        kind: String,
+        selection: Vec<SketchElement>,
+        #[serde(default)]
+        value: Option<String>,
+    },
+}
+
+fn compile(line: &str) -> Result<Vec<Value>, String> {
+    match serde_json::from_str::<Request>(line).map_err(|error| error.to_string())? {
+        Request::Draw {
+            object,
+            tool,
+            points,
+            index,
+            construction,
+        } => draw_edits(&object, tool, &points, index, construction),
+        Request::Constraint {
+            snapshot,
+            kind,
+            selection,
+            value,
+        } => constrain(&snapshot, &kind, &selection, value.as_deref()),
+    }
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(argument) = std::env::args().nth(1) {
+        if argument == "--help" || argument == "-h" {
+            println!(
+                "cad-next-sketch\nCompile one local JSON request per stdin line into native sketch edits.\nDraw: {{\"op\":\"draw\",\"object\":\"Sketch\",\"tool\":\"line\",\"points\":[[0,0,0],[10,0,0]],\"index\":0,\"construction\":false}}\nConstraint: {{\"op\":\"constraint\",\"snapshot\":<native sketch object>,\"kind\":\"Distance\",\"selection\":[{{\"index\":0,\"point\":0}}],\"value\":\"10 mm\"}}\nOutput: {{\"ok\":true,\"edits\":[...]}} or {{\"ok\":false,\"error\":{{\"code\":\"invalid_sketch_command\",\"message\":\"...\"}}}}\nNo document is opened or changed. Submit returned edits with a native revision guard."
+            );
+            return Ok(());
+        }
+        return Err("Expected NDJSON on stdin; run --help for examples".into());
+    }
+    let mut output = io::BufWriter::new(io::stdout().lock());
+    for line in io::stdin().lock().lines() {
+        let response = match compile(&line?) {
+            Ok(edits) => json!({"ok":true,"edits":edits}),
+            Err(message) => {
+                json!({"ok":false,"error":{"code":"invalid_sketch_command","message":message}})
+            }
+        };
+        serde_json::to_writer(&mut output, &response)?;
+        writeln!(output)?;
+        output.flush()?;
+    }
+    Ok(())
+}

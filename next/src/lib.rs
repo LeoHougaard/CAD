@@ -3,6 +3,7 @@
 #[cfg(feature = "desktop")]
 pub mod editor;
 pub mod packages;
+pub mod sketch_commands;
 #[cfg(feature = "desktop")]
 pub mod viewport;
 
