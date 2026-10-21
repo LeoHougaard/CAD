@@ -55,6 +55,34 @@ original file hash remained unchanged.
 The interactive checks above do not establish GUI coverage of every constraint
 selection form, every expression/state control or difficult trim/drag case.
 
+### Multi-Body and native Boolean workflows
+
+The editor created two independent Bodies, each with an editable rectangular
+sketch and Pad. All visible native Body tips rendered together. Union, Subtract
+and Intersect previews were inspected; Cancel restored both independent Bodies.
+Union was applied, undone and redone, then saved as a separate FCStd file.
+
+A third Body was created and added to the existing Boolean's tool list. Changing
+the operation to Subtract, applying it, and using Undo/Redo retained all three
+native sketch/Pad histories. Editing a consumed tool's Pad from 15 to 8 mm
+recomputed the target. Separate files were saved and the original was reopened
+in the real editor for continued editing. An empty Intersect result was rejected
+with Apply disabled; Cancel restored the valid baseline. Temporary test features
+were removed through native Undo.
+
+Independent new workers reopened the GUI-created files without modifying them.
+The two Pad volumes were 10781.25 and 2456.904121032553 cubic millimeters;
+their analytical overlap was 1637.9360806883687. Native Union volume was
+11600.218040344183, matching the two volumes minus overlap. The two-tool Cut
+had valid single-solid volume 9029.21619039918. Changing the first tool's height
+to 8 mm produced 9356.803406536852. Both match analytical box intersections.
+All three sketch histories retained four geometry entries, eight constraints
+and four degrees of freedom. Tool links, native Body ownership and consumed
+Body display metadata were correct; original file hashes were unchanged.
+
+These are functional checks of Rust controls and native modeling behavior,
+not a Rust kernel replacement or complete FreeCAD feature coverage.
+
 ### Earlier feature-chain baseline
 
 These earlier GUI checks remain useful evidence for solid modeling and face
@@ -94,7 +122,7 @@ running. Their executables and original documents were not replaced.
 
 ## Automated checks
 
-Windows x64 and Pixel Linux ARM64 pass the Rust checks and all five real-native
+Windows x64 and Pixel Linux ARM64 pass the Rust checks and all six real-native
 workflow scripts. CI repeats the Rust checks, including the optional desktop
 target, and native workflows on Windows and Linux x64.
 
@@ -118,12 +146,20 @@ target, and native workflows on Windows and Linux x64.
   intermediate contours; failed Finish recovery; session ownership and drag
   previews; action Undo/Redo; cancellation after more than 30 actions; one native
   Undo entry on Finish; save/reopen and attached-pocket dimension edits.
+- `body_workflows.py`: nine native Body/Boolean cases cover Union, Subtract,
+  Intersect, multiple tools, transformed Bodies, native ownership/consumption,
+  preview replacement/cancel, failures, Undo/Redo, parent edits and reopening.
+  Raw Group placement and multiple-tool results are compared against a separate
+  pinned FreeCAD reference rather than normalized to a different behavior.
 - Rust tests cover transport failure, actor document preservation after failed
   Open, committed edits followed by display failure, depth-aware picking,
   selection invalidation, sketch coordinates and transformed normals. Sketch
   checks include native handle/origin picking, multiselection, exact box/segment
   crossing, dimension label/line hits, attached-coordinate snapping and arc
-  preview interpolation. Lifecycle fixtures do not substitute for native geometry
+  preview interpolation. Multi-object checks cover shared depth, distinct native
+  identities, hidden-edge occlusion, per-object transforms and selection
+  invalidation. Actor checks reject mismatched object/revision display replies
+  without losing accepted edits. Lifecycle fixtures do not substitute for native geometry
   checks.
 
 Run the two sketch suites after building the host and compiler:
@@ -141,7 +177,7 @@ in [README.md](README.md).
 ## Remaining gates
 
 The interactive tools above do not include splines, external sketch geometry or
-all FreeCAD sketch tools. Advanced features, multi-Body display, assemblies,
+all FreeCAD sketch tools. Advanced features, assemblies,
 feature-tree rollback/reorder and executable plugins remain open. Broader
 constraint, selection, trim, dragging and attachment cases need GUI checks.
 Feature previews defer recomputation until Apply when existing native redo would

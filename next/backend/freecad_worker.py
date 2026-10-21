@@ -30,6 +30,7 @@ OBJECT_TYPES = {
     "App::Part", "PartDesign::Body", "Sketcher::SketchObject",
     "PartDesign::Pad", "PartDesign::Pocket", "PartDesign::Fillet",
     "PartDesign::Chamfer", "PartDesign::Revolution", "PartDesign::Groove",
+    "PartDesign::Boolean",
     "PartDesign::AdditiveLoft", "PartDesign::SubtractiveLoft",
     "PartDesign::AdditivePipe", "PartDesign::SubtractivePipe",
     "PartDesign::Plane", "PartDesign::Line", "PartDesign::Point",
@@ -283,12 +284,49 @@ def history_counts(doc):
     return {"undo_count": doc.UndoCount, "redo_count": doc.RedoCount}
 
 
+def owner_body(obj):
+    if obj.isDerivedFrom("PartDesign::Body"):
+        return obj
+    owner = getattr(obj, "_Body", None)
+    if owner is not None and owner.isDerivedFrom("PartDesign::Body"):
+        return owner
+    parent = obj.getParentGeoFeatureGroup() if hasattr(obj, "getParentGeoFeatureGroup") else None
+    return parent if parent is not None and parent.isDerivedFrom("PartDesign::Body") else None
+
+
+def body_states(doc):
+    bodies = [obj for obj in doc.Objects if obj.isDerivedFrom("PartDesign::Body")]
+    consumed = {body.Name: set() for body in bodies}
+    for body in bodies:
+        if body.Tip is None:
+            continue
+        for feature in [body.Tip, *body.Tip.OutListRecursive]:
+            if feature.isDerivedFrom("PartDesign::Boolean") and not feature.Suppressed:
+                for tool in feature.Group:
+                    if tool.Name in consumed:
+                        consumed[tool.Name].add(feature.Name)
+    result = {}
+    for body in bodies:
+        tip = body.Tip
+        displayed = (tip is not None and not consumed[body.Name] and body.Visibility and tip.Visibility
+                     and hasattr(tip, "Shape") and not tip.Shape.isNull() and len(tip.Shape.Solids) > 0)
+        result[body.Name] = {"tip": tip.Name if tip else None,
+                             "consumed_by": sorted(consumed[body.Name]),
+                             "display_object": tip.Name if displayed else None}
+    return result
+
+
 def snapshot(doc, revision=None):
     objects = []
+    bodies = body_states(doc)
     for obj in doc.Objects:
         entry = {"name": obj.Name, "type": obj.TypeId, "label": obj.Label,
                  "valid": obj.isValid(), "status": obj.getStatusString(),
                  "state": list(obj.State), "properties": {}, "property_types": {}}
+        owner = owner_body(obj)
+        entry["body"] = owner.Name if owner else None
+        if obj.Name in bodies:
+            entry["body_state"] = bodies[obj.Name]
         if hasattr(obj, "getGlobalPlacement"):
             entry["global_placement"] = encode(obj.getGlobalPlacement())
         for prop in obj.PropertiesList:
@@ -351,11 +389,32 @@ def validate(doc, whole=False):
                     fail("invalid_model", obj.Name + ": " + diagnostic)
         if hasattr(obj, "Shape") and not obj.Shape.isNull() and not obj.Shape.isValid():
             fail("invalid_model", obj.Name + ": native shape is invalid")
+        if obj.isDerivedFrom("PartDesign::Boolean") and len(obj.Shape.Solids) == 0:
+            fail("invalid_model", obj.Name + ": native Boolean result contains no solid")
         if obj.TypeId in OBJECT_TYPES and obj.TypeId not in {
             "App::Part", "PartDesign::Body", "Sketcher::SketchObject",
             "PartDesign::Plane", "PartDesign::Line", "PartDesign::Point",
         } and hasattr(obj, "Shape") and obj.Shape.isNull():
             fail("invalid_model", obj.Name + ": native result is null")
+
+
+def set_boolean_tools(feature, tools):
+    target = owner_body(feature)
+    if target is None or not tools or len({tool.Name for tool in tools}) != len(tools):
+        fail("invalid_request", "Boolean requires distinct tool Bodies and a target Body")
+    for tool in tools:
+        if not tool.isDerivedFrom("PartDesign::Body") or tool == target:
+            fail("invalid_request", "Boolean tools must be other native Bodies")
+        if target in tool.OutListRecursive:
+            fail("invalid_request", "Boolean tool would create a native dependency cycle")
+        parent = tool.getParentGeoFeatureGroup()
+        if parent is not None and parent.isDerivedFrom("PartDesign::Boolean") and parent != feature:
+            fail("invalid_request", "Tool Body is already consumed by another Boolean")
+        if tool.Tip is None or len(tool.Tip.Shape.Solids) == 0:
+            fail("invalid_request", "Boolean tool Body requires a solid native tip")
+    # Preserve the pinned native Group semantics, including its placement
+    # behavior. World-preserving reparenting would be a separate operation.
+    feature.Group = tools
 
 
 def apply_edit(doc, edit):
@@ -370,8 +429,13 @@ def apply_edit(doc, edit):
             body = object_in(doc, edit["body"])
             if not body.isDerivedFrom("PartDesign::Body"):
                 fail("invalid_request", "Owner must be a PartDesign Body")
+            if type_id == "PartDesign::Boolean" and (
+                    body.Tip is None or not hasattr(body.Tip, "Shape") or len(body.Tip.Shape.Solids) == 0):
+                fail("invalid_request", "Boolean target Body requires a solid native tip")
             obj = body.newObject(type_id, key)
         else:
+            if type_id == "PartDesign::Boolean":
+                fail("invalid_request", "A PartDesign Boolean requires a target Body owner")
             obj = doc.addObject(type_id, key)
         if obj.Name != key:
             fail("invalid_request", "FreeCAD changed the requested object name")
@@ -380,7 +444,15 @@ def apply_edit(doc, edit):
     if op == "set":
         prop = edit["property"]
         type_id = property_type(obj, prop)
-        setattr(obj, prop, decode_property(doc, type_id, edit["value"]))
+        value = decode_property(doc, type_id, edit["value"])
+        if obj.isDerivedFrom("PartDesign::Boolean") and prop == "Group":
+            set_boolean_tools(obj, value)
+        elif obj.isDerivedFrom("PartDesign::Boolean") and prop == "BaseFeature":
+            if value is None or value == obj or owner_body(value) != owner_body(obj) or obj in value.OutListRecursive:
+                fail("invalid_request", "Boolean base must be an earlier feature in its target Body")
+            setattr(obj, prop, value)
+        else:
+            setattr(obj, prop, value)
     elif op == "expression":
         prop = edit["property"]
         # Native expression paths can address components, e.g. Placement.Base.x.

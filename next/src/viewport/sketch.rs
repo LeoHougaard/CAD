@@ -14,7 +14,7 @@ pub(super) struct DimensionHit {
 impl Viewport {
     pub fn clear_sketch_selection(&mut self) {
         self.sketch_selection.clear();
-        self.selected = None;
+        self.clear_selection();
     }
 
     /// A solved point in native sketch coordinates. Whole lines use their midpoint;

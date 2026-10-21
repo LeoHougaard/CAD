@@ -14,10 +14,12 @@ loaded declarative packages and opens its parameter form.
 ## Load a collection
 
 The default registry bundles `sketch.rectangle`, `sketch.circle`, `feature.pad`,
-`feature.pocket` and `feature.fillet`. To add a local package, copy the JSON files
-from [packages](packages) into a local directory and add your manifest there.
+`feature.pocket`, `feature.fillet` and `body.boolean`. To add a local package,
+copy the JSON files from [packages](packages) into a local directory and add your
+manifest there.
 An explicit directory replaces the bundled collection. Include the bundled IDs
-to keep the editor's Rectangle, Circle, Extrude, Pocket and Fillet tools working.
+to keep the editor's Rectangle, Circle, Extrude, Pocket, Fillet and Boolean tools
+working.
 The loader reads immediate `.json` files in sorted order, without recursion.
 
 ```sh
@@ -62,6 +64,12 @@ must fit signed 64-bit values. Numeric types accept inclusive `minimum` and
 are required. Unknown, missing or incorrectly typed inputs fail before submission
 to the worker. Builtin numeric lengths use native millimeters.
 
+An optional `enum` restricts a parameter to declared values of its own type.
+Choices must be nonempty, typed and unique. Defaults must satisfy the same
+restriction. The editor shows enumerated parameters as a choice field. For
+example, the Boolean operation is declared as
+`{"type":"string","enum":["Fuse","Cut","Common"],"default":"Fuse"}`.
+
 Templates recursively substitute ordinary JSON values. They support three forms:
 
 - `{"$param":"name"}` copies a declared parameter with its JSON type intact.
@@ -98,6 +106,37 @@ circle and three constraints; relative index 2 sets radius. Add the sketch's
 prior constraint count when editing these dimensions later. Body and sketch
 creation, attachment and package composition remain ordinary native edits.
 
+`body.boolean` takes `name`, `target`, `tool` and `operation`. Target and tool are
+native Body names. `Fuse`, `Cut` and `Common` correspond to Union, Subtract and
+Intersect. The package creates a `PartDesign::Boolean` in the target Body and
+links the tool through its native `Group` property. The tool Body and its feature
+history remain editable; native consumption metadata controls which tips are
+displayed. The worker rejects self-reference, cycles, invalid or reused tools,
+and results containing no solid.
+
+Group assignment follows the pinned native API, including reparenting and
+placement. A transformed target can therefore change a tool Body's world
+placement. The package adds no world-position correction. A world-preserving
+placement policy would need its own explicit interface and matched checks.
+
+```sh
+cad-next-packages --id body.boolean --parameters '{"name":"Union","target":"Body","tool":"Body2","operation":"Fuse"}'
+```
+
+The UI-independent `cad_next::body_commands` module also exposes
+`boolean_edits(name, target, tools, operation)` for multiple tool Bodies. Its
+one-tool output matches the package. `body_of(state, object)` reads native
+ownership, and `display_objects(state)` reads native Body display metadata.
+Neither helper keeps another dependency graph or geometry history.
+
+These are Rust command and query components. Solid modeling, native Group
+semantics, recomputation, transactions and persistent references still belong to
+the native engine. Functional coverage comes before UI and performance polish.
+Replacing a component requires matched native geometry, ownership, history,
+failure and save/reopen checks, together with resource measurements before
+promotion. Passing these package workflows does not establish complete FreeCAD
+feature parity or a Rust geometry kernel.
+
 Agents can concatenate package output with other protocol edits, then submit one
 `transaction` with a label and the latest `expected_revision` from the native
 snapshot. Package compilation does not reserve names or revisions. A stale
@@ -119,3 +158,5 @@ identify gesture ownership; they do not authenticate clients. See
 face-attached pocket and fillet history, dimension edits, failed edits, undo/redo,
 and save/reopen editing. Rust tests cover parameter and manifest rejection plus
 loading a local extension.
+`tests/body_workflows.py` checks compiled Boolean packages and native Body
+ownership, consumption, placement, preview ownership and saved linked edits.

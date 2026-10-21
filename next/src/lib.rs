@@ -1,5 +1,6 @@
 //! Persistent local modeling session. Native documents stay inside the worker.
 
+pub mod body_commands;
 #[cfg(feature = "desktop")]
 pub mod editor;
 pub mod packages;

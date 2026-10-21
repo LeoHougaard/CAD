@@ -1,8 +1,17 @@
 # Migration decision
 
-Keep the native FreeCAD modeling implementation while replacing components in
-stages. The eventual target remains entirely Rust. Rewriting the geometry core
-first would discard the complex-operation behavior that motivated this rebuild.
+Preserve FreeCAD's complete functional behavior as the reference, then replace
+its components with Rust one at a time. Complete each component's functional
+scope and verify it against the native implementation before promotion. The end
+state is a fully functional application implemented entirely in Rust, including
+the geometry kernel. UX redesign and performance tuning follow that functional
+Rust completion.
+
+The current implementation is mixed-language. FreeCAD App, Sketcher, PartDesign,
+Open CASCADE and the Python adapter still perform the native modeling work. The
+Rust editor, display path, transport and command construction do not replace
+those modeling components. The Rust UI exposes only part of FreeCAD's
+functionality; complete functional parity has not been achieved.
 
 This follows [gradual replacement](https://martinfowler.com/bliki/StranglerFigApplication.html)
 and [replacement behind a common interface](https://martinfowler.com/bliki/BranchByAbstraction.html).
@@ -30,39 +39,69 @@ Native sources pinned to the selected release:
 
 ## Replacement order
 
-1. Preserve the prototype and establish a pinned native baseline. The persistent
-   Rust host, native worker, runtime setup and initial workflows are implemented.
-2. Build the Rust editor and feature package interface around that document.
-   Implement Onshape selection, sketch editing, feature previews and rollback
-   as transactions against native state. Reopening a file must restore editable
-   geometry and constraints without a separate frontend history.
-   The editor now provides Point, Line, Polyline, Rectangle, Circle and Arc,
-   snapping and inference, construction, interactive native constraints and
-   dimensions, expression/state editing, selection boxes, dragging, trim and
-   deletion. Sketch sessions support action Undo/Redo, whole-model validation on
-   Finish and Cancel back to the session baseline. Invalid intermediate consumed
-   profiles can be repaired without publishing broken final solids.
-   Face attachment, extrusion, pockets, fillet previews and FCStd reopening remain
-   in the same document. Declarative feature packages share its command boundary.
-   When existing redo prevents a native feature preview, the editor defers
-   recomputation until Apply so cancellation preserves that history.
-   See [tested workflows and remaining gates](VERIFICATION.md). Splines, external
-   sketch geometry, advanced features, rollback/reorder, multi-Body display,
-   assemblies and executable plugins remain open.
-3. Measure complete user actions on the Pixel. Keep input, camera movement and
-   drawing independent of model recomputation. Reduce copying, unnecessary
-   recomputes and unused dependencies before translating working algorithms.
-   A temporary preview must never publish a failed or stale result.
-4. Replace bounded components with Rust only when they preserve required
-   behavior and improve measured cost or maintainability. Keep the native
-   implementation for matched evaluation until promotion.
-5. Replace coupled geometry, topology/history, attachment and document components
-   together where their contracts demand it. Remove the last native dependency
-   only after Rust passes the same modeling and editing gates.
+1. Establish and preserve the full functional FreeCAD reference. Keep the pinned
+   native runtime and the earlier prototype intact. The existing native workflow
+   baseline verifies specific modeling behavior; it does not establish complete
+   application coverage. Record the remaining capabilities and their acceptance
+   workflows before claiming full functionality.
+2. Close functional gaps through the native application boundary while retaining
+   one authoritative document. Features, plugins and agents must preserve native
+   constraints, attachment, expressions, references, history, transactions and
+   recomputation. A functional Rust interface to native operations is application
+   access, not a completed Rust port of those operations.
+3. Port one well-defined component completely to Rust behind a stable interface.
+   Keep the native implementation available for matched evaluation. Promote the
+   candidate only after its entire declared functional scope, failure behavior,
+   saved data and resource regression checks pass. A partial implementation or a
+   Rust command wrapper does not complete the component.
+4. Repeat until all components, including the coupled geometry kernel,
+   topology/history, attachment and document systems, are functionally complete
+   in Rust. Replace coupled components together when their contracts require it.
+   Remove native C++ and Python dependencies only after their replacements pass
+   the same functional gates. Preserve working native geometry until then.
+5. After functional Rust completion, customize the UX toward Onshape workflows
+   and tune speed, memory, startup and packaging. Resource measurements during
+   earlier stages guard against regressions; they do not move optimization or
+   visual redesign ahead of functional replacement.
+
+## Current functional implementation
+
+The editor provides Point, Line, Polyline, Rectangle, Circle and Arc, snapping
+and inference, construction, interactive native constraints and dimensions,
+expression/state editing, selection boxes, dragging, trim and deletion. Sketch
+sessions support action Undo/Redo, whole-model validation on Finish and Cancel
+back to the session baseline. Invalid intermediate consumed profiles can be
+repaired without publishing broken final solids. Face attachment, extrusion,
+pockets, fillet previews and FCStd reopening use the same native document.
+Declarative feature packages share its command boundary. When existing redo
+prevents a native feature preview, recomputation is deferred until Apply so
+cancellation preserves that history.
+
+Multi-Body implementation now includes New body and active Body selection,
+display of all visible unconsumed native Body tips, native face/edge
+multiselection and feature history grouped by Body. Native Boolean features use
+Union, Subtract or Intersect, with one target and multiple linked tool Bodies in
+the native Group property. Their previews support Apply/Cancel; existing Boolean
+Type and tool groups can be edited. The real Pixel workflow now covers creating
+Bodies, Boolean previews, cancellation, committed multiple-tool edits, Undo/Redo,
+save/reopen and continued edits to consumed tools. Independent native saved-file
+checks validate geometry and retained history. These cases establish bounded
+workflow evidence, not complete multi-Body or FreeCAD parity.
+
+See [tested workflows and remaining gates](VERIFICATION.md). Full FreeCAD
+functionality is not yet exposed by the Rust UI. Splines, external sketch
+geometry, advanced features, rollback/reorder, assemblies and executable plugins
+remain open. This application work does not constitute a Rust geometry-kernel
+replacement.
 
 Local pipes keep native handles and failure ownership in one worker process and
 require no server. Change to an in-process bridge only if profiling shows pipe
 traffic matters. [CXX](https://cxx.rs/) is a possible bridge, not a geometry port.
+
+Steps 2 and 3 proceed component by component; exposing every native tool in the
+new UI is not a prerequisite for a bounded Rust replacement. Full end-to-end
+functional Rust coverage is required before customization. The
+[component inventory](COMPONENTS.md) records current boundaries and gaps.
 
 ## Promotion rules
 
@@ -76,10 +115,13 @@ Tests provide evidence for this contract. Passing a fixed example count does not
 establish general robustness. Inspect difficult results in the real viewport and
 include independent geometric measures where available.
 
-Performance gates cover cold and warm startup, working and peak memory, idle CPU,
-input-to-frame latency, preview cancellation and complete regeneration on
-representative moderate parts. Compare the same workloads and hardware. Rust
-alone is not evidence of a speedup.
+Resource regression gates cover cold and warm startup, working and peak memory,
+idle CPU, input-to-frame latency, preview cancellation and complete regeneration
+on representative moderate parts. Compare native and candidate implementations
+on the same workloads and hardware before promotion. These checks remain part
+of functional verification throughout migration. Performance tuning and UX
+customization wait until functional Rust completion; Rust alone is not evidence
+of a speedup.
 
 The interface requires revision tokens for every mutation. Agents can work
 independently in separate documents; shared document mutations are serialized

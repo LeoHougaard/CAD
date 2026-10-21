@@ -75,6 +75,52 @@ Preserving native redo during a canceled
 preview needs a later native adapter change; clients must show this limitation
 instead of silently losing history.
 
+## Bodies and native Boolean features
+
+`PartDesign::Boolean` is a supported native object type. Create it with
+`add_object` and the target `body`. The Body must already have a solid Tip.
+FreeCAD assigns the previous native Tip as `BaseFeature` and advances the target
+Tip to the Boolean. Set its `Group` to a nonempty list of native Body links and
+its `Type` to `Fuse`, `Cut` or `Common`. `Refine`, `FuzzyTolerance` and `Suppressed`
+remain native properties available through the ordinary property interface.
+These edits compose in the same atomic transaction/preview boundary as other
+features. Source Bodies, sketches, constraints and editable history remain in
+the native document.
+
+The adapter rejects self references, duplicate tools, empty tool lists,
+non-Body tools, dependency cycles and a tool already consumed by another Boolean.
+Changing an existing Boolean's operation and tool list uses the same property
+edits. Failed candidates restore the previous native feature, Tip, ownership and
+placements. A native empty intersection contains no solid and is rejected before
+publishing it as a final result. Native compounds remain supported: Body
+`AllowCompound` controls FreeCAD's single-solid rule. A disjoint union can produce
+multiple valid solids when it is enabled; a dividing cut can do the same. A
+disjoint cut can validly leave the target unchanged.
+With multiple tools, native Common uses the combined tool regions and may retain
+touching result partitions as distinct solids; do not substitute an independent
+all-tools intersection algorithm for this native operation.
+
+Every object snapshot includes `body`, its native owner Body name or null. A Body
+owns itself. Body snapshots also include
+`body_state: {tip, consumed_by, display_object}`. These fields come from native
+Body ownership, Tip and the nonsuppressed Boolean dependencies of active Tips.
+Consumed tools and empty Bodies remain editable objects. A consumed, hidden or
+empty Body has null `display_object`; a displayed Body names its native Tip so
+face references attach to the actual feature. Historical intermediate features
+must not reappear as separate parts merely because they still have native Shapes.
+
+`Group` preserves the pinned native property semantics. It does not compensate
+Body placements when a tool becomes a child of the Boolean. With a moved or
+rotated target this can change the tool's global placement and produce geometry
+different from the original world-space overlap. The worker matches a separate
+direct FreeCAD 1.1.4 reference for these cases, including compound unions and
+empty intersections. World-preserving reparenting is a separate behavior change
+and is not silently added to generic property writes. The pinned
+[GUI Boolean command](https://github.com/FreeCAD/FreeCAD/blob/1.1.4/src/Mod/PartDesign/Gui/Command.cpp)
+and [Boolean task](https://github.com/FreeCAD/FreeCAD/blob/1.1.4/src/Mod/PartDesign/Gui/TaskBooleanParameters.cpp)
+use native grouping; the [native feature](https://github.com/FreeCAD/FreeCAD/blob/1.1.4/src/Mod/PartDesign/App/FeatureBoolean.cpp)
+owns recomputation and topology.
+
 ## Sketch editing sessions
 
 `sketch_begin` takes `document`, `expected_revision`, native sketch `object` and

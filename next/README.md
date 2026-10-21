@@ -8,12 +8,23 @@ The first backend is pinned FreeCAD 1.1.4, including its Part, Sketcher and
 PartDesign application modules and Open CASCADE. Rust owns the application-facing
 interface. A small, local worker adapter initially calls FreeCAD's supported
 Python API. It does not run FreeCAD's GUI or a network service. This interim
-version is mixed-language; the eventual target remains Rust throughout.
+version is mixed-language; the eventual target remains Rust throughout,
+including the geometry kernel. FreeCAD App, Sketcher, PartDesign, Open CASCADE
+and the Python adapter remain native. Rust presentation and command construction
+do not constitute replacements for those components.
+
+FreeCAD supplies the functional reference while components move completely to
+Rust one at a time. Each replacement must cover its full declared behavior and
+pass matched verification before promotion.
+UX customization and performance tuning follow functional Rust completion.
+Resource checks remain regression gates during migration. The pinned native
+baseline is the reference; the current Rust UI does not yet expose all of it.
 
 This includes an initial Rust desktop editor and the headless modeling host.
 The editor is under workflow verification. It has not replaced the earlier
 Windows application. The [migration gates](MIGRATION.md) describe the remaining
-work toward a complete Part Studio.
+work toward a complete Part Studio. The [component inventory](COMPONENTS.md)
+records what is Rust, what remains native and what each replacement must prove.
 
 ## Run the editor
 
@@ -59,6 +70,15 @@ value cannot be applied. When native redo history exists, feature recomputation
 is deferred until Apply so Cancel preserves redo. See
 [preview ownership and native limits](PROTOCOL.md).
 
+The multi-Body code now provides New body, active Body selection, all visible
+unconsumed native Body tips, face/edge multiselection and history grouped by Body.
+Boolean supports Union, Subtract and Intersect with a target Body and multiple
+native Group-linked tool Bodies. Apply/Cancel and editing an existing Boolean's
+Type/tool group use native feature transactions. Real Pixel workflows and
+independent native saved-file checks verify body creation, previews, cancellation,
+multiple tools, history, reopening and consumed-tool edits; broader coverage
+remains in the [verification record](VERIFICATION.md).
+
 Right-drag orbits, middle-drag pans, and the wheel zooms. F fits the model.
 Ctrl+S saves the document; Ctrl+Shift+S opens the FCStd Save as dialog.
 Ctrl+Z and Ctrl+Shift+Z use native Undo/Redo.
@@ -76,9 +96,10 @@ future work.
 The editor covers the sketch tools above, native dimensions and constraints,
 face attachment, extrusion, pockets and single-edge fillets. It does not yet cover
 all FreeCAD sketch tools or complete Onshape workflows. Splines, external sketch
-geometry, advanced features, multiple displayed Bodies, assemblies, feature-tree
-rollback/reorder, executable plugins and robust file locking between processes
-remain open. General documents and moderate-part performance need broader gates.
+geometry, advanced features, assemblies, feature-tree rollback/reorder,
+executable plugins and robust file locking between processes remain open.
+Multi-Body display/interaction verification remains open while GUI checks run.
+General documents and moderate-part resource behavior need broader gates.
 The [verification record](VERIFICATION.md) separates real GUI checks, independent
 native saved-file checks and remaining work.
 
@@ -112,8 +133,9 @@ worker's `__main__` entry point reliably and is not the configured launcher.
 
 The full official distribution is an evaluation dependency. Its download and
 disk size are substantial. It is not the intended lightweight shipping package.
-Removing unused GUI modules and packaging a smaller native runtime comes after
-the native behavior is established.
+Runtime slimming and packaging optimization are deferred until functional Rust
+replacement is complete. The pinned native distribution remains the behavioral
+reference while components are ported.
 
 ## Migration rules
 
@@ -121,10 +143,13 @@ the native behavior is established.
   expressions, attachment, topology naming, transactions and recomputation.
 - Plugins and agents use the same versioned command boundary. Features compose
   native document operations; the frontend does not implement geometry rules.
-- Replace one component at a time behind that boundary. Remove its old
-  implementation only after matched geometry and workflow checks pass.
-- Measure startup, working memory, idle CPU, preview latency and regeneration.
-  Converting code to Rust is not evidence of a speed improvement.
+- Complete one Rust component at a time behind that boundary. Promote it and
+  remove its old implementation only after its full declared functional scope
+  passes matched geometry, workflow, failure and resource regression checks.
+- Measure startup, working memory, idle CPU, preview latency and regeneration
+  throughout migration. Defer performance tuning and UX redesign until the
+  functional application and its components are complete in Rust. Converting
+  code to Rust is not evidence of a speed improvement.
 - Save new documents as native FCStd during the initial migration. Import of
   the old cadpart format must be explicit and must report unsupported features.
   Never silently flatten editable history into a mesh or overwrite an original.

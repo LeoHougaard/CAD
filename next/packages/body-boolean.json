@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "id": "body.boolean",
+  "label": "Boolean",
+  "description": "Union, subtract or intersect two native Bodies while keeping the tool Body linked and editable.",
+  "parameters": {
+    "name": { "type": "identifier" },
+    "target": { "type": "identifier" },
+    "tool": { "type": "identifier" },
+    "operation": { "type": "string", "enum": ["Fuse", "Cut", "Common"], "default": "Fuse" }
+  },
+  "edits": [
+    { "op": "add_object", "type": "PartDesign::Boolean", "name": { "$param": "name" }, "body": { "$param": "target" } },
+    { "op": "set", "object": { "$param": "name" }, "property": "Group", "value": [{ "link": { "$param": "tool" } }] },
+    { "op": "set", "object": { "$param": "name" }, "property": "Type", "value": { "$param": "operation" } }
+  ]
+}

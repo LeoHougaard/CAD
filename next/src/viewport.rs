@@ -2,7 +2,7 @@
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Shape, Stroke, Vec2};
 use glam::{Quat, Vec3};
 use serde_json::Value;
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 mod gl_renderer;
 mod sketch;
 pub use crate::sketch_commands::SketchElement;
@@ -14,11 +14,13 @@ pub struct Selection {
 }
 
 struct Triangle {
+    object: Arc<str>,
     points: [Vec3; 3],
     normals: [Vec3; 3],
     face: String,
 }
 struct Edge {
+    object: Arc<str>,
     points: Vec<Vec3>,
     name: String,
 }
@@ -36,9 +38,8 @@ struct ProjectedTriangle {
 }
 
 pub struct Viewport {
-    object: String,
+    scene_revisions: BTreeMap<String, Option<u64>>,
     renderer: Option<Arc<gl_renderer::Renderer>>,
-    revision: Option<u64>,
     triangles: Vec<Triangle>,
     edges: Vec<Edge>,
     sketch: Option<Value>,
@@ -51,6 +52,7 @@ pub struct Viewport {
     rect: Rect,
     pub response: Option<egui::Response>,
     pub selected: Option<Selection>,
+    pub selections: Vec<Selection>,
     pub sketch_selection: Vec<SketchElement>,
     pub sketch_select_enabled: bool,
     dimension_hits: Vec<sketch::DimensionHit>,
@@ -59,9 +61,8 @@ pub struct Viewport {
 impl Default for Viewport {
     fn default() -> Self {
         let mut result = Self {
-            object: String::new(),
+            scene_revisions: BTreeMap::new(),
             renderer: None,
-            revision: None,
             triangles: vec![],
             edges: vec![],
             sketch: None,
@@ -74,6 +75,7 @@ impl Default for Viewport {
             rect: Rect::from_min_size(Pos2::ZERO, Vec2::splat(600.)),
             response: None,
             selected: None,
+            selections: vec![],
             sketch_selection: vec![],
             sketch_select_enabled: true,
             dimension_hits: vec![],
@@ -120,14 +122,74 @@ impl Viewport {
             renderer.destroy();
         }
     }
-    pub fn set_scene(&mut self, mesh: Value, topology: Value) {
-        let object = mesh["object"].as_str().unwrap_or("").to_owned();
-        let revision = mesh["revision"].as_u64();
-        if object != self.object || revision != self.revision {
-            self.selected = None;
+    pub fn clear_selection(&mut self) {
+        self.selected = None;
+        self.selections.clear();
+    }
+    fn selected_element(&self, object: &str, subelement: &str) -> bool {
+        self.selections
+            .iter()
+            .chain(self.selected.iter())
+            .any(|selection| selection.object == object && selection.subelement == subelement)
+    }
+    fn select_native_element(&mut self, hit: Option<Selection>, toggle: bool) {
+        let Some(hit) = hit else {
+            self.clear_selection();
+            return;
+        };
+        if toggle {
+            if let Some(index) = self
+                .selections
+                .iter()
+                .position(|selection| selection == &hit)
+            {
+                self.selections.remove(index);
+            } else {
+                self.selections.push(hit);
+            }
+        } else {
+            self.selections = vec![hit];
         }
-        self.object = object;
-        self.revision = revision;
+        self.selected = self.selections.last().cloned();
+    }
+    pub fn set_scene(&mut self, mesh: Value, topology: Value) {
+        self.set_scenes(vec![(mesh, topology)]);
+    }
+    /// Display every supplied native object in one depth-tested scene. Omitted objects
+    /// are neither displayed nor pickable. Revisions scope all native element names.
+    pub fn set_scenes(&mut self, scenes: Vec<(Value, Value)>) {
+        let revisions: BTreeMap<String, Option<u64>> = scenes
+            .iter()
+            .filter_map(|(mesh, _)| {
+                let object = mesh["object"].as_str()?;
+                (!object.is_empty()).then(|| (object.to_owned(), mesh["revision"].as_u64()))
+            })
+            .collect();
+        let valid = |selection: &Selection| {
+            revisions.get(&selection.object).is_some_and(|revision| {
+                self.scene_revisions.get(&selection.object) == Some(revision)
+            })
+        };
+        self.selections.retain(&valid);
+        if self
+            .selected
+            .as_ref()
+            .is_some_and(|selection| !valid(selection))
+        {
+            self.selected = self.selections.last().cloned();
+        }
+        self.scene_revisions = revisions;
+        self.triangles.clear();
+        self.edges.clear();
+        for (mesh, topology) in scenes {
+            self.append_scene(mesh, topology);
+        }
+    }
+    fn append_scene(&mut self, mesh: Value, topology: Value) {
+        let Some(object) = mesh["object"].as_str().filter(|object| !object.is_empty()) else {
+            return;
+        };
+        let object: Arc<str> = Arc::from(object);
         let (origin, rotation) = placement(&mesh["world_from_shape"]);
         let positions: Vec<Vec3> = mesh["positions"]
             .as_array()
@@ -144,7 +206,6 @@ impl Viewport {
             .map(|normal| rotation * vector(normal).normalize_or_zero())
             .collect();
         let native_triangles = mesh["triangles"].as_array();
-        self.triangles.clear();
         for face in mesh["faces"].as_array().into_iter().flatten() {
             let first = face["first_triangle"].as_u64().unwrap_or(0) as usize;
             let count = face["triangle_count"].as_u64().unwrap_or(0) as usize;
@@ -175,6 +236,7 @@ impl Viewport {
                             .unwrap_or(geometric_normal)
                     });
                     self.triangles.push(Triangle {
+                        object: Arc::clone(&object),
                         points: [*a, *b, *c],
                         normals: triangle_normals,
                         face: name.to_owned(),
@@ -183,26 +245,28 @@ impl Viewport {
             }
         }
         let (origin, rotation) = placement(&topology["world_from_shape"]);
-        self.edges = topology["edges"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|edge| {
-                // An endpoint chord misrepresents a curved edge. Only fall back for lines.
-                let points = edge["points"].as_array().or_else(|| {
-                    (edge["geometry_type"].as_str() == Some("Part::GeomLine"))
-                        .then(|| edge["endpoints"].as_array())
-                        .flatten()
-                })?;
-                Some(Edge {
-                    name: edge["subelement"].as_str()?.to_owned(),
-                    points: points
-                        .iter()
-                        .map(|p| origin + rotation * vector(p))
-                        .collect(),
-                })
-            })
-            .collect();
+        self.edges.extend(
+            topology["edges"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|edge| {
+                    // An endpoint chord misrepresents a curved edge. Only fall back for lines.
+                    let points = edge["points"].as_array().or_else(|| {
+                        (edge["geometry_type"].as_str() == Some("Part::GeomLine"))
+                            .then(|| edge["endpoints"].as_array())
+                            .flatten()
+                    })?;
+                    Some(Edge {
+                        object: Arc::clone(&object),
+                        name: edge["subelement"].as_str()?.to_owned(),
+                        points: points
+                            .iter()
+                            .map(|p| origin + rotation * vector(p))
+                            .collect(),
+                    })
+                }),
+        );
     }
 
     pub fn set_sketch(&mut self, sketch: Option<Value>) {
@@ -366,10 +430,7 @@ impl Viewport {
             .enumerate()
             .map(|(index, t)| {
                 let p = t.points.map(|p| self.project(p));
-                let selected = self
-                    .selected
-                    .as_ref()
-                    .is_some_and(|s| s.object == self.object && s.subelement == t.face);
+                let selected = self.selected_element(&t.object, &t.face);
                 let light = Vec3::new(-0.3, -0.5, 0.8).normalize();
                 let colors = t.normals.map(|normal| {
                     if selected {
@@ -392,11 +453,29 @@ impl Viewport {
             })
             .collect()
     }
+    fn edge_visible(
+        &self,
+        edge: &Edge,
+        depth: f32,
+        front: Option<(usize, f32)>,
+        triangles: &[ProjectedTriangle],
+    ) -> bool {
+        let Some((index, front_depth)) = front else {
+            return true;
+        };
+        let same_object = self.triangles[triangles[index].face].object == edge.object;
+        // Tessellation can put a native edge slightly behind its own display surface.
+        // Applying that screen-space allowance across Bodies would expose hidden edges.
+        let tolerance = if same_object {
+            0.8 / self.scale
+        } else {
+            16. * f32::EPSILON * front_depth.abs().max(depth.abs()).max(1.)
+        };
+        depth >= front_depth - tolerance
+    }
     fn pick(&self, pos: Pos2, triangles: &[ProjectedTriangle]) -> Option<Selection> {
         let front = front_triangle(pos, triangles);
-        let front_depth = front.map(|(_, z)| z).unwrap_or(f32::NEG_INFINITY);
-        let tolerance = 0.8 / self.scale;
-        let mut edge_hit: Option<(String, f32)> = None;
+        let mut edge_hit: Option<(Selection, f32, f32)> = None;
         for edge in &self.edges {
             for line in edge.points.windows(2) {
                 let a = self.project(line[0]);
@@ -404,24 +483,31 @@ impl Viewport {
                 let (distance, t) = segment_distance(pos, a.0, b.0);
                 let depth = a.1 + t * (b.1 - a.1);
                 if distance < 6.
-                    && depth >= front_depth - tolerance
-                    && edge_hit.as_ref().is_none_or(|(_, d)| distance < *d)
+                    && self.edge_visible(edge, depth, front, triangles)
+                    && edge_hit
+                        .as_ref()
+                        .is_none_or(|(_, d, z)| distance < *d || (distance == *d && depth > *z))
                 {
-                    edge_hit = Some((edge.name.clone(), distance));
+                    edge_hit = Some((
+                        Selection {
+                            object: edge.object.to_string(),
+                            subelement: edge.name.clone(),
+                        },
+                        distance,
+                        depth,
+                    ));
                 }
             }
         }
-        edge_hit
-            .map(|(subelement, _)| Selection {
-                object: self.object.clone(),
-                subelement,
+        edge_hit.map(|(selection, _, _)| selection).or_else(|| {
+            front.map(|(index, _)| {
+                let triangle = &self.triangles[triangles[index].face];
+                Selection {
+                    object: triangle.object.to_string(),
+                    subelement: triangle.face.clone(),
+                }
             })
-            .or_else(|| {
-                front.map(|(i, _)| Selection {
-                    object: self.object.clone(),
-                    subelement: self.triangles[triangles[i].face].face.clone(),
-                })
-            })
+        })
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui) -> Option<Selection> {
@@ -480,10 +566,7 @@ impl Viewport {
         let depth_index = DepthIndex::new(rect, &triangles);
         // Test each small edge segment against the visible surface.
         for edge in &self.edges {
-            let selected = self
-                .selected
-                .as_ref()
-                .is_some_and(|s| s.object == self.object && s.subelement == edge.name);
+            let selected = self.selected_element(&edge.object, &edge.name);
             let stroke = Stroke::new(
                 if selected { 2.5_f32 } else { 1.1_f32 },
                 if selected {
@@ -502,10 +585,7 @@ impl Viewport {
                     let mid = (t0 + t1) * 0.5;
                     let pos = a.0.lerp(b.0, mid);
                     let z = a.1 + (b.1 - a.1) * mid;
-                    if depth_index
-                        .front_depth(pos, &triangles)
-                        .is_none_or(|front| z >= front - 0.8 / self.scale)
-                    {
+                    if self.edge_visible(edge, z, depth_index.front(pos, &triangles), &triangles) {
                         painter.line_segment([a.0.lerp(b.0, t0), a.0.lerp(b.0, t1)], stroke);
                     }
                 }
@@ -550,10 +630,15 @@ impl Viewport {
                         subelement: format!("Geometry{}", element.index),
                     });
                 }
+                self.selected = selection.clone();
             } else {
-                selection = self.pick(pos, &triangles);
+                let hit = self.pick(pos, &triangles);
+                let toggle = ui.input(|input| {
+                    input.modifiers.ctrl || input.modifiers.shift || input.modifiers.command
+                });
+                self.select_native_element(hit, toggle);
+                selection = self.selected.clone();
             }
-            self.selected = selection.clone();
         }
         self.response = Some(response);
         selection
@@ -635,15 +720,15 @@ impl DepthIndex {
             ((p.y / Self::CELL).max(0.) as usize).min(self.rows - 1),
         )
     }
-    fn front_depth(&self, p: Pos2, triangles: &[ProjectedTriangle]) -> Option<f32> {
+    fn front(&self, p: Pos2, triangles: &[ProjectedTriangle]) -> Option<(usize, f32)> {
         if !self.rect.contains(p) {
             return None;
         }
         let (x, y) = self.cell(p);
         self.cells[y * self.columns + x]
             .iter()
-            .filter_map(|&i| triangle_depth(p, &triangles[i]))
-            .max_by(f32::total_cmp)
+            .filter_map(|&i| triangle_depth(p, &triangles[i]).map(|depth| (i, depth)))
+            .max_by(|a, b| a.1.total_cmp(&b.1))
     }
 }
 
@@ -715,6 +800,194 @@ mod tests {
             viewport.projected()[0].colors[0],
             viewport.projected()[0].colors[1]
         );
+    }
+    fn native_scene(
+        object: &str,
+        revision: u64,
+        position: [f32; 3],
+        rotation: Quat,
+    ) -> (Value, Value) {
+        let transform = json!({"position":position,"rotation":rotation.to_array()});
+        (
+            json!({"object":object,"revision":revision,"world_from_shape":transform,
+            "positions":[[0,0,0],[10,0,0],[0,10,0]],"normals":[[0,0,1],[0,0,1],[0,0,1]],
+            "triangles":[[0,1,2]],"faces":[{"subelement":"Face1","first_triangle":0,"triangle_count":1}]}),
+            json!({"object":object,"revision":revision,"world_from_shape":transform,
+            "edges":[{"subelement":"Edge1","points":[[0,1,0],[8,1,0]]}]}),
+        )
+    }
+    #[test]
+    fn overlapping_objects_preserve_identity_and_occlude_faces_and_edges() {
+        let mut viewport = Viewport::default();
+        viewport.top();
+        viewport.scale = 10.;
+        viewport.set_scenes(vec![
+            native_scene("Rear", 1, [0., 0., 0.], Quat::IDENTITY),
+            native_scene("Front", 1, [0., 0., 5.], Quat::IDENTITY),
+        ]);
+        let face = viewport
+            .pick(
+                viewport.project(Vec3::new(2., 2., 0.)).0,
+                &viewport.projected(),
+            )
+            .unwrap();
+        assert_eq!(
+            face,
+            Selection {
+                object: "Front".into(),
+                subelement: "Face1".into()
+            }
+        );
+        let edge = viewport
+            .pick(
+                viewport.project(Vec3::new(2., 1., 0.)).0,
+                &viewport.projected(),
+            )
+            .unwrap();
+        assert_eq!(
+            edge,
+            Selection {
+                object: "Front".into(),
+                subelement: "Edge1".into()
+            }
+        );
+        // A rear edge remains hidden even when the nearer object has no matching edge.
+        viewport.edges.retain(|edge| edge.object.as_ref() == "Rear");
+        let hit = viewport
+            .pick(
+                viewport.project(Vec3::new(2., 1., 0.)).0,
+                &viewport.projected(),
+            )
+            .unwrap();
+        assert_eq!(hit, face);
+    }
+    #[test]
+    fn a_nearby_hidden_body_edge_cannot_be_picked_through_another_body() {
+        let mut viewport = Viewport::default();
+        viewport.top();
+        viewport.scale = 10.;
+        viewport.set_scenes(vec![
+            native_scene("Rear", 1, [0., 0., 4.95], Quat::IDENTITY),
+            native_scene("Front", 1, [0., 0., 5.], Quat::IDENTITY),
+        ]);
+        viewport.edges.retain(|edge| edge.object.as_ref() == "Rear");
+        let position = viewport.project(Vec3::new(2., 1., 5.)).0;
+        assert_eq!(
+            viewport.pick(position, &viewport.projected()),
+            Some(Selection {
+                object: "Front".into(),
+                subelement: "Face1".into()
+            })
+        );
+    }
+    #[test]
+    fn each_object_uses_its_own_placement_and_fit_includes_every_object() {
+        let mut viewport = Viewport::default();
+        viewport.top();
+        let rotation = Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
+        let mut first = native_scene("Turned", 1, [20., 0., 5.], rotation);
+        first.0["normals"] = json!([[1, 0, 0], [1, 0, 0], [1, 0, 0]]);
+        viewport.set_scenes(vec![
+            first,
+            native_scene("Other", 1, [-20., 0., 0.], Quat::IDENTITY),
+        ]);
+        assert!(viewport.triangles[0].points[1].abs_diff_eq(Vec3::new(20., 10., 5.), 1e-5));
+        assert!(viewport.triangles[0].normals[0].abs_diff_eq(Vec3::Y, 1e-5));
+        assert!(viewport.triangles[1].normals[0].abs_diff_eq(Vec3::Z, 1e-5));
+        assert!(viewport.edges[0].points[0].abs_diff_eq(Vec3::new(19., 0., 5.), 1e-5));
+        for (object, point) in [
+            ("Turned", Vec3::new(18., 2., 5.)),
+            ("Other", Vec3::new(-18., 2., 0.)),
+        ] {
+            assert_eq!(
+                viewport
+                    .pick(viewport.project(point).0, &viewport.projected())
+                    .unwrap()
+                    .object,
+                object
+            );
+        }
+        viewport.fit();
+        assert!(
+            viewport
+                .triangles
+                .iter()
+                .flat_map(|triangle| triangle.points)
+                .all(|point| viewport.rect.contains(viewport.project(point).0))
+        );
+    }
+    #[test]
+    fn multiselection_keeps_same_named_elements_separate_and_primary_recent() {
+        let mut viewport = Viewport::default();
+        viewport.set_scenes(vec![
+            native_scene("A", 1, [0., 0., 0.], Quat::IDENTITY),
+            native_scene("B", 1, [20., 0., 0.], Quat::IDENTITY),
+        ]);
+        let a = Selection {
+            object: "A".into(),
+            subelement: "Face1".into(),
+        };
+        let b = Selection {
+            object: "B".into(),
+            subelement: "Face1".into(),
+        };
+        viewport.select_native_element(Some(a.clone()), false);
+        viewport.select_native_element(Some(b.clone()), true);
+        assert_eq!(viewport.selections, vec![a.clone(), b.clone()]);
+        assert_eq!(viewport.selected, Some(b.clone()));
+        assert!(
+            viewport
+                .projected()
+                .iter()
+                .all(|triangle| triangle.colors == [Color32::from_rgb(47, 147, 143); 3])
+        );
+        viewport.select_native_element(Some(a), true);
+        assert_eq!(viewport.selections, vec![b.clone()]);
+        assert_eq!(viewport.selected, Some(b.clone()));
+        viewport.select_native_element(Some(b.clone()), true);
+        assert!(viewport.selections.is_empty() && viewport.selected.is_none());
+        viewport.select_native_element(Some(b), false);
+        viewport.select_native_element(None, true);
+        assert!(viewport.selections.is_empty() && viewport.selected.is_none());
+    }
+    #[test]
+    fn scene_revisions_and_hidden_objects_prune_only_their_own_selections() {
+        let mut viewport = Viewport::default();
+        viewport.top();
+        viewport.set_scenes(vec![
+            native_scene("A", 1, [0., 0., 0.], Quat::IDENTITY),
+            native_scene("B", 1, [20., 0., 0.], Quat::IDENTITY),
+        ]);
+        viewport.select_native_element(
+            Some(Selection {
+                object: "A".into(),
+                subelement: "Face1".into(),
+            }),
+            false,
+        );
+        let b = Selection {
+            object: "B".into(),
+            subelement: "Edge1".into(),
+        };
+        viewport.select_native_element(Some(b.clone()), true);
+        viewport.set_scenes(vec![
+            native_scene("B", 1, [20., 0., 0.], Quat::IDENTITY),
+            native_scene("A", 2, [0., 0., 0.], Quat::IDENTITY),
+        ]);
+        assert_eq!(viewport.selections, vec![b.clone()]);
+        assert_eq!(viewport.selected, Some(b));
+        viewport.set_scenes(vec![native_scene("A", 2, [0., 0., 0.], Quat::IDENTITY)]);
+        assert!(viewport.selections.is_empty() && viewport.selected.is_none());
+        assert!(
+            viewport
+                .pick(
+                    viewport.project(Vec3::new(22., 2., 0.)).0,
+                    &viewport.projected()
+                )
+                .is_none()
+        );
+        viewport.set_scenes(vec![]);
+        assert!(viewport.triangles.is_empty() && viewport.edges.is_empty());
     }
     #[test]
     fn triangle_depth_interpolates_instead_of_using_centroid() {

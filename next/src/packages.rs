@@ -34,6 +34,8 @@ pub struct Parameter {
     pub exclusive_minimum: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<Value>,
+    #[serde(rename = "enum", default, skip_serializing_if = "Option::is_none")]
+    pub choices: Option<Vec<Value>>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -81,6 +83,7 @@ impl Registry {
             include_str!("../packages/feature.pad.json"),
             include_str!("../packages/feature.pocket.json"),
             include_str!("../packages/feature.fillet.json"),
+            include_str!("../packages/body-boolean.json"),
         ];
         Self::from_entries(sources.into_iter().map(parse).collect::<Result<_, _>>()?)
     }
@@ -160,6 +163,15 @@ fn validate_parameter(name: &str, spec: &Parameter, value: &Value) -> Result<(),
     if !valid {
         return Err(format!("Parameter {name} must have type {:?}", spec.kind));
     }
+    if spec
+        .choices
+        .as_ref()
+        .is_some_and(|choices| !choices.contains(value))
+    {
+        return Err(format!(
+            "Parameter {name} must be one of its declared choices"
+        ));
+    }
     if let Some(number) = value.as_f64()
         && (spec.minimum.is_some_and(|minimum| number < minimum)
             || spec
@@ -191,6 +203,17 @@ fn parse(source: &str) -> Result<FeaturePackage, String> {
             && !matches!(spec.kind, ParameterType::Number | ParameterType::Integer)
         {
             return Err(format!("Only numeric parameter {name} can have a minimum"));
+        }
+        if let Some(choices) = &spec.choices {
+            if choices.is_empty() {
+                return Err(format!("Parameter {name} needs at least one enum choice"));
+            }
+            for (index, choice) in choices.iter().enumerate() {
+                validate_parameter(name, spec, choice)?;
+                if choices[..index].contains(choice) {
+                    return Err(format!("Parameter {name} has duplicate enum choices"));
+                }
+            }
         }
         if let Some(default) = &spec.default {
             validate_parameter(name, spec, default)?;
@@ -330,7 +353,7 @@ mod tests {
     #[test]
     fn bundled_packages_validate_and_expand_native_edits() {
         let registry = Registry::builtin().unwrap();
-        assert_eq!(registry.entries().len(), 5);
+        assert_eq!(registry.entries().len(), 6);
         let rectangle = registry
             .build(
                 "sketch.rectangle",
@@ -401,6 +424,29 @@ mod tests {
         assert!(parse(&value.to_string()).is_err());
         let entry = parse(source).unwrap();
         assert!(Registry::from_entries(vec![entry.clone(), entry]).is_err());
+    }
+
+    #[test]
+    fn enum_parameters_require_declared_typed_unique_choices() {
+        let registry = Registry::builtin().unwrap();
+        for operation in [json!("Fuse"), json!("Cut"), json!("Common")] {
+            let edits = registry.build("body.boolean", &json!({"name":"Boolean","target":"Target","tool":"Tool","operation":operation})).unwrap();
+            assert_eq!(edits[2]["value"], operation);
+        }
+        assert!(
+            registry
+                .build(
+                    "body.boolean",
+                    &json!({"name":"Boolean","target":"Target","tool":"Tool","operation":"Union"})
+                )
+                .is_err()
+        );
+        let mut manifest: Value =
+            serde_json::from_str(include_str!("../packages/body-boolean.json")).unwrap();
+        for choices in [json!([]), json!(["Fuse", "Fuse"]), json!([1])] {
+            manifest["parameters"]["operation"]["enum"] = choices;
+            assert!(parse(&manifest.to_string()).is_err());
+        }
     }
 
     #[test]

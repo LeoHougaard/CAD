@@ -1,12 +1,15 @@
 //! The UI owns interaction state. The worker owns all document state and history.
 
+mod bodies;
 mod constraints;
 mod drawing;
 mod sketch;
 #[cfg(test)]
 mod tests;
 
+use crate::body_commands::{body_of, display_objects};
 use crate::sketch_commands::Tool as Draw;
+use bodies::BodyUi;
 use sketch::SketchUi;
 
 use crate::{
@@ -30,8 +33,7 @@ struct Reply {
     op: String,
     accepted: bool,
     state: Value,
-    mesh: Value,
-    topology: Value,
+    scenes: Vec<(Value, Value)>,
     error: Option<String>,
     elapsed: Duration,
 }
@@ -57,8 +59,7 @@ fn model_thread(
                 op: "startup".into(),
                 accepted: false,
                 state: Value::Null,
-                mesh: Value::Null,
-                topology: Value::Null,
+                scenes: Vec::new(),
                 error: Some(error.to_string()),
                 elapsed: Duration::ZERO,
             });
@@ -106,9 +107,9 @@ fn model_thread(
                 Err(message) => error = Some(message),
             }
         }
-        let mut mesh = Value::Null;
-        let mut topology = Value::Null;
-        if let Some(object) = display_object(&current) {
+        let mut scenes = Vec::new();
+        let mut display_failed = false;
+        for object in display_objects(&current) {
             let parameters =
                 json!({"document":current["document"],"object":object,"deflection":0.03});
             match (
@@ -117,21 +118,30 @@ fn model_thread(
             ) {
                 (Ok(m), Ok(t))
                     if m["revision"] == current["revision"]
-                        && t["revision"] == current["revision"] =>
+                        && t["revision"] == current["revision"]
+                        && m["object"] == object
+                        && t["object"] == object =>
                 {
-                    mesh = m;
-                    topology = t;
+                    scenes.push((m, t));
                 }
-                (Err(message), _) | (_, Err(message)) => error = Some(message),
-                _ => error = Some("Display revision changed".into()),
+                (Err(message), _) | (_, Err(message)) => {
+                    error = Some(message);
+                    display_failed = true;
+                }
+                _ => {
+                    error = Some("Display object or revision changed".into());
+                    display_failed = true;
+                }
             }
+        }
+        if display_failed {
+            scenes.clear();
         }
         let reply = Reply {
             op: job.op,
             accepted,
             state: current.clone(),
-            mesh,
-            topology,
+            scenes,
             error,
             elapsed: start.elapsed(),
         };
@@ -142,30 +152,45 @@ fn model_thread(
     }
 }
 
+fn feature_edits(registry: &Registry, draft: &Draft) -> Result<Vec<Value>, String> {
+    if draft.id == "native.property" {
+        Ok(vec![
+            json!({"op":"set","object":draft.parameters["object"],"property":draft.parameters["property"],"value":draft.parameters["value"]}),
+        ])
+    } else if matches!(draft.id.as_str(), "native.boolean" | "body.boolean")
+        && draft.parameters["tools"].is_array()
+    {
+        let p = &draft.parameters;
+        let tools = p["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| {
+                v.as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| "Choose native tool Bodies".to_owned())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut edits = crate::body_commands::boolean_edits(
+            p["name"].as_str().unwrap_or_default(),
+            p["target"].as_str().unwrap_or_default(),
+            &tools,
+            p["operation"].as_str().unwrap_or_default(),
+        )?;
+        if draft.id == "native.boolean" {
+            edits.remove(0);
+        }
+        Ok(edits)
+    } else {
+        registry.build(&draft.id, &draft.parameters)
+    }
+}
+
 fn objects(state: &Value) -> &[Value] {
     state["objects"]
         .as_array()
         .map(Vec::as_slice)
         .unwrap_or_default()
-}
-fn display_object(state: &Value) -> Option<String> {
-    let all = objects(state);
-    // A Body's tip names the native feature to which face support must attach.
-    // Linking a new sketch to its own Body would introduce a dependency cycle.
-    all.iter()
-        .find(|o| o["type"] == "PartDesign::Body")
-        .and_then(|body| body["properties"]["Tip"]["link"].as_str())
-        .and_then(|tip| {
-            all.iter()
-                .find(|o| o["name"] == tip && o["shape"]["solids"].as_u64().unwrap_or(0) > 0)
-        })
-        .or_else(|| {
-            all.iter().rev().find(|o| {
-                o["type"] != "PartDesign::Body" && o["shape"]["solids"].as_u64().unwrap_or(0) > 0
-            })
-        })
-        .and_then(|o| o["name"].as_str())
-        .map(str::to_owned)
 }
 
 struct Draft {
@@ -196,6 +221,7 @@ pub struct Editor {
     sketch: Option<String>,
     selected_object: Option<String>,
     sketch_ui: SketchUi,
+    body_ui: BodyUi,
     draft: Option<Draft>,
     sequence: u64,
     error: Option<String>,
@@ -242,6 +268,7 @@ impl Editor {
             sketch: None,
             selected_object: None,
             sketch_ui: SketchUi::default(),
+            body_ui: BodyUi::default(),
             draft: None,
             sequence: 0,
             error: None,
@@ -305,9 +332,19 @@ impl Editor {
         }
     }
     fn body(&self) -> Option<String> {
-        objects(&self.state)
-            .iter()
-            .find(|o| o["type"] == "PartDesign::Body")
+        self.body_ui
+            .active
+            .as_ref()
+            .and_then(|name| {
+                objects(&self.state)
+                    .iter()
+                    .find(|o| o["name"] == *name && o["type"] == "PartDesign::Body")
+            })
+            .or_else(|| {
+                objects(&self.state)
+                    .iter()
+                    .find(|o| o["type"] == "PartDesign::Body")
+            })
             .and_then(|o| o["name"].as_str())
             .map(str::to_owned)
     }
@@ -339,7 +376,7 @@ impl Editor {
             let success = reply.accepted;
             self.error = reply.error;
             self.state = reply.state;
-            self.viewport.set_scene(reply.mesh, reply.topology);
+            self.viewport.set_scenes(reply.scenes);
             if success
                 && self.fit_next
                 && (reply.op == "preview"
@@ -350,7 +387,7 @@ impl Editor {
                 self.fit_next = false;
             }
             self.status = format!(
-                "{} · {:.0} ms",
+                "{} | {:.0} ms",
                 if success { "Ready" } else { "Edit rejected" },
                 reply.elapsed.as_secs_f64() * 1000.
             );
@@ -392,6 +429,7 @@ impl Editor {
                     d.committing = false;
                 }
             }
+            self.sync_bodies(&reply.op, success);
             self.sync_sketch();
             self.sketch_reply(&reply.op, success);
             if matches!(reply.op.as_str(), "undo" | "redo" | "new" | "open") {
@@ -413,6 +451,7 @@ impl Editor {
         let mut edits = Vec::new();
         let body = self.body().unwrap_or_else(|| {
             edits.push(json!({"op":"add_object","type":"PartDesign::Body","name":"Body"}));
+            self.body_ui.active = Some("Body".into());
             "Body".into()
         });
         edits.push(
@@ -455,6 +494,8 @@ impl Editor {
                 self.error = Some("Select an edge".into());
                 return;
             }
+            let body = body_of(&self.state, &selection.object).unwrap_or(body);
+            self.body_ui.active = Some(body.clone());
             json!({"name":name,"body":body,"source":selection.object,"edge":selection.subelement,"radius":2.})
         } else {
             let profile = self.sketch.clone().or_else(|| {
@@ -468,6 +509,8 @@ impl Editor {
                 self.error = Some("Choose a sketch in the feature list".into());
                 return;
             };
+            let body = body_of(&self.state, &profile).unwrap_or(body);
+            self.body_ui.active = Some(body.clone());
             json!({"name":name,"body":body,"profile":profile,"length":10.})
         };
         self.draft = Some(Draft {
@@ -493,13 +536,7 @@ impl Editor {
             return;
         };
         d.changed = None;
-        let edits = if d.id == "native.property" {
-            Ok(vec![
-                json!({"op":"set","object":d.parameters["object"],"property":d.parameters["property"],"value":d.parameters["value"]}),
-            ])
-        } else {
-            self.registry.build(&d.id, &d.parameters)
-        };
+        let edits = feature_edits(&self.registry, d);
         match edits {
             Ok(edits) => {
                 if d.deferred {
@@ -541,40 +578,53 @@ impl Editor {
         self.sketch_ui.tool = Draw::Select;
     }
     fn start_package(&mut self, id: &str) {
+        if id == "body.boolean" {
+            self.start_boolean(None);
+            return;
+        }
         let name = self.unique("Feature");
         let package = self.registry.get(id).unwrap();
         let mut parameters = serde_json::Map::new();
         for (key, p) in &package.parameters {
-            let value = p.default.clone().unwrap_or_else(|| match key.as_str() {
-                "name" => json!(name),
-                "body" => json!(self.body().unwrap_or_default()),
-                "profile" | "object" => json!(
-                    self.sketch
-                        .clone()
-                        .or(self.selected_object.clone())
-                        .unwrap_or_default()
-                ),
-                "source" => json!(
-                    self.viewport
-                        .selected
+            let value = p
+                .default
+                .clone()
+                .or_else(|| {
+                    p.choices
                         .as_ref()
-                        .map(|s| s.object.clone())
-                        .unwrap_or_default()
-                ),
-                "edge" => json!(
-                    self.viewport
-                        .selected
-                        .as_ref()
-                        .map(|s| s.subelement.clone())
-                        .unwrap_or_default()
-                ),
-                _ => match p.kind {
-                    ParameterType::Number => json!(10.),
-                    ParameterType::Integer => json!(0),
-                    ParameterType::Boolean => json!(false),
-                    _ => json!(""),
-                },
-            });
+                        .and_then(|choices| choices.first())
+                        .cloned()
+                })
+                .unwrap_or_else(|| match key.as_str() {
+                    "name" => json!(name),
+                    "body" => json!(self.body().unwrap_or_default()),
+                    "profile" | "object" => json!(
+                        self.sketch
+                            .clone()
+                            .or(self.selected_object.clone())
+                            .unwrap_or_default()
+                    ),
+                    "source" => json!(
+                        self.viewport
+                            .selected
+                            .as_ref()
+                            .map(|s| s.object.clone())
+                            .unwrap_or_default()
+                    ),
+                    "edge" => json!(
+                        self.viewport
+                            .selected
+                            .as_ref()
+                            .map(|s| s.subelement.clone())
+                            .unwrap_or_default()
+                    ),
+                    _ => match p.kind {
+                        ParameterType::Number => json!(10.),
+                        ParameterType::Integer => json!(0),
+                        ParameterType::Boolean => json!(false),
+                        _ => json!(""),
+                    },
+                });
             parameters.insert(key.clone(), value);
         }
         if package.parameters.contains_key("index") {
@@ -620,13 +670,7 @@ impl Editor {
                 self.draft = None;
                 return;
             }
-            let edits = if d.id == "native.property" {
-                Ok(vec![
-                    json!({"op":"set","object":d.parameters["object"],"property":d.parameters["property"],"value":d.parameters["value"]}),
-                ])
-            } else {
-                self.registry.build(&d.id, &d.parameters)
-            };
+            let edits = feature_edits(&self.registry, d);
             match edits {
                 Ok(edits) => {
                     d.committing = true;
@@ -746,6 +790,9 @@ impl Editor {
                         && self.pending_file.is_none()
                         && self.file_dialog.is_none(),
                     |ui| {
+                        if self.sketch_ui.session.is_none() {
+                            self.body_toolbar(ui);
+                        }
                         if self.sketch_ui.session.is_none() && ui.button("Sketch").clicked() {
                             self.new_sketch();
                         }
@@ -788,58 +835,7 @@ impl Editor {
     }
 
     fn panels(&mut self, ctx: &egui::Context) {
-        // The narrow feature list overlays the viewport and reads native objects.
-        egui::Window::new("Features")
-            .id(egui::Id::new("features"))
-            .default_pos([10., 82.])
-            .default_width(145.)
-            .resizable(false)
-            .collapsible(true)
-            .show(ctx, |ui| {
-                let rows: Vec<_> = objects(&self.state)
-                    .iter()
-                    .filter(|o| {
-                        o["type"] == "Sketcher::SketchObject"
-                            || o["type"] != "PartDesign::Body"
-                                && o["shape"]["solids"].as_u64().unwrap_or(0) > 0
-                    })
-                    .map(|o| {
-                        (
-                            o["name"].as_str().unwrap_or_default().to_owned(),
-                            o["label"].as_str().unwrap_or_default().to_owned(),
-                            o["type"] == "Sketcher::SketchObject",
-                        )
-                    })
-                    .collect();
-                for (name, label, sketch) in rows {
-                    let response =
-                        ui.selectable_label(self.selected_object.as_ref() == Some(&name), label);
-                    if response.clicked()
-                        && !self.busy
-                        && self.draft.is_none()
-                        && (self.sketch_ui.session.is_none()
-                            || self.sketch.as_deref() == Some(&name))
-                    {
-                        self.selected_object = Some(name.clone());
-                        if sketch {
-                            self.request_sketch(&name);
-                        }
-                    }
-                    if !sketch {
-                        if response.double_clicked()
-                            && !self.busy
-                            && self.draft.is_none()
-                            && self.sketch_ui.session.is_none()
-                        {
-                            self.edit_feature(&name);
-                        }
-                        response.on_hover_text("Double-click to edit its native dimension.");
-                    }
-                }
-                if self.state["objects"].as_array().is_some_and(Vec::is_empty) {
-                    ui.weak("No features");
-                }
-            });
+        self.body_tree(ctx);
         self.sketch_panel(ctx);
         if self.draft.is_some() {
             let mut commit = false;
@@ -849,8 +845,17 @@ impl Editor {
                 .resizable(false)
                 .collapsible(false)
                 .show(ctx, |ui| {
+                    let boolean = self.draft.as_ref().is_some_and(|d| {
+                        matches!(d.id.as_str(), "body.boolean" | "native.boolean")
+                    });
+                    if boolean {
+                        ui.label(self.draft.as_ref().unwrap().name.clone());
+                        self.boolean_fields(ui);
+                    }
                     let draft = self.draft.as_mut().unwrap();
-                    ui.label(&draft.name);
+                    if !boolean {
+                        ui.label(&draft.name);
+                    }
                     if draft.deferred {
                         ui.weak("Apply updates the model. Cancel keeps Redo.");
                     }
@@ -859,6 +864,7 @@ impl Editor {
                         .as_object()
                         .unwrap()
                         .keys()
+                        .filter(|_| !boolean)
                         .cloned()
                         .collect();
                     ui.add_enabled_ui(!self.busy, |ui| {
@@ -883,7 +889,34 @@ impl Editor {
                                 } else {
                                     &field
                                 });
-                                if let Some(mut value) = current.as_bool() {
+                                let choices = self
+                                    .registry
+                                    .get(&draft.id)
+                                    .and_then(|p| p.parameters.get(&field))
+                                    .and_then(|p| p.choices.as_ref());
+                                if let Some(choices) = choices {
+                                    egui::ComboBox::from_id_salt(("package_choice", &field))
+                                        .selected_text(
+                                            current
+                                                .as_str()
+                                                .map(str::to_owned)
+                                                .unwrap_or_else(|| current.to_string()),
+                                        )
+                                        .show_ui(ui, |ui| {
+                                            for value in choices {
+                                                changed |= ui
+                                                    .selectable_value(
+                                                        current,
+                                                        value.clone(),
+                                                        value
+                                                            .as_str()
+                                                            .map(str::to_owned)
+                                                            .unwrap_or_else(|| value.to_string()),
+                                                    )
+                                                    .changed();
+                                            }
+                                        });
+                                } else if let Some(mut value) = current.as_bool() {
                                     changed = ui.checkbox(&mut value, "").changed();
                                     if changed {
                                         *current = json!(value);
@@ -1059,7 +1092,7 @@ impl eframe::App for Editor {
                     ui.colored_label(Color32::from_rgb(225, 142, 138), error);
                 } else {
                     ui.weak(format!(
-                        "{}{} · {} · revision {}",
+                        "{}{} | {} | revision {}",
                         self.state["document"].as_str().unwrap_or("Part Studio"),
                         if self.dirty { " *" } else { "" },
                         self.status,
@@ -1067,7 +1100,7 @@ impl eframe::App for Editor {
                     ));
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.weak("RMB orbit · MMB pan · wheel zoom");
+                    ui.weak("RMB orbit | MMB pan | wheel zoom");
                 });
             });
         });

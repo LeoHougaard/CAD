@@ -85,6 +85,13 @@ struct FixtureDocument {
 }
 
 fn state(name: &str, doc: &FixtureDocument, events: &[String]) -> Value {
+    if name == "Multiple" {
+        return json!({"document":name,"revision":doc.revision,"fixture_edits":doc.edits,
+        "fixture_events":events,"objects":[
+            {"name":"BodyA","type":"PartDesign::Body","body_state":{"display_object":"ShapeA"}},
+            {"name":"BodyB","type":"PartDesign::Body","body_state":{"display_object":"ShapeB"}}
+        ]});
+    }
     json!({"document":name,"revision":doc.revision,"fixture_edits":doc.edits,
         "fixture_events":events,"objects":[{"name":"Shape","type":"Part::Box","shape":{"solids":1}}]})
 }
@@ -158,12 +165,21 @@ fn actor_fixture() {
                     Ok(json!({"document":document,"closed":true}))
                 }
                 "mesh" | "topology" => {
-                    if doc.display_failure == op {
+                    let second = request["object"] == "ShapeB";
+                    if doc.display_failure == op
+                        || second && doc.display_failure == "second_mesh" && op == "mesh"
+                    {
                         return Err(("display_error", "display failed after native commit"));
                     }
-                    let revision = doc.revision;
+                    let revision =
+                        doc.revision + u64::from(second && doc.display_failure == "stale_second");
+                    let object = if second && doc.display_failure == "wrong_object" {
+                        json!("ShapeA")
+                    } else {
+                        request["object"].clone()
+                    };
                     Ok(
-                        json!({"document":document,"object":"Shape","revision":revision,
+                        json!({"document":document,"object":object,"revision":revision,
                         "fixture_events":events,"open_documents":documents.keys().collect::<Vec<_>>()}),
                     )
                 }
@@ -201,6 +217,29 @@ fn accepted_transaction_survives_display_failure() {
 }
 
 #[test]
+fn multiple_body_display_requires_matching_identity_and_revision_for_every_object() {
+    let actor = Actor::new();
+    let initial = actor.call("new", json!({"name":"Multiple"}));
+    assert!(initial.accepted && initial.error.is_none());
+    assert_eq!(initial.scenes.len(), 2);
+    assert_eq!(initial.scenes[0].0["object"], "ShapeA");
+    assert_eq!(initial.scenes[1].0["object"], "ShapeB");
+    let mut state = initial.state;
+    for failure in ["second_mesh", "wrong_object", "stale_second"] {
+        let edited = actor.edit(&state, failure);
+        assert!(edited.accepted && edited.error.is_some());
+        assert!(
+            edited.scenes.is_empty(),
+            "A failed display must not publish only one of the bodies"
+        );
+        let continued = actor.edit(&edited.state, "");
+        assert!(continued.accepted && continued.error.is_none());
+        assert_eq!(continued.scenes.len(), 2);
+        state = continued.state;
+    }
+}
+
+#[test]
 fn failed_and_repeated_open_preserve_editable_document() {
     let actor = Actor::new();
     let first = actor.call("open", json!({"path":"Original.FCStd"}));
@@ -234,14 +273,17 @@ fn valid_replacements_close_old_document_after_acceptance() {
     let replacement = actor.call("new", json!({"name":"Replacement"}));
     assert!(replacement.accepted && replacement.error.is_none());
     assert_eq!(
-        replacement.mesh["fixture_events"],
+        replacement.scenes[0].0["fixture_events"],
         json!(["new:Original", "new:Replacement", "close:Original"])
     );
-    assert_eq!(replacement.mesh["open_documents"], json!(["Replacement"]));
+    assert_eq!(
+        replacement.scenes[0].0["open_documents"],
+        json!(["Replacement"])
+    );
     let opened = actor.call("open", json!({"path":"Saved.FCStd"}));
     assert!(opened.accepted && opened.error.is_none());
     assert_eq!(
-        opened.mesh["fixture_events"],
+        opened.scenes[0].0["fixture_events"],
         json!([
             "new:Original",
             "new:Replacement",
@@ -250,6 +292,6 @@ fn valid_replacements_close_old_document_after_acceptance() {
             "close:Replacement"
         ])
     );
-    assert_eq!(opened.mesh["open_documents"], json!(["Saved"]));
+    assert_eq!(opened.scenes[0].0["open_documents"], json!(["Saved"]));
     assert!(actor.edit(&opened.state, "").accepted);
 }
