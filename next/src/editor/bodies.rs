@@ -466,19 +466,7 @@ impl Editor {
                         for body in &all {
                             let name = body["name"].as_str().unwrap_or_default();
                             self.feature_row(ui, body);
-                            let rows: Vec<Value> = objects(&self.state)
-                                .iter()
-                                .filter(|object| {
-                                    object["name"] != name
-                                        && body_of(
-                                            &self.state,
-                                            object["name"].as_str().unwrap_or_default(),
-                                        )
-                                        .as_deref()
-                                            == Some(name)
-                                })
-                                .cloned()
-                                .collect();
+                            let rows = super::history::body_rows(&self.state, name);
                             ui.indent(name, |ui| self.tree_rows(ui, &rows, name));
                         }
                         let unowned: Vec<Value> = objects(&self.state)
@@ -501,12 +489,32 @@ impl Editor {
             });
     }
     fn tree_rows(&mut self, ui: &mut egui::Ui, rows: &[Value], group: &str) {
-        for object in rows.iter().filter(|object| !reference_object(object)) {
-            self.feature_row(ui, object);
+        // Native Group members are history rows, including datum/binder objects.
+        // Only additional owned references belong in the collapsed section.
+        let members: std::collections::BTreeSet<&str> = objects(&self.state)
+            .iter()
+            .find(|object| object["name"] == group && object["type"] == "PartDesign::Body")
+            .and_then(|body| body["properties"]["Group"].as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|member| member["link"].as_str())
+            .collect();
+        let collapsed: Vec<bool> = rows
+            .iter()
+            .map(|object| {
+                reference_object(object)
+                    && !members.contains(object["name"].as_str().unwrap_or_default())
+            })
+            .collect();
+        for (object, collapsed) in rows.iter().zip(&collapsed) {
+            if !collapsed {
+                self.feature_row(ui, object);
+            }
         }
         let references: Vec<_> = rows
             .iter()
-            .filter(|object| reference_object(object))
+            .zip(collapsed)
+            .filter_map(|(object, collapsed)| collapsed.then_some(object))
             .collect();
         if !references.is_empty() {
             egui::CollapsingHeader::new("References")
@@ -534,6 +542,13 @@ impl Editor {
         } else {
             label(object).to_owned()
         };
+        let tip = !is_body
+            && body_of(&self.state, name).is_some_and(|body| {
+                objects(&self.state)
+                    .iter()
+                    .any(|o| o["name"] == body && o["body_state"]["tip"] == name)
+            });
+        let text = if tip { format!("{text} | tip") } else { text };
         let text = if is_body {
             egui::RichText::new(text).strong()
         } else {
@@ -583,6 +598,23 @@ impl Editor {
                 }
                 if object["type"] == "PartDesign::Boolean" && ui.button("Edit Boolean").clicked() {
                     self.start_boolean(Some(name));
+                    ui.close();
+                }
+                if is_body && ui.button("Roll back to start").clicked() {
+                    self.set_body_tip(name, None);
+                    ui.close();
+                }
+                if object["history_flags"]["can_tip"] == true && ui.button("Set tip here").clicked()
+                {
+                    if let Some(body) = body_of(&self.state, name) {
+                        self.set_body_tip(&body, Some(name));
+                    }
+                    ui.close();
+                }
+                if object["history_flags"]["can_reorder"] == true
+                    && ui.button("Reorder...").clicked()
+                {
+                    self.start_reorder(name);
                     ui.close();
                 }
                 if object["properties"]["Visibility"].is_boolean() {

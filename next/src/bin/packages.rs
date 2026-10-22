@@ -21,6 +21,13 @@ struct SeedRequest {
     selections: Vec<(String, String)>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HistoryRequest {
+    state: Value,
+    request: Value,
+}
+
 fn read_json(argument: String) -> Result<Value, Box<dyn std::error::Error>> {
     let source = if argument == "-" {
         let mut source = String::new();
@@ -36,6 +43,7 @@ enum Mode {
     Catalog,
     Seed(Value),
     Properties(Value),
+    History(Value),
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -61,7 +69,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 package_options = true;
                 parameters = serde_json::from_str(&args.next().ok_or("Missing parameters")?)?
             }
-            "--feature-catalog" | "--feature-seed" | "--native-properties" => {
+            "--feature-catalog" | "--feature-seed" | "--native-properties" | "--native-history" => {
                 if mode.is_some() {
                     return Err("Choose one feature compiler mode".into());
                 }
@@ -71,6 +79,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         args.next()
                             .ok_or("--feature-seed requires JSON or - for stdin")?,
                     )?),
+                    "--native-history" => Mode::History(read_json(
+                        args.next()
+                            .ok_or("--native-history requires JSON or - for stdin")?,
+                    )?),
                     _ => Mode::Properties(read_json(
                         args.next()
                             .ok_or("--native-properties requires JSON or - for stdin")?,
@@ -79,7 +91,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             "--help" | "-h" => {
                 println!(
-                    "cad-next-packages [--package-dir DIR] [--id ID --parameters JSON]\nLists local packages, or builds native edits for the chosen package.\n--feature-catalog lists native feature definitions.\n--feature-seed JSON suggests native properties from {{type,state,name,body?,selected_object?,selections?}}.\n--native-properties JSON builds the same native property edits as the editor.\nUse - instead of JSON to read a request from stdin. These commands do not mutate documents."
+                    "cad-next-packages [--package-dir DIR] [--id ID --parameters JSON]\nLists local packages, or builds native edits for the chosen package.\n--feature-catalog lists native feature definitions.\n--feature-seed JSON suggests native properties from {{type,state,name,body?,selected_object?,selections?}}.\n--native-properties JSON builds the same native property edits as the editor.\n--native-history JSON builds Body Tip/reorder edits from {{state,request}}.\nUse - instead of JSON to read a request from stdin. These commands do not mutate documents."
                 );
                 return Ok(());
             }
@@ -91,6 +103,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             return Err("Feature compiler modes cannot be mixed with package options".into());
         }
         let result = match mode {
+            Mode::History(request) => {
+                let request: HistoryRequest = serde_json::from_value(request)?;
+                serde_json::to_value(cad_next::history_commands::build(
+                    &request.state,
+                    &request.request,
+                )?)?
+            }
             Mode::Catalog => serde_json::to_value(feature_commands::definitions())?,
             Mode::Properties(parameters) => {
                 serde_json::to_value(property_commands::build(&parameters)?)?

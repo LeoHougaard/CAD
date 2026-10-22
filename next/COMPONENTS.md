@@ -24,7 +24,7 @@ Third-party addons and unrelated FreeCAD workbenches have no blanket parity comm
 
 Functional gates remain for complete extrude/pocket termination and directions;
 all revolve/groove, loft, sweep, pattern, shell/thickness and dress-up workflows;
-complete native sketch editing/reference tools; history rollback/reorder;
+complete native sketch editing/reference tools; broader history/suppression cases;
 assemblies and executable extensions. The Rust feature catalog and typed native property forms expose these families;
 a native type appearing in an allowlist or form does not establish a complete
 end-to-end workflow. See [UI-COVERAGE.md](UI-COVERAGE.md).

@@ -91,6 +91,14 @@ independent native saved-file checks verify body creation, previews, cancellatio
 multiple tools, history, reopening and consumed-tool edits; broader coverage
 remains in the [verification record](VERIFICATION.md).
 
+The feature tree follows native Body history order, including datum and binder
+members. Right-click a solid feature for Set tip here, or its Body for Roll back
+to start. Successors remain in the document. Reorder opens an Apply-only task;
+Before/After and its target use native Body insertion, with an optional final Tip.
+Cancel preserves redo and invalid dependencies restore the previous history.
+Reordering a MultiTransform child row does not reorder the parent's transformation
+steps; use the MultiTransform task for that. Suppression remains incomplete.
+
 Right-drag orbits, middle-drag pans, and the wheel zooms. F fits the model.
 View provides seven standard directions, shaded/edge/wireframe display, native
 face/edge/vertex filters and Show/Hide. The tree includes references and guarded

@@ -3,6 +3,8 @@
 The Rust host starts a configured executable and argument list with the worker
 script as an argument. Keep that process alive between requests. One UTF-8 JSON
 object per line goes in and one response comes out. Diagnostics use stderr.
+The native request stream explicitly uses UTF-8 independently of the operating
+system locale, including portable Windows Python and Unicode file paths.
 
 Requests contain `version: 1`, a caller-chosen integer `id`, `op`, and operation
 parameters. Responses repeat version and id, contain `ok`, and contain either
@@ -337,6 +339,44 @@ Transformations link, then unlinks/deletes retired children and restores the
 captured Body Tip/visibility. Child Originals/BaseFeature links belong to the
 parent operation. Preview, Commit, Cancel and Undo retain one native transaction
 owner; child steps do not form an independent Rust history.
+
+## Native Body history
+
+`body_tip` and `body_reorder` are dedicated guarded transaction edits. They are
+not accepted in previews or sketch sessions. A preview containing either edit
+is rejected before replacing an existing candidate. The editor's reorder form
+compiles locally until Apply; opening or canceling it preserves native redo.
+
+| `op` | Fields and native behavior |
+| --- | --- |
+| `body_tip` | `object` names a native Body; required `tip` names one of its native PartDesign feature members, or is null to roll back to the start. Successors remain in native history. Native recomputation rejects ineligible or empty feature Tips. |
+| `body_reorder` | `object` names a movable Body member; required `target` names another member of the same Body or is null; required boolean `after` selects insertion side. Native null-target semantics are `after:true` for the beginning and `after:false` for the end. Optional `tip` explicitly chooses the final Tip, including null. Omitting it retains the native remove/insert result. |
+
+Reordering calls native Body removal and insertion, including BaseFeature
+rewiring; assigning a reordered Group array is not equivalent. Native dependency
+checks, recomputation, transaction rollback and persistent references remain
+authoritative. Failed dependencies or invalid final shapes restore the previous
+history. Setting a Tip also applies native sibling feature visibility behavior;
+sketch and datum visibility is retained. A null Body Tip can validly have an
+empty Body Shape while retaining its complete Group.
+
+Shape summaries expose raw native statistics. Volume is meaningful for solids;
+unbounded reference planes can return unstable kernel pseudo-volumes. Compare
+reference geometry through its native properties, placement, topology and
+appropriate measures rather than treating a plane as a solid.
+
+Object snapshots include native-derived
+`history_flags: {can_tip, can_reorder, transform_step}`. These describe current
+native eligibility and membership, not another feature graph. The Rust tree
+follows native Body Group order. Owned references outside that list are retained
+after its ordered members.
+
+`cad-next-packages --native-history FILE` reads one JSON object with the complete
+native `state` snapshot and a `request` containing one of the edits above. It
+returns an edits array. Use the same captured state for an open task and submit
+its result with a revision guard. Compilation changes no model; native validation
+still decides whether the candidate history is valid. Suppression remains a
+separate incomplete workflow, including native placement persistence limits.
 
 ## Native sketch task edits
 

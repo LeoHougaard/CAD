@@ -322,6 +322,12 @@ impl Editor {
                             .unwrap_or_else(|| schema["expressions"][&property].clone());
                         let mut expression_changed = false;
                         let mut value_changed = false;
+                        let edge_base = (type_id == "Part::PropertyFilletEdges").then(|| {
+                            draft.parameters["properties"]
+                                .get("Base")
+                                .unwrap_or(&schema["properties"]["Base"])
+                                .clone()
+                        });
                         ui.push_id(&property, |ui| {
                             let title = ui.label(&property);
                             title.on_hover_text(format!(
@@ -336,17 +342,29 @@ impl Editor {
                             }
                             ui.horizontal(|ui| {
                                 ui.add_enabled_ui(!expression.is_string(), |ui| {
-                                    value_changed = property_widget(
-                                        ui,
-                                        &property,
-                                        type_id,
-                                        metadata,
-                                        &mut value,
-                                        &mut self.property_ui.buffers,
-                                        native_objects,
-                                        &object_name,
-                                        &selected,
-                                    );
+                                    if let Some(base) = &edge_base {
+                                        let before = value.clone();
+                                        fillet_edges_widget(
+                                            ui,
+                                            &mut value,
+                                            &selected,
+                                            base,
+                                            native_objects,
+                                        );
+                                        value_changed = value != before;
+                                    } else {
+                                        value_changed = property_widget(
+                                            ui,
+                                            &property,
+                                            type_id,
+                                            metadata,
+                                            &mut value,
+                                            &mut self.property_ui.buffers,
+                                            native_objects,
+                                            &object_name,
+                                            &selected,
+                                        );
+                                    }
                                 });
                                 if expression_capable(type_id) {
                                     let mut active = expression.is_string();
@@ -489,7 +507,12 @@ pub(super) fn property_widget(
     let before = value.clone();
     let kind = type_id.strip_prefix("App::Property").unwrap_or_default();
     if type_id == "Part::PropertyFilletEdges" {
-        fillet_edges_widget(ui, value, selected);
+        let base = objects
+            .iter()
+            .find(|object| object["name"] == own)
+            .map(|object| &object["properties"]["Base"])
+            .unwrap_or(&Value::Null);
+        fillet_edges_widget(ui, value, selected, base, objects);
     } else if kind == "Map" {
         map_widget(ui, value);
     } else if kind == "Color" {
@@ -814,7 +837,58 @@ fn map_widget(ui: &mut egui::Ui, value: &mut Value) {
     }
 }
 
-fn fillet_edges_widget(ui: &mut egui::Ui, value: &mut Value, selected: &[(String, String)]) {
+fn selected_fillet_edges(
+    base: &Value,
+    objects: &[Value],
+    selected: &[(String, String)],
+) -> Result<Vec<Value>, String> {
+    let source = base["link"]
+        .as_str()
+        .filter(|name| !name.is_empty())
+        .ok_or("Choose a Base before selecting its edges")?;
+    let body_tip = objects
+        .iter()
+        .find(|object| object["name"] == source && object["type"] == "PartDesign::Body")
+        .and_then(|body| body["body_state"]["tip"].as_str());
+    let mut edges = Vec::new();
+    for (owner, subelement) in selected {
+        let Some(number) = subelement.strip_prefix("Edge") else {
+            continue;
+        };
+        let index = number
+            .parse::<i32>()
+            .ok()
+            .filter(|index| *index > 0)
+            .ok_or("Select native edges with positive indices")?;
+        // A Body is displayed through its current native Tip. Its historical
+        // features and unrelated containers do not share this edge identity.
+        let displayed_tip = body_tip == Some(owner.as_str())
+            && objects
+                .iter()
+                .any(|object| object["name"] == *owner && object["body"] == source);
+        if owner != source && !displayed_tip {
+            return Err(format!(
+                "Select edges of Base {source}; {owner}.{subelement} belongs to another object"
+            ));
+        }
+        let edge = json!([index, 1., 1.]);
+        if !edges.contains(&edge) {
+            edges.push(edge);
+        }
+    }
+    if edges.is_empty() {
+        return Err(format!("Select native edges of Base {source}"));
+    }
+    Ok(edges)
+}
+
+fn fillet_edges_widget(
+    ui: &mut egui::Ui,
+    value: &mut Value,
+    selected: &[(String, String)],
+    base: &Value,
+    objects: &[Value],
+) {
     let mut edges = value.as_array().cloned().unwrap_or_default();
     let mut changed = false;
     let mut remove = None;
@@ -855,25 +929,110 @@ fn fillet_edges_widget(ui: &mut egui::Ui, value: &mut Value, selected: &[(String
             edges.push(json!([1, 1., 1.]));
             changed = true;
         }
+        let picked = selected_fillet_edges(base, objects, selected);
+        if selected.iter().any(|(_, name)| name.starts_with("Edge"))
+            && let Err(error) = &picked
+        {
+            ui.colored_label(egui::Color32::from_rgb(225, 142, 138), error);
+        }
         if ui
-            .add_enabled(
-                !selected.is_empty(),
-                egui::Button::new("Use selected edges"),
-            )
+            .add_enabled(picked.is_ok(), egui::Button::new("Use selected edges"))
             .clicked()
         {
-            edges = selected
-                .iter()
-                .filter_map(|(_, name)| {
-                    name.strip_prefix("Edge")
-                        .and_then(|s| s.parse::<u64>().ok())
-                })
-                .map(|n| json!([n, 1., 1.]))
-                .collect();
+            edges = picked.unwrap();
             changed = true;
         }
     });
     if changed {
         *value = json!(edges);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn picks(values: &[(&str, &str)]) -> Vec<(String, String)> {
+        values
+            .iter()
+            .map(|(object, edge)| ((*object).into(), (*edge).into()))
+            .collect()
+    }
+
+    #[test]
+    fn fillet_edge_picks_reject_foreign_owners_even_when_edge_numbers_match() {
+        let base = json!({"link":"Base"});
+        let selected = picks(&[("Base", "Edge4"), ("Other", "Edge4")]);
+        let error = selected_fillet_edges(&base, &[], &selected).unwrap_err();
+        assert!(error.contains("Base") && error.contains("Other.Edge4"));
+        assert_eq!(base, json!({"link":"Base"}));
+        assert_eq!(
+            selected_fillet_edges(
+                &base,
+                &[],
+                &picks(&[
+                    ("Base", "Edge4"),
+                    ("Base", "Face1"),
+                    ("Base", "Edge4"),
+                    ("Base", "Edge2")
+                ])
+            )
+            .unwrap(),
+            json!([[4, 1., 1.], [2, 1., 1.]])
+                .as_array()
+                .unwrap()
+                .clone()
+        );
+        let linked = json!({"link":"Other","subelements":[]});
+        assert!(selected_fillet_edges(&linked, &[], &picks(&[("Other", "Edge4")])).is_ok());
+        for invalid in [Value::Null, json!("Base"), json!({"link":""})] {
+            assert!(selected_fillet_edges(&invalid, &[], &selected).is_err());
+        }
+    }
+
+    #[test]
+    fn body_base_accepts_only_its_current_native_display_tip() {
+        let objects = vec![
+            json!({"name":"Body","type":"PartDesign::Body","body_state":{"tip":"Finish"}}),
+            json!({"name":"Finish","body":"Body"}),
+            json!({"name":"OldPad","body":"Body"}),
+            json!({"name":"OtherPad","body":"OtherBody"}),
+            json!({"name":"Container","type":"App::Part","body_state":{"tip":"Finish"}}),
+        ];
+        let base = json!({"link":"Body"});
+        assert!(selected_fillet_edges(&base, &objects, &picks(&[("Finish", "Edge2")])).is_ok());
+        assert!(selected_fillet_edges(&base, &objects, &picks(&[("Body", "Edge2")])).is_ok());
+        for owner in ["OldPad", "OtherPad"] {
+            assert!(selected_fillet_edges(&base, &objects, &picks(&[(owner, "Edge2")])).is_err());
+        }
+        assert!(
+            selected_fillet_edges(
+                &json!({"link":"Container"}),
+                &objects,
+                &picks(&[("Finish", "Edge2")])
+            )
+            .is_err()
+        );
+        for edge in ["Edge0", "Edge-1", "Edge4294967296", "Face1"] {
+            assert!(selected_fillet_edges(&base, &objects, &picks(&[("Body", edge)])).is_err());
+        }
+    }
+
+    #[test]
+    fn mismatched_edge_widget_shows_error_and_preserves_native_values() {
+        let context = egui::Context::default();
+        let base = json!({"link":"Base"});
+        let original = json!([[7, 2.5, 3.]]);
+        let mut value = original.clone();
+        let selected = picks(&[("Other", "Edge7")]);
+        let output = context.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                fillet_edges_widget(ui, &mut value, &selected, &base, &[]);
+            });
+        });
+        assert_eq!(value, original);
+        assert!(output.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text.contains("Other.Edge7 belongs to another object"))
+        }));
     }
 }

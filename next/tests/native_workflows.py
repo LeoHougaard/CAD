@@ -358,6 +358,81 @@ def display_normals_workflow(session):
                 coarse_edge_points=coarse_points, fine_edge_points=fine_points)
 
 
+def unicode_document_workflow(session, out):
+    # Session writes escaped JSON, but the production Rust host parses and
+    # serializes it as actual UTF-8 before the native Python request stream.
+    label = "L\u00e9o \u00f8 \u03bc \u5de5\u5177 \U0001f527"
+    folder = out / "L\u00e9o \u00f8 \u5de5\u5177"
+    folder.mkdir(exist_ok=True)
+    path = folder / "pi\u00e8ce \U0001f527.FCStd"
+    doc = session.call("new", name="UnicodeDocument")["document"]
+    transaction(session, doc, "Create box", [add("Part::Box", "Box"),
+                set_value("Box", "Length", 2), set_value("Box", "Width", 3),
+                set_value("Box", "Height", 4)])
+    state = transaction(session, doc, label, [set_value("Box", "Label", label)])
+    assert objects(state)["Box"]["properties"]["Label"] == label
+    state = session.call("undo", document=doc)
+    assert objects(state)["Box"]["properties"]["Label"] == "Box"
+    state = session.call("redo", document=doc)
+    assert objects(state)["Box"]["properties"]["Label"] == label
+    saved = session.call("save", document=doc, path=str(path))
+    assert Path(saved["path"]) == path and path.is_file()
+    session.call("close", document=doc)
+    state = session.call("open", path=str(path))
+    doc = state["document"]
+    assert objects(state)["Box"]["properties"]["Label"] == label
+    solid(state, "Box", 24)
+    state = transaction(session, doc, "Edit reopened Unicode document", [set_value("Box", "Width", 6)])
+    assert objects(state)["Box"]["properties"]["Label"] == label
+    solid(state, "Box", 48)
+    session.call("close", document=doc)
+    return dict(utf8_label_undo_redo=True, unicode_path_reopen=True,
+                reopened_parametric_edit_volume=48)
+
+
+def canonical_expression_workflow(session, out):
+    doc = session.call("new", name="CanonicalExpressions")["document"]
+    state = transaction(session, doc, "Native attached sketch", [add("PartDesign::Body", "Body"),
+        add("Sketcher::SketchObject", "Sketch", "Body"),
+        set_value("Sketch", "AttachmentSupport", [link("XY_Plane", "")]),
+        set_value("Sketch", "MapMode", "FlatFace"),
+        dict(op="geometry", object="Sketch", kind="line", start=[0, 0, 0], end=[4, 3, 0]),
+        dict(op="expression", object="Sketch", property="AttachmentOffset.Base.z", expression="2 mm")])
+    canonical = ".AttachmentOffset.Base.z"
+    assert objects(state)["Sketch"]["expressions"][canonical] == "2 mm"
+    state = transaction(session, doc, "Edit canonical native expression", [
+        dict(op="expression", object="Sketch", property=canonical, expression="5 mm")])
+    near(objects(state)["Sketch"]["properties"]["Placement"]["position"][2], 5)
+    state = session.call("undo", document=doc)
+    near(objects(state)["Sketch"]["properties"]["Placement"]["position"][2], 2)
+    state = session.call("redo", document=doc)
+    assert objects(state)["Sketch"]["expressions"][canonical] == "5 mm"
+    path = out / "canonical-expression.FCStd"
+    session.call("save", document=doc, path=str(path))
+    session.call("close", document=doc)
+    state = session.call("open", path=str(path))
+    doc = state["document"]
+    assert objects(state)["Sketch"]["expressions"][canonical] == "5 mm"
+    state = transaction(session, doc, "Clear reopened canonical expression", [
+        dict(op="expression", object="Sketch", property=canonical, expression=None)])
+    assert not objects(state)["Sketch"]["expressions"]
+    state = transaction(session, doc, "Reposition after clearing expression", [
+        set_value("Sketch", "AttachmentOffset", dict(position=[0, 0, 7], rotation=[0, 0, 0, 1]))])
+    near(objects(state)["Sketch"]["properties"]["Placement"]["position"][2], 7)
+    # A native self-relative path must not bypass computed/internal permissions,
+    # nor admit an empty root through repeated dots.
+    for prop, code in [(".Shape", "read_only_property"), ("._ElementMapVersion", "read_only_property"),
+                       ("..AttachmentOffset.Base.z", "unsupported_property")]:
+        session.call("transaction", document=doc, label="Keep native expression permissions", expect_error=code,
+            edits=[dict(op="expression", object="Sketch", property=prop, expression="1")])
+        state = session.call("inspect", document=doc)
+        assert state["available"] and not objects(state)["Sketch"]["expressions"]
+        near(objects(state)["Sketch"]["properties"]["Placement"]["position"][2], 7)
+    session.call("close", document=doc)
+    return dict(native_canonical_path=canonical, set_clear_undo_redo_reopen=True,
+                underlying_readonly_guards=True, final_native_offset=7)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", required=True, type=Path)
@@ -374,6 +449,8 @@ def main():
                       attachment=attachment_workflow(session, args.output.resolve()),
                       fillets=fillet_workflow(session, args.output.resolve()),
                       display_normals=display_normals_workflow(session),
+                      unicode_document=unicode_document_workflow(session, args.output.resolve()),
+                      canonical_expressions=canonical_expression_workflow(session, args.output.resolve()),
                       startup_ms=session.startup_ms, operations=session.timings)
         (args.output / "report.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
         print(json.dumps({key: value for key, value in result.items() if key not in {"capabilities", "operations"}}, indent=2))

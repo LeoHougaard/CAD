@@ -5,6 +5,7 @@ mod constraints;
 mod drawing;
 mod exchange;
 mod file_browser;
+mod history;
 mod properties;
 mod sketch;
 mod sketch_tools;
@@ -187,7 +188,9 @@ fn model_thread(
 }
 
 fn feature_edits(registry: &Registry, draft: &Draft) -> Result<Vec<Value>, String> {
-    if draft.id == "native.properties" {
+    if draft.id == "native.history" {
+        crate::history_commands::build(&draft.parameters["state"], &draft.parameters["request"])
+    } else if draft.id == "native.properties" {
         crate::property_commands::build(&draft.parameters)
     } else if draft.id == "native.property" {
         Ok(vec![
@@ -479,7 +482,11 @@ impl Editor {
                 if matches!(reply.op.as_str(), "preview_commit" | "preview_cancel")
                     && self.draft.is_some()
                 {
-                    self.draft = None;
+                    if self.state["preview"].is_null() {
+                        self.draft = None;
+                    } else if let Some(draft) = &mut self.draft {
+                        draft.valid = false;
+                    }
                 }
             }
             if reply.op == "transaction" && self.draft.as_ref().is_some_and(|d| d.committing) {
@@ -739,7 +746,8 @@ impl Editor {
                     && self.pending_file.is_none()
                     && self.file_dialog.is_none()
                     && !self.overwrite
-                    && !self.exchange_ui.active();
+                    && !self.exchange_ui.active()
+                    && !self.file_browser.active();
                 ui.add_enabled_ui(idle, |ui| {
                     if self.sketch_ui.session.is_none() && ui.button("New").clicked() {
                         self.request_file(FileAction::New);
@@ -793,7 +801,8 @@ impl Editor {
                         && self.draft.is_none()
                         && self.pending_file.is_none()
                         && self.file_dialog.is_none()
-                        && !self.exchange_ui.active(),
+                        && !self.exchange_ui.active()
+                        && !self.file_browser.active(),
                     |ui| {
                         if self.sketch_ui.session.is_none() {
                             self.body_toolbar(ui);
@@ -868,8 +877,15 @@ impl Editor {
                             .max_height((ctx.content_rect().height() - 220.).clamp(150., 650.))
                             .show(ui, |ui| self.native_property_fields(ui));
                     }
+                    let history = self
+                        .draft
+                        .as_ref()
+                        .is_some_and(|d| d.id == "native.history");
+                    if history {
+                        self.history_fields(ui);
+                    }
                     let draft = self.draft.as_mut().unwrap();
-                    if !boolean && !native {
+                    if !boolean && !native && !history {
                         ui.label(&draft.name);
                     }
                     if draft.deferred {
@@ -880,7 +896,7 @@ impl Editor {
                         .as_object()
                         .unwrap()
                         .keys()
-                        .filter(|_| !boolean && !native)
+                        .filter(|_| !boolean && !native && !history)
                         .cloned()
                         .collect();
                     ui.add_enabled_ui(!self.busy, |ui| {

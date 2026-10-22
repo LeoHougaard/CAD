@@ -1,6 +1,6 @@
 # Editor verification
 
-Verified October 20, 2026. The Rust editor now includes interactive native
+Verification record, October 2026. The Rust editor now includes interactive native
 sketch editing. This record does not establish complete Part Studio, FreeCAD
 sketch-tool or Onshape parity, or a replacement release for the earlier Windows
 application.
@@ -124,15 +124,18 @@ running. Their executables and original documents were not replaced.
 
 Windows x64 and Pixel Linux ARM64 have native workflow results recorded below.
 CI repeats the Rust checks, including the optional desktop
-target, and native workflows on Windows and Linux x64. The verified sketch-task
-and browser batch has 110 Rust tests: 108 passed and two ignored. Formatting,
-strict all-target Clippy and Windows desktop/all-binary builds pass. All eleven
-native suites listed below pass on Windows x64 and Pixel Linux ARM64.
+target, and native workflows on Windows and Linux x64. The history/reference
+batch has 119 Rust tests: 117 passed and two ignored. Formatting, strict
+all-target Clippy and Windows desktop/all-binary builds pass. Twelve native
+suites pass on Windows x64 and Pixel Linux ARM64. On Pixel, eleven passed in
+the combined run; history passed its focused rerun after the nonsolid-volume
+comparison correction described below.
 
 - `native_workflows.py`: sketches, construction, dragging, arcs, native units
   and expressions, attachment remapping, transformed Bodies, save/reopen,
   fillets, failures and native undo/redo. Display checks cover outward and inward
   oriented normals, sphere poles, placement transforms and curve detail.
+  Unicode labels, paths, Undo/Redo and continued edits are also covered.
 - `preview_workflows.py`: candidate replacement from baseline, revision and
   owner rejection, worker-wide lease, failed candidate recovery, one-step undo,
   cancel and save/reopen. Native redo and rollback limitations are explicit in
@@ -154,6 +157,9 @@ native suites listed below pass on Windows x64 and Pixel Linux ARM64.
   preview replacement/cancel, failures, Undo/Redo, parent edits and reopening.
   Raw Group placement and multiple-tool results are compared against a separate
   pinned FreeCAD reference rather than normalized to a different behavior.
+- `history_workflows.py`: native Body Tip/null Tip and reordered Group/BaseFeature
+  chains, visibility, moved Bodies, reference members and MultiTransform children;
+  failed dependencies, guarded writes, Undo/Redo and save/reopen/edit.
 - `sketch_operations_workflows.py`: shared Rust task compiler, native corner
   fillet/chamfer, two-curve fillet, split/extension, Carbon Copy expressions and
   spline degree/knots/poles/weights. Checks include analytical solid volumes,
@@ -185,7 +191,7 @@ in [README.md](README.md).
 ## Remaining gates
 
 The interactive tools do not yet cover all FreeCAD sketch tools. Advanced task workflows, assemblies,
-feature-tree rollback/reorder and executable plugins remain open. Broader
+broader history management and executable plugins remain open. Broader
 constraint, selection, trim, dragging and attachment cases need GUI checks.
 Feature previews defer recomputation until Apply when existing native redo would
 otherwise be lost; a live preview is unavailable in that case, and Cancel
@@ -397,3 +403,62 @@ millimeter box used 96348 KiB RSS, the Rust host 2708 KiB and the native worker
 99388 KiB. All three measured zero CPU during five idle seconds with the browser
 closed and no swap. This is another small-part observation, not a moderate-part
 resource gate or a comparison against a different document/client size.
+
+
+## Native Body history and reference selection
+
+`history_workflows.py` uses the production Rust history compiler for Tip rollback,
+null Tip, resume and native feature insertion. It checks the native Group and
+BaseFeature chain, visibility, moved Bodies, insertion while rolled back, Undo/Redo,
+preview/lease/revision rejection and save/reopen/edit. Reordering a construction
+sketch or datum preserves the solid chain. Reordering a MultiTransform child in
+Body history preserves the parent's separate Transformations order. Native
+attachment dependencies and expression cycles reject atomically.
+History shape comparisons retain solid volumes and all shapes' topology, area,
+bounds and validity. Native unbounded origin planes can return unstable kernel
+pseudo-volumes after Redo on ARM64; volume is compared only for solids. The raw
+snapshot is unchanged, and failure diagnostics now identify the full field path.
+
+Part Fillet/Chamfer's Use selected edges validates each selected object's native
+identity against the effective Base before accepting EdgeN. A foreign object's
+matching edge number cannot silently alter the current Base. Native Body/current
+Tip aliases are accepted; 96 matched native comparisons across both operations,
+all 24 tested edges and two placement frames retained identical geometry. Keeping
+the Body as Base preserves its world placement. Rust checks cover error rendering,
+unchanged inputs on rejection and explicit Base overrides.
+
+The worker reads NDJSON requests as UTF-8 independently of Windows' locale. A
+production-host native case checks Unicode labels through Undo/Redo and saves,
+reopens and continues parametric editing in a path containing accented letters,
+non-Latin characters and an emoji.
+
+Native canonical component expression paths, including the leading self-relative
+dot in `.AttachmentOffset.Base.z`, support Set/Clear, Undo/Redo and save/reopen.
+The underlying property permission check still rejects computed/internal
+properties and malformed empty roots. The native Windows workflow verifies
+these cases alongside Unicode round trips.
+
+Fourteen real Pixel history cases were saved separately and reopened by an
+independent native worker. They cover rollback to Base, null Tip, resume,
+Undo/Redo, native reordering with an explicit final Tip, cancellation preserving
+Redo, moved Bodies, construction-sketch/datum ordering, and atomic rejection of
+a feature move that would break an attached dependent. Group order, BaseFeature
+links, visibility, Tip, attachment, placement and solid geometry matched the
+native expected states. Null Tip removed the previous solid from the viewport.
+
+Four saved Part Fillet/Chamfer GUI cases passed independent native checks.
+Picking `Right.Edge5` while Base was Left displayed an error and disabled Use
+selected edges, preserving the existing Base, edge index and radii. Cancel
+restored both original boxes. A 1 mm fillet on Left.Edge5 produced volume
+997.8539816339744 cubic millimeters; explicitly changing Base to Right accepted
+Right.Edge5 and produced the same volume. A 1 mm Right.Edge5 chamfer produced
+995 cubic millimeters. Source-box geometry and native edge identities were
+preserved. These cases complement the matched Body/Tip alias checks above;
+they do not establish every history or edge-selection combination.
+
+With the history task and browser closed, the saved two-box/Part Chamfer GUI
+case used 97136 KiB RSS for the debug Rust editor, 2700 KiB for its Rust host
+and 121108 KiB for the native worker. All measured zero CPU and swap during
+five idle seconds. This small-part observation uses a different model from the
+earlier browser baseline and does not establish a performance comparison.
+The final Pixel native rerun also passed the canonical expression-path cases.

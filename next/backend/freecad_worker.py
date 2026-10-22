@@ -8,6 +8,9 @@ import re
 import sys
 import traceback
 
+# The pipe protocol is UTF-8 even when portable Windows Python uses cp1252.
+sys.stdin.reconfigure(encoding="utf-8")
+
 # FreeCAD and its extensions may write directly to fd 1. Keep only our dedicated
 # descriptor for responses; redirect both Python and native diagnostics to stderr.
 _protocol = os.fdopen(os.dup(sys.stdout.fileno()), "w", encoding="utf-8", buffering=1)
@@ -19,6 +22,7 @@ import Sketcher
 import PartDesign  # Register the native feature classes in headless mode.
 import sketch_geometry as SketchGeometry
 import sketch_operations as SketchOperations
+import feature_history as FeatureHistory
 import exchange as Exchange
 
 
@@ -31,6 +35,7 @@ EDIT_OPERATIONS = ["add_object", "set", "expression", "geometry", "constraint",
                    "constraint_state", "trim_geometry", "remove_object", "binder_support",
                    "expose_internal", "external_geometry", "external_state", "delete_external", "import_exchange"]
 EDIT_OPERATIONS += list(SketchOperations.OPERATIONS)
+EDIT_OPERATIONS += list(FeatureHistory.OPERATIONS)
 OBJECT_TYPES = {
     "App::Part", "Part::Feature", "PartDesign::Body", "Sketcher::SketchObject",
     "PartDesign::Pad", "PartDesign::Pocket", "PartDesign::Fillet",
@@ -423,6 +428,7 @@ def snapshot(doc, revision=None):
                  "state": list(obj.State), **property_snapshot(obj)}
         owner = owner_body(obj)
         entry["body"] = owner.Name if owner else None
+        entry["history_flags"] = FeatureHistory.flags(obj, owner)
         if obj.Name in bodies:
             entry["body_state"] = bodies[obj.Name]
         if hasattr(obj, "getGlobalPlacement"):
@@ -518,6 +524,13 @@ def set_boolean_tools(feature, tools):
 
 def apply_edit(doc, edit):
     op = edit.get("op", edit.get("kind"))
+    if op in FeatureHistory.OPERATIONS:
+        if doc.Name in _sketch_sessions or doc.Name in _previews:
+            fail("history_busy", "Body history edits require a committed transaction outside sketch editing and previews")
+        try:
+            return FeatureHistory.apply(doc, edit)
+        except FeatureHistory.HistoryError as error:
+            fail(error.code, str(error))
     if op in SketchOperations.OPERATIONS:
         try:
             return SketchOperations.apply(object_in(doc, edit["object"]), edit)
@@ -587,8 +600,10 @@ def apply_edit(doc, edit):
             setattr(obj, prop, value)
     elif op == "expression":
         prop = edit["property"]
-        # Native expression paths can address components, e.g. Placement.Base.x.
-        writable_property(obj, prop.split(".")[0].split("[")[0], expression=True)
+        # Native canonical component paths can start with a self-relative dot.
+        # Check the underlying property's permissions, preserving the path for
+        # FreeCAD's own parser and persisted expression identifiers.
+        writable_property(obj, prop.removeprefix(".").split(".")[0].split("[")[0], expression=True)
         expression = edit["expression"]
         if expression is not None and not isinstance(expression, str):
             fail("invalid_request", "Expression must be a string or null")
@@ -910,6 +925,9 @@ def preview(doc, request):
         fail("preview_owner", "Preview belongs to another gesture")
     if doc.Name in _sketch_sessions:
         return sketch_preview(doc, request, token, active)
+    if request["op"] == "preview" and isinstance(request.get("edits"), list) and any(
+            isinstance(edit, dict) and edit.get("op", edit.get("kind")) in FeatureHistory.OPERATIONS for edit in request["edits"]):
+        fail("history_busy", "Body history edits require a committed transaction outside previews")
     op = request["op"]
     if op != "preview":
         if active is None:

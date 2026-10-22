@@ -66,9 +66,12 @@ Native sources pinned to the selected release:
 
 ## Current functional implementation
 
-The editor provides Point, Line, Polyline, Rectangle, Circle and Arc, snapping
-and inference, construction, interactive native constraints and dimensions,
-expression/state editing, selection boxes, dragging, trim and deletion. Sketch
+The editor provides Point, Line, Polyline, Rectangle, Circle, Arc, conics and
+open/periodic B-splines, snapping and inference, construction, interactive native
+constraints and dimensions, expression/state editing, selection boxes, dragging,
+trim and deletion. Native sketch tasks add fillet/chamfer, split/extend, Carbon
+Copy and spline degree/knot/pole/weight editing. These interfaces retain native
+geometry, constraints, exposed controls and persistent references. Sketch
 sessions support action Undo/Redo, whole-model validation on Finish and Cancel
 back to the session baseline. Invalid intermediate consumed profiles can be
 repaired without publishing broken final solids. Face attachment, extrusion,
@@ -88,14 +91,21 @@ save/reopen and continued edits to consumed tools. Independent native saved-file
 checks validate geometry and retained history. These cases establish bounded
 workflow evidence, not complete multi-Body or FreeCAD parity.
 
+Body tip rollback and feature reordering use dedicated native commands. The
+Rust tree follows native Group order; Body insertion owns BaseFeature rewiring.
+Reorder forms execute only on Apply, so opening and canceling them preserves
+redo. Native dependency failures abort atomically. Native suppression has a
+separate unresolved placement persistence defect and is not promoted as a
+complete workflow.
+
 See [tested workflows and remaining gates](VERIFICATION.md). Full FreeCAD
 functionality is not yet exposed by the Rust UI. The Rust feature catalog now
 exposes typed native forms for revolutions, lofts, sweeps, holes, dress-ups,
 patterns, primitives and references. Conditional property values, expressions,
 links and native metadata share the guarded command boundary. Workflow fixtures
-cover specific cases, not every task option. Splines, external sketch geometry,
-remaining advanced workflows, rollback/reorder, assemblies and executable plugins
-remain open. See [UI-COVERAGE.md](UI-COVERAGE.md). This application work does not constitute a Rust geometry-kernel
+cover specific cases, not every task option. Complete sketch/reference variants,
+remaining advanced feature workflows, suppression, assemblies and executable
+plugins remain open. See [UI-COVERAGE.md](UI-COVERAGE.md). This application work does not constitute a Rust geometry-kernel
 replacement.
 
 Local pipes keep native handles and failure ownership in one worker process and
