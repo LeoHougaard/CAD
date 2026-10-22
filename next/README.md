@@ -61,6 +61,12 @@ a dimension to edit it. The constraint panel supports native expressions,
 driving/reference dimensions, names, activation and deletion. The native solver's
 solved geometry and remaining freedom are authoritative.
 
+Tangent and Perpendicular also accept two whole curves and one exposed native
+point. For refraction, select two line endpoints in n1, n2 order and a whole
+boundary curve, then choose Refraction ratio n2/n1. Native Sketcher validates
+the ratio and prepares missing relationships. At coincident handles, repeated
+Shift-clicks visit each handle to add it, then visit each again to remove it.
+
 Shift-click adds or removes selections. Drag a blank area for a selection box;
 a right-to-left box also selects crossing curves. Shift adds a box to the current
 selection. Drag endpoints, centers or curve handles to edit through native

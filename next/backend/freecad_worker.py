@@ -37,7 +37,7 @@ OPERATIONS = ["capabilities", "new", "open", "inspect", "transaction", "undo",
               "redo", "save", "mesh", "topology", "close", "preview",
               "preview_commit", "preview_cancel", "sketch_begin", "sketch_finish", "sketch_cancel", "feature_schema", "export_exchange"]
 EDIT_OPERATIONS = ["add_object", "set", "expression", "geometry", "constraint",
-                   "datum", "move_geometry", "construction", "delete_geometry", "delete_constraint",
+                   "datum", "move_geometry", "construction", "delete_geometry", "delete_constraint", "refraction", "via_point",
                    "constraint_state", "trim_geometry", "remove_object", "binder_support",
                    "expose_internal", "external_geometry", "external_state", "delete_external", "import_exchange"]
 EDIT_OPERATIONS += list(SketchOperations.OPERATIONS)
@@ -636,6 +636,20 @@ def apply_edit(doc, edit):
             SketchGeometry.external_edit(obj, edit)
         except (SketchGeometry.GeometryError, ValueError, TypeError, KeyError) as error:
             fail("invalid_geometry", str(error))
+    elif op == "via_point":
+        if not obj.isDerivedFrom("Sketcher::SketchObject"):
+            fail("invalid_request", "Via-point constraints require a native SketchObject")
+        try:
+            return SketchGeometry.via_point(obj, edit)
+        except (SketchGeometry.GeometryError, ValueError, TypeError, KeyError) as error:
+            fail("invalid_via_point", str(error))
+    elif op == "refraction":
+        if not obj.isDerivedFrom("Sketcher::SketchObject"):
+            fail("invalid_request", "Refraction requires a native SketchObject")
+        try:
+            return SketchGeometry.refraction(obj, edit)
+        except (SketchGeometry.GeometryError, ValueError, TypeError, KeyError) as error:
+            fail("invalid_refraction", str(error))
     elif op in ("geometry", "constraint"):
         if not obj.isDerivedFrom("Sketcher::SketchObject"):
             fail("invalid_request", "Geometry and constraints require a native SketchObject")
@@ -681,7 +695,9 @@ def apply_edit(doc, edit):
                 number(value)
             quantity = App.Units.Quantity(value)
             number(quantity.Value)
-            if isinstance(value, str) and quantity.Unit != obj.getDatum(index).Unit:
+            # FreeCAD 1.1.4 getDatum excludes SnellsLaw although setDatum works.
+            if (isinstance(value, str) and obj.Constraints[index].Type != "SnellsLaw"
+                    and quantity.Unit != obj.getDatum(index).Unit):
                 fail("dimension_mismatch", "Datum unit does not match the native constraint dimension")
             obj.setDatum(index, quantity)
         elif op == "move_geometry":
@@ -754,9 +770,11 @@ def transaction(doc, request):
 
 def preflight_constraints(edits):
     for edit in edits:
-        if isinstance(edit, dict) and edit.get("op") == "constraint":
+        if isinstance(edit, dict) and edit.get("op") in {"constraint", "refraction", "via_point"}:
             try:
-                SketchGeometry.validate_constraint(edit.get("kind"), edit.get("args", []))
+                if edit.get("op") == "via_point" and edit.get("kind") not in {"TangentViaPoint", "PerpendicularViaPoint"}:
+                    raise SketchGeometry.GeometryError("Via-point creation supports Tangent and Perpendicular only")
+                SketchGeometry.validate_constraint("SnellsLaw" if edit.get("op") == "refraction" else edit.get("kind"), edit.get("args", []))
             except SketchGeometry.GeometryError as error:
                 fail("invalid_request", str(error))
 
@@ -769,7 +787,7 @@ def sketch_edits(session, edits):
         if not isinstance(edit, dict) or edit.get("object") != session["object"] or edit.get("op") not in {
             "set", "expression", "geometry", "constraint", "datum", "move_geometry", "construction",
             "delete_geometry", "delete_constraint", "constraint_state", "trim_geometry", "expose_internal",
-            "external_geometry", "external_state", "delete_external",
+            "external_geometry", "external_state", "delete_external", "refraction", "via_point",
             *SketchOperations.OPERATIONS,
         }:
             fail("sketch_active", "Only edits to the active sketch are allowed during sketch editing")

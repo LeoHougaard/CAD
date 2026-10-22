@@ -1,7 +1,7 @@
 //! Native sketch constraint authoring and its compact editor controls.
 
 use super::Editor;
-use crate::sketch_commands::{SketchElement, Tool, constrain};
+use crate::sketch_commands::{SketchElement, Tool, constrain, datum_edits};
 use eframe::egui::{self, Color32};
 use serde_json::{Value, json};
 
@@ -23,6 +23,7 @@ fn dimensional(kind: &str) -> bool {
         "Diameter",
         "Angle",
         "Weight",
+        "SnellsLaw",
     ]
     .contains(&kind)
 }
@@ -38,7 +39,7 @@ fn number(value: f64) -> String {
 }
 
 fn dimension_value(kind: &str, value: f64) -> String {
-    if kind == "Weight" {
+    if matches!(kind, "Weight" | "SnellsLaw") {
         return number(value);
     }
     if kind == "Angle" {
@@ -49,7 +50,7 @@ fn dimension_value(kind: &str, value: f64) -> String {
 }
 
 fn dimension_input(kind: &str, value: f64) -> String {
-    if kind == "Weight" {
+    if matches!(kind, "Weight" | "SnellsLaw") {
         return value.to_string();
     }
     if kind == "Angle" {
@@ -61,7 +62,7 @@ fn dimension_input(kind: &str, value: f64) -> String {
 
 fn dimension_datum(kind: &str, value: &str) -> String {
     let value = value.trim();
-    if kind == "Weight" {
+    if matches!(kind, "Weight" | "SnellsLaw") {
         return value.into();
     }
     if value.parse::<f64>().is_ok_and(f64::is_finite) {
@@ -367,6 +368,7 @@ impl Editor {
                         ("Radius", "Radius"),
                         ("Diameter", "Diameter"),
                         ("Angle", "Angle"),
+                        ("Refraction ratio n2/n1", "SnellsLaw"),
                     ] {
                         let validation = snapshot
                             .as_ref()
@@ -417,7 +419,7 @@ impl Editor {
                     let face = support["subelements"].as_array().and_then(|elements| elements.first()).and_then(Value::as_str).unwrap_or_default();
                     ui.weak(format!("On {object} {face}"));
                 }
-                ui.weak("Shift-click to select multiple points or curves");
+                ui.weak("Shift-click to select multiple points or curves, including coincident endpoints");
                 egui::CollapsingHeader::new(format!("Constraints ({})", constraints.len()))
                     .id_salt("native_constraint_list").show(ui, |ui| {
                         egui::ScrollArea::vertical().id_salt("native_constraints_scroll").max_height(205.).show(ui, |ui| {
@@ -525,6 +527,10 @@ impl Editor {
                     }
                     ui.weak(if edit.expression {
                         "Native expressions can refer to other dimensions"
+                    } else if edit.kind == "SnellsLaw" {
+                        "Ratio n2/n1. Endpoint selection order sets n1 then n2. Native Sketcher validates the value."
+                    } else if edit.kind == "Weight" {
+                        "Dimensionless weight"
                     } else {
                         "mm or degrees by default. Other units are accepted."
                     });
@@ -546,18 +552,16 @@ impl Editor {
                 self.error = Some("Enter a dimension value or expression".into());
             } else {
                 let edits = if let Some(index) = edit.index {
-                    if edit.expression {
-                        Ok(vec![
-                            json!({"op":"expression","object":snapshot["name"],"property":format!("Constraints[{index}]"),"expression":value}),
-                        ])
-                    } else {
-                        let mut edits = Vec::new();
-                        if expression(snapshot, index).is_some() {
-                            edits.push(json!({"op":"expression","object":snapshot["name"],"property":format!("Constraints[{index}]"),"expression":null}));
-                        }
-                        edits.push(json!({"op":"datum","object":snapshot["name"],"index":index,"value":dimension_datum(&edit.kind,value)}));
-                        Ok(edits)
-                    }
+                    datum_edits(
+                        snapshot,
+                        index,
+                        &if edit.expression {
+                            value.into()
+                        } else {
+                            dimension_datum(&edit.kind, value)
+                        },
+                        edit.expression,
+                    )
                 } else {
                     constrain(
                         snapshot,
@@ -656,6 +660,10 @@ mod tests {
         assert_eq!(dimension_datum("Distance", "12"), "12 mm");
         assert_eq!(dimension_datum("Angle", "45"), "45 deg");
         assert_eq!(dimension_datum("Distance", "0.5 in"), "0.5 in");
+        assert!(dimensional("SnellsLaw"));
+        assert_eq!(dimension_value("SnellsLaw", 1.5), "1.5");
+        assert_eq!(dimension_input("SnellsLaw", 1.23456789), "1.23456789");
+        assert_eq!(dimension_datum("SnellsLaw", " 1.25 "), "1.25");
         assert!(dimensional("Weight"));
         assert_eq!(dimension_value("Weight", 0.75), "0.75");
         assert_eq!(dimension_input("Weight", 0.123456789), "0.123456789");

@@ -25,6 +25,13 @@ enum Request {
         selection: Vec<SketchElement>,
         parameters: Value,
     },
+    Datum {
+        snapshot: Value,
+        index: usize,
+        value: String,
+        #[serde(default)]
+        expression: bool,
+    },
     Constraint {
         snapshot: Value,
         kind: String,
@@ -56,6 +63,12 @@ fn compile(line: &str) -> Result<Vec<Value>, String> {
             selection,
             parameters,
         } => cad_next::sketch_operation_commands::build(&snapshot, &kind, &selection, &parameters),
+        Request::Datum {
+            snapshot,
+            index,
+            value,
+            expression,
+        } => cad_next::sketch_commands::datum_edits(&snapshot, index, &value, expression),
         Request::Constraint {
             snapshot,
             kind,
@@ -69,7 +82,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(argument) = std::env::args().nth(1) {
         if argument == "--help" || argument == "-h" {
             println!(
-                "cad-next-sketch\nCompile one local JSON request per stdin line into native sketch edits.\nDraw: {{\"op\":\"draw\",\"object\":\"Sketch\",\"tool\":\"line\",\"points\":[[0,0,0],[10,0,0]],\"index\":0,\"construction\":false}}\nConstraint: {{\"op\":\"constraint\",\"snapshot\":<native sketch object>,\"kind\":\"Distance\",\"selection\":[{{\"index\":0,\"point\":0}}],\"value\":\"10 mm\"}}\nEdit: {{\"op\":\"edit\",\"snapshot\":<native sketch object>,\"kind\":\"extend\",\"selection\":[{{\"index\":0,\"point\":2}}],\"parameters\":{{\"increment\":\"5 mm\"}}}}\nDraw may include snaps:[null,{{\"index\":0,\"point\":1}},null] paired with the input points.\nOutput: {{\"ok\":true,\"edits\":[...]}} or {{\"ok\":false,\"error\":{{\"code\":\"invalid_sketch_command\",\"message\":\"...\"}}}}\nNo document is opened or changed. Submit returned edits with a native revision guard."
+                "cad-next-sketch\nCompile one local JSON request per stdin line into native sketch edits.\nDraw: {{\"op\":\"draw\",\"object\":\"Sketch\",\"tool\":\"line\",\"points\":[[0,0,0],[10,0,0]],\"index\":0,\"construction\":false}}\nConstraint: {{\"op\":\"constraint\",\"snapshot\":<native sketch object>,\"kind\":\"Distance\",\"selection\":[{{\"index\":0,\"point\":0}}],\"value\":\"10 mm\"}}\nEdit: {{\"op\":\"edit\",\"snapshot\":<native sketch object>,\"kind\":\"extend\",\"selection\":[{{\"index\":0,\"point\":2}}],\"parameters\":{{\"increment\":\"5 mm\"}}}}\nDraw may include snaps:[null,{{\"index\":0,\"point\":1}},null] paired with the input points.\nOutput: {{\"ok\":true,\"edits\":[...]}} or {{\"ok\":false,\"error\":{{\"code\":\"invalid_sketch_command\",\"message\":\"...\"}}}}\nDatum: {{\"op\":\"datum\",\"snapshot\":<native sketch object>,\"index\":0,\"value\":\"1.5\",\"expression\":false}}. Refraction creation uses kind SnellsLaw and two selected line endpoints in n1, n2 order plus one whole boundary.\nNo document is opened or changed. Submit returned edits with a native revision guard."
             );
             return Ok(());
         }

@@ -15,6 +15,7 @@ impl Viewport {
     pub fn clear_sketch_selection(&mut self) {
         self.sketch_selection.clear();
         self.sketch_pick_positions.clear();
+        self.last_sketch_pick = None;
         self.clear_selection();
     }
 
@@ -214,9 +215,39 @@ impl Viewport {
 
     /// Select at the cursor and remember the actual sketch-local pick, not a curve midpoint.
     pub fn select_sketch_at(&mut self, pos: Pos2, toggle: bool) -> Option<SketchElement> {
-        let hit = self.sketch_hit(pos);
+        let mut hit = self.sketch_hit(pos);
+        // Visit each co-located native handle in order, then visit them again
+        // to remove them. A,B,C -> B,C -> C -> empty preserves ray order.
+        if toggle && let Some(point) = hit.filter(|h| h.point != 0) {
+            let anchor = self
+                .geometry_point(point)
+                .map(|p| self.sketch_screen_point(p));
+            if let Some(anchor) = anchor {
+                let mut handles = Vec::new();
+                for (id, world) in self.curves.iter().flat_map(|c| &c.handles) {
+                    if self.project(*world).0.distance(anchor) < 0.25 && !handles.contains(id) {
+                        handles.push(*id);
+                    }
+                }
+                // The origin's ring is its own target, outside this cycle.
+                if handles.contains(&point) {
+                    hit = self
+                        .last_sketch_pick
+                        .and_then(|last| handles.iter().position(|id| *id == last))
+                        .map(|index| handles[(index + 1) % handles.len()])
+                        .or_else(|| {
+                            handles
+                                .iter()
+                                .find(|id| !self.sketch_selection.contains(id))
+                                .copied()
+                        })
+                        .or(hit);
+                }
+            }
+        }
         let position = self.sketch_point(pos);
         self.select_sketch_element(hit, toggle);
+        self.last_sketch_pick = hit.filter(|h| h.point != 0);
         if let (Some(element), Some(position)) = (hit, position)
             && self.sketch_selection.contains(&element)
         {
@@ -235,6 +266,7 @@ impl Viewport {
     }
 
     pub(super) fn select_sketch_element(&mut self, hit: Option<SketchElement>, toggle: bool) {
+        self.last_sketch_pick = None;
         let Some(hit) = hit else {
             self.clear_sketch_selection();
             return;
@@ -635,6 +667,17 @@ impl Viewport {
                             ),
                         ));
                     }
+                }
+            } else if kind == "SnellsLaw" {
+                if let Some(vertex) = self.native_sketch_position(first, first_point) {
+                    let vertex = self.project(vertex).0;
+                    let position = vertex + Vec2::new(45., -38.);
+                    segments.push([vertex, position]);
+                    label = Some((
+                        position,
+                        Vec2::new(1., -1.).normalized(),
+                        format!("n2/n1 = {value:.4}"),
+                    ));
                 }
             } else if kind == "Angle" {
                 let line = |index: i32| {
@@ -1334,6 +1377,176 @@ mod tests {
             let a = hit.segments[0][0];
             let b = hit.segments[47][1];
             assert!(a.distance(b) > 20.);
+        }
+    }
+    #[test]
+    fn refraction_ratio_label_is_pickable_at_native_endpoint_after_rotation() {
+        let mut viewport = viewport();
+        let sketch = json!({"name":"Sketch","global_placement":{"position":[12,4,7],"rotation":[0,0,std::f64::consts::FRAC_1_SQRT_2,std::f64::consts::FRAC_1_SQRT_2]},
+            "sketch":{"geometry":[{"index":0,"kind":"line","start":[-5,-5,0],"end":[0,0,0]}],
+            "constraints":[{"index":7,"type":"SnellsLaw","first":0,"first_pos":2,"value":1.5}]}});
+        viewport.set_sketch(Some(sketch));
+        viewport.align_sketch();
+        let ctx = egui::Context::default();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| viewport.draw_dimensions(ui.painter()));
+        });
+        let hit = &viewport.dimension_hits[0];
+        assert_eq!(viewport.dimension_hit(hit.label.center()), Some(7));
+        assert!(hit.segments[0][0].distance(viewport.sketch_screen_point([0., 0., 0.])) < 1e-5);
+    }
+    #[test]
+    fn shift_click_can_select_both_coincident_ray_endpoints_in_order() {
+        let mut viewport = viewport();
+        viewport.set_sketch(Some(json!({"name":"Sketch","sketch":{"geometry":[
+            {"index":0,"kind":"line","start":[-5,-5,0],"end":[2,3,0]},
+            {"index":1,"kind":"line","start":[2,3,0],"end":[5,5,0]}]}})));
+        let pos = viewport.sketch_screen_point([2., 3., 0.]);
+        assert_eq!(
+            viewport.select_sketch_at(pos, false),
+            Some(SketchElement { index: 0, point: 2 })
+        );
+        assert_eq!(
+            viewport.select_sketch_at(pos, true),
+            Some(SketchElement { index: 1, point: 1 })
+        );
+        assert_eq!(
+            viewport.sketch_selection,
+            vec![
+                SketchElement { index: 0, point: 2 },
+                SketchElement { index: 1, point: 1 }
+            ]
+        );
+        assert_eq!(
+            viewport.select_sketch_at(pos, true),
+            Some(SketchElement { index: 0, point: 2 })
+        );
+        assert_eq!(
+            viewport.sketch_selection,
+            vec![SketchElement { index: 1, point: 1 }]
+        );
+        assert_eq!(
+            viewport.select_sketch_at(pos, true),
+            Some(SketchElement { index: 1, point: 1 })
+        );
+        assert!(viewport.sketch_selection.is_empty());
+        viewport.select_sketch_at(pos, true);
+        viewport.select_sketch_at(pos, true);
+        assert_eq!(
+            viewport.sketch_selection,
+            vec![
+                SketchElement { index: 0, point: 2 },
+                SketchElement { index: 1, point: 1 }
+            ]
+        );
+    }
+
+    #[test]
+    fn coincident_shift_cycle_visits_arc_center_and_projected_ids_without_reordering() {
+        let elements = [
+            SketchElement { index: 0, point: 2 },
+            SketchElement { index: 1, point: 1 },
+            SketchElement { index: 2, point: 1 },
+            SketchElement { index: 3, point: 3 },
+            SketchElement {
+                index: -3,
+                point: 1,
+            },
+        ];
+        for count in [3, 4, 5] {
+            for rotated in [false, true] {
+                let mut sketch = json!({"name":"Sketch","sketch":{
+                    "geometry":[
+                        {"index":0,"kind":"line","start":[-5,-5,0],"end":[2,3,0]},
+                        {"index":1,"kind":"line","start":[2,3,0],"end":[5,5,0]},
+                        {"index":2,"kind":"arc","start":[2,3,0],"mid":[3,4,0],"end":[4,3,0],"center":[3,3,0],"radius":1},
+                        {"index":3,"kind":"circle","center":[2,3,0],"radius":5}],
+                    "externals":[{"index":0,"geometry_index":-3,"persistent_reference":"Master.Edge1",
+                        "geometry":{"index":-3,"kind":"line","start":[2,3,0],"end":[6,3,0]}}]}});
+                if count < 5 {
+                    sketch["sketch"]["externals"] = json!([]);
+                }
+                if count < 4 {
+                    sketch["sketch"]["geometry"].as_array_mut().unwrap().pop();
+                }
+                if rotated {
+                    sketch["global_placement"] = json!({"position":[12,4,7],
+                        "rotation":[0,0,std::f64::consts::FRAC_1_SQRT_2,std::f64::consts::FRAC_1_SQRT_2]});
+                }
+                let mut viewport = Viewport::default();
+                viewport.set_sketch(Some(sketch.clone()));
+                viewport.align_sketch();
+                let pos = viewport.sketch_screen_point([2., 3., 0.]);
+                for step in 0..(4 * count + 1) {
+                    // Identical refreshes must not restart an in-progress cycle.
+                    viewport.set_sketch(Some(sketch.clone()));
+                    assert_eq!(
+                        viewport.select_sketch_at(pos, step != 0),
+                        Some(elements[step % count])
+                    );
+                    let phase = step % (2 * count);
+                    let expected = if phase < count {
+                        &elements[..phase + 1]
+                    } else {
+                        &elements[phase - count + 1..count]
+                    };
+                    assert_eq!(
+                        viewport.sketch_selection, expected,
+                        "count {count}, rotated {rotated}, step {step}"
+                    );
+                    for element in expected {
+                        assert!(viewport.sketch_pick_position(*element).is_some());
+                    }
+                }
+                if count == 5 {
+                    assert!(!viewport.sketch_draggable(elements[4]));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn coincident_cycle_resets_for_clear_other_picks_and_changed_native_snapshot() {
+        let mut viewport = viewport();
+        let mut sketch = json!({"name":"Sketch","sketch":{"geometry":[
+            {"index":0,"kind":"line","start":[-5,-5,0],"end":[2,3,0]},
+            {"index":1,"kind":"line","start":[2,3,0],"end":[5,5,0]}]}});
+        viewport.set_sketch(Some(sketch.clone()));
+        let pos = viewport.sketch_screen_point([2., 3., 0.]);
+        let a = SketchElement { index: 0, point: 2 };
+        let b = SketchElement { index: 1, point: 1 };
+        viewport.select_sketch_at(pos, false);
+        viewport.select_sketch_at(pos, true);
+        viewport.clear_sketch_selection();
+        assert_eq!(viewport.select_sketch_at(pos, true), Some(a));
+        viewport.select_sketch_element(Some(b), false);
+        assert_eq!(viewport.select_sketch_at(pos, true), Some(a));
+        assert_eq!(viewport.sketch_selection, vec![b, a]);
+        // A changed native snapshot starts a new cycle, preserving surviving IDs.
+        sketch["sketch"]["geometry"][1]["end"] = json!([6, 5, 0]);
+        viewport.set_sketch(Some(sketch));
+        assert_eq!(viewport.select_sketch_at(pos, true), Some(a));
+        assert_eq!(viewport.sketch_selection, vec![b]);
+        let other = viewport.sketch_screen_point([-5., -5., 0.]);
+        viewport.select_sketch_at(other, false);
+        assert_eq!(viewport.select_sketch_at(pos, true), Some(a));
+    }
+
+    #[test]
+    fn coincident_cycle_keeps_origin_ring_and_isolated_handle_toggle_targets() {
+        let mut viewport = viewport();
+        viewport.set_sketch(Some(json!({"name":"Sketch","sketch":{"geometry":[
+            {"index":0,"kind":"line","start":[0,0,0],"end":[2,3,0]}]}})));
+        for pos in [
+            viewport.sketch_screen_point([2., 3., 0.]),
+            viewport.sketch_screen_point([0.; 3]) + Vec2::new(0., 6.),
+        ] {
+            let target = viewport.sketch_hit(pos);
+            assert!(target.is_some());
+            for step in 0..6 {
+                assert_eq!(viewport.select_sketch_at(pos, step != 0), target);
+                assert_eq!(viewport.sketch_selection.len(), usize::from(step % 2 == 0));
+            }
         }
     }
 }

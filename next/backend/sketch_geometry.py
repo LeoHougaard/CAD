@@ -4,6 +4,7 @@ import math
 
 import FreeCAD as App
 import Part
+import Sketcher
 
 
 class GeometryError(ValueError):
@@ -242,3 +243,116 @@ def external_edit(obj, edit):
             obj.ExternalTypes = types
     else:
         raise GeometryError("Unsupported external geometry edit: " + str(op))
+
+
+def refraction(obj, edit):
+    args = edit.get("args", [])
+    validate_constraint("SnellsLaw", args)
+    first, first_pos, second, second_pos, boundary, _ = args
+    value = edit.get("value", args[-1])
+    if not isinstance(value, str):
+        finite(value)
+    quantity = App.Units.Quantity(value)
+    finite(quantity.Value)
+    if len({first, second, boundary}) != 3 or not all(p in (1, 2) for p in (first_pos, second_pos)):
+        raise GeometryError("Refraction needs distinct rays, line endpoints and a different boundary")
+    if all(index < 0 for index in (first, second, boundary)):
+        raise GeometryError("Refraction cannot use external geometry only")
+    def geometry(index):
+        if 0 <= index < obj.GeometryCount:
+            return obj.Geometry[index]
+        if index <= -3 and -index <= len(obj.ExternalGeo):
+            return obj.ExternalGeo[-index - 1]
+        raise GeometryError("Refraction geometry is outside the current native list")
+    for index in (first, second):
+        if not isinstance(geometry(index), Part.LineSegment):
+            raise GeometryError("Refraction rays must be straight line endpoints")
+    curve = geometry(boundary)
+    if not isinstance(curve, (Part.LineSegment, Part.Circle, Part.ArcOfCircle, Part.Ellipse,
+                              Part.ArcOfEllipse, Part.ArcOfHyperbola, Part.ArcOfParabola, Part.BSplineCurve)):
+        raise GeometryError("Select a native boundary curve supported by Sketcher")
+    if boundary >= 0 and obj.GeometryFacadeList[boundary].InternalType == "BSplineControlPoint":
+        raise GeometryError("A B-spline weight circle cannot be the refraction boundary")
+    prepared = []
+    def add(kind, *values):
+        index = obj.addConstraint(Sketcher.Constraint(kind, *values))
+        if index < 0 or obj.solve() != 0:
+            raise GeometryError("Native Sketcher rejected " + kind + " for refraction on " + curve.TypeId
+                                + "; conflicting " + str(list(obj.ConflictingConstraints))
+                                + ", redundant " + str(list(obj.RedundantConstraints)))
+        return index
+    # Pinned GUI Utils::IsPointAlreadyOnCurve and CommandConstraints.cpp.
+    # Each native addition solves before the next native geometric test.
+    point = obj.getPoint(first, first_pos)
+    if not obj.isPointOnCurve(second, point.x, point.y):
+        prepared.append(add("Coincident", first, first_pos, second, second_pos))
+    point = obj.getPoint(first, first_pos)
+    if not obj.isPointOnCurve(boundary, point.x, point.y):
+        prepared.append(add("PointOnObject", first, first_pos, boundary))
+    index = add("SnellsLaw", first, first_pos, second, second_pos, boundary, quantity.Value)
+    return {"object": obj.Name, "index": index, "preparation": prepared}
+
+
+def via_point(obj, edit):
+    kind, args = edit.get("kind"), edit.get("args", [])
+    if kind not in {"TangentViaPoint", "PerpendicularViaPoint"}:
+        raise GeometryError("Via-point creation supports Tangent and Perpendicular only")
+    validate_constraint(kind, args)
+    first, second, point_index, point_pos = args
+    if first == second:
+        raise GeometryError("Select two distinct whole curves and one exposed native point")
+    def geometry(index):
+        if 0 <= index < obj.GeometryCount:
+            return obj.Geometry[index]
+        if index <= -3 and -index <= len(obj.ExternalGeo):
+            return obj.ExternalGeo[-index - 1]
+        raise GeometryError("Via-point geometry is outside the current native list")
+    curves = {index: geometry(index) for index in (first, second)}
+    for curve in curves.values():
+        if not isinstance(curve, (Part.LineSegment, Part.Circle, Part.ArcOfCircle, Part.Ellipse,
+                                  Part.ArcOfEllipse, Part.ArcOfHyperbola, Part.ArcOfParabola, Part.BSplineCurve)):
+            raise GeometryError("Select whole native curves for a via-point constraint")
+        if Sketcher.GeometryFacade(curve).InternalType == "BSplineControlPoint":
+            raise GeometryError("A B-spline weight circle cannot be a via-point curve")
+    def fixed(index):
+        return index < 0 or any(c.Type == "Block" and c.First == index and c.FirstPos == 0 for c in obj.Constraints)
+    if fixed(first) and fixed(second):
+        raise GeometryError("Cannot constrain two fixed curves; external and blocked curves are fixed")
+    if (point_index, point_pos) != (-1, 1):
+        point_geometry = geometry(point_index)
+        handles = geometry_entry(point_geometry, point_index, False, sketch=obj)["handles"]
+        if not any(handle["point"] == point_pos for handle in handles):
+            raise GeometryError("Select a native point handle exposed by this sketch")
+    prepared = []
+    # Pinned GUI rechecks curve 1 after curve 2 because native solving may move
+    # the selected point. B-spline via-point constraints imply point-on-object.
+    for index in (first, second, first):
+        if isinstance(curves[index], Part.BSplineCurve):
+            continue
+        point = obj.getPoint(point_index, point_pos)
+        if not obj.isPointOnCurve(index, point.x, point.y):
+            added = obj.addConstraint(Sketcher.Constraint("PointOnObject", point_index, point_pos, index))
+            if added < 0:
+                raise GeometryError("Native Sketcher rejected PointOnObject preparation for " + kind)
+            # Native addConstraint solves already. Keep solving between tests,
+            # but assess diagnostics after the native spline substitution.
+            obj.solve()
+            prepared.append(added)
+    index = obj.addConstraint(Sketcher.Constraint(kind, *args))
+    if index < 0:
+        raise GeometryError("Native Sketcher rejected " + kind)
+    # Match removeRedundantPointOnObject exactly: it matches the point geometry
+    # ID, not FirstPos, and only the selected B-spline curves. Deleting through
+    # the native API preserves expression paths and all unrelated constraints.
+    removed = [i for i, c in enumerate(obj.Constraints) if c.Type == "PointOnObject"
+               and c.First == point_index and c.Second in curves
+               and isinstance(curves[c.Second], Part.BSplineCurve)]
+    for remove in reversed(removed):
+        obj.delConstraint(remove)
+    if obj.solve() != 0:
+        raise GeometryError("Native Sketcher rejected " + kind + "; conflicting "
+                            + str(list(obj.ConflictingConstraints)) + ", redundant "
+                            + str(list(obj.RedundantConstraints)))
+    return {"object": obj.Name, "index": index - len(removed),
+            "preparation": [i - sum(old < i for old in removed) for i in prepared],
+            "removed_point_on_object": removed}

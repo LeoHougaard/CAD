@@ -557,3 +557,97 @@ solved snapshots and the same Rust witness calculation as viewport annotations.
 Smart Dimension retains its existing radius and center-distance choices. Native
 units, expressions, reference/driving state and history retain their existing
 protocol behavior.
+
+
+## Refraction constraint workflow
+
+`refraction` is an atomic sketch edit with `object`, native SnellsLaw `args`
+`[ray1, endpoint1, ray2, endpoint2, boundary, seed]`, and optional `value` as a
+number or native quantity string. `value` overrides the seed.
+The shared Rust sketch compiler emits this edit for kind `SnellsLaw`. It keeps
+ray endpoint selection order as n1 then n2, independent of the boundary's position
+in the selection. The bounded creation scope is two distinct straight ray
+endpoints and a different internal or projected native boundary curve, with at
+least one internal entity and a finite ratio n2/n1 accepted by native Sketcher.
+Axes and curved rays are outside this editor creation scope.
+
+The worker uses native `getPoint` and `isPointOnCurve`, adding missing Coincident
+and PointOnObject constraints in the pinned GUI task's order, solving after each
+addition. Geometrically satisfied relationships are skipped even when no explicit
+relationship constraint exists. It then adds native SnellsLaw. Existing user
+constraints are never removed to force a solve. The ordinary atomic transaction,
+preview and sketch-session boundaries own rollback. The edit result reports the
+native SnellsLaw `index` and any added `preparation` indices. Refresh the snapshot
+to obtain authoritative constraint numbering after preparation or deletion.
+
+Boundary dispatch includes lines, circles, circular arcs, ellipses, elliptical
+arcs, hyperbola arcs, parabola arcs and B-splines. B-spline weight circles are
+rejected explicitly. Native solver failures name the failed constraint and
+boundary type and restore the accepted state. Six curved boundary classes have
+successful native workflow evidence. The tested B-spline fixture is rejected by
+both pinned native Sketcher and this workflow; broad spline success is unclaimed.
+
+Existing SnellsLaw datums use native `setDatum` without calling pinned FreeCAD
+1.1.4's unsupported SnellsLaw `getDatum`. Native Sketcher owns signed values,
+reference measurements, inactive constraints and solver failures. No global
+positive-ratio policy is applied when loading, recomputing or editing documents.
+Expressions pass directly to native `setExpression`; native recompute and the
+ordinary validity checks decide whether an edit can commit.
+
+The ratio display and default input have no unit suffix. Quantity inputs preserve
+pinned native conversion behavior: creation uses `Quantity.Value`, as the GUI
+creation command does; `setDatum` receives the quantity itself, including native
+angle-to-radian conversion. Native expression conversion can accept unit-bearing
+results as scalar constraint values. No additional refraction-only unit policy
+is imposed. Invalid native edits retain the ordinary atomic rollback behavior.
+Driving/reference changes remain native `setDriving` operations. The editor and `cad-next-sketch` share
+`datum_edits`; the CLI accepts `{"op":"datum","snapshot":...,"index":0,
+"value":"1.5","expression":false}`. A numeric replacement clears a previously
+bound indexed or named native expression in the same atomic action.
+
+At a shared vertex, click selects the native handle hit first. Repeated Shift
+clicks visit the other co-located handles, then revisit each handle to remove it.
+For A, B, C the sequence is `[A]`, `[A,B]`, `[A,B,C]`, `[B,C]`, `[C]`, `[]`.
+The next Shift click starts adding again. Surviving handles keep their selection
+order, including ray n1/n2 order and negative projected geometry IDs. The origin
+ring and isolated handles retain their normal toggle behavior. A changed native
+snapshot, cleared selection or direct element selection resets the remembered handle;
+an identical snapshot refresh preserves the cycle.
+
+
+## Tangency and perpendicularity through an exposed point
+
+The shared Rust `constrain` builder accepts three selected elements for existing
+kind `Tangent` or `Perpendicular`: two distinct whole selectable native curves and
+one exposed native point. The point can appear anywhere in selection order;
+relative curve order is preserved. No datum or expression is accepted. Existing
+two-element creation keeps its existing path. AngleViaPoint is not part of this
+workflow.
+
+The builder emits one atomic `via_point` sketch edit with `object`, native `kind`
+`TangentViaPoint` or `PerpendicularViaPoint`, and four signed integer `args`
+`[curve1, curve2, point_geometry, point_position]`. Native constructor validation
+runs before mutation. A point must be a handle exposed by the same solved
+snapshot, including the origin, endpoints, centers, standalone/internal points or
+projected-curve handles. Whole curves use the editor's existing line, circular,
+conic and spline families. The worker rejects two external/blocked curves and
+B-spline weight-circle curves, matching pinned native GUI checks.
+
+Preparation follows CommandConstraints.cpp: test native point-on-curve for curve
+1, curve 2, then curve 1 again using the latest solved point. Add missing native
+PointOnObject constraints for non-B-splines; skip these additions for B-splines
+because the native via-point constraint includes them. Add the native constraint,
+then remove matching existing PointOnObject constraints only on the selected
+B-spline curves. Match the pinned helper's point-geometry-ID comparison exactly;
+it does not filter FirstPos. Delete descending through native `delConstraint` so
+FreeCAD owns expression-path remapping. Do not replace the constraint array or
+delete unrelated constraints. Check final solver diagnostics after substitution.
+A transient diagnostic before native cleanup does not by itself abort the task.
+
+The edit result returns the final native `index`, final `preparation` indices and
+`removed_point_on_object` as the removed pre-cleanup indices. Native stored type
+is `Tangent`/`Perpendicular` with the selected point in `Third`/`ThirdPos`; native
+constraint values/branch choices are retained. Refresh the complete snapshot
+rather than retaining old constraint indices. Ordinary transactions, preview
+replacement/Cancel, sketch actions and consumed-sketch Finish/Cancel own the
+atomic lifecycle. There is no frontend solver or second constraint history.

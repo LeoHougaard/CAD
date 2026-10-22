@@ -73,6 +73,7 @@ pub struct Viewport {
     pub selections: Vec<Selection>,
     pub sketch_selection: Vec<SketchElement>,
     sketch_pick_positions: HashMap<SketchElement, [f64; 3]>,
+    last_sketch_pick: Option<SketchElement>,
     pub sketch_select_enabled: bool,
     /// Pick native solid subelements during the external-reference tool.
     pub solid_select_in_sketch: bool,
@@ -105,6 +106,7 @@ impl Default for Viewport {
             selections: vec![],
             sketch_selection: vec![],
             sketch_pick_positions: HashMap::new(),
+            last_sketch_pick: None,
             sketch_select_enabled: true,
             solid_select_in_sketch: false,
             dimension_hits: vec![],
@@ -345,6 +347,7 @@ impl Viewport {
     pub fn set_sketch(&mut self, sketch: Option<Value>) {
         if self.sketch != sketch {
             self.sketch_pick_positions.clear();
+            self.last_sketch_pick = None;
         }
         if self.sketch.as_ref().and_then(|s| s["name"].as_str())
             != sketch.as_ref().and_then(|s| s["name"].as_str())

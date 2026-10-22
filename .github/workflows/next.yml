@@ -74,6 +74,9 @@ jobs:
           python next/tests/profile_reference_workflows.py --host "$host" --compiler "$compiler" --runtime next/target/runtime.json --output next/target/profile-reference-documents
           python next/tests/profile_materialization_workflows.py --host "$host" --compiler "$compiler" --runtime next/target/runtime.json --output next/target/profile-materialization-documents
           python next/tests/common_dimension_workflows.py --host "$host" --compiler "$sketch_compiler" --runtime next/target/runtime.json --output next/target/common-dimension-documents
+          python next/tests/refraction_workflows.py --host "$host" --compiler "$sketch_compiler" --runtime next/target/runtime.json --output next/target/refraction-documents
+          python next/tests/refraction_compatibility_workflows.py --host "$host" --compiler "$sketch_compiler" --runtime next/target/runtime.json --output next/target/refraction-compatibility-documents
+          python next/tests/via_point_workflows.py --host "$host" --compiler "$sketch_compiler" --runtime next/target/runtime.json --output next/target/via-point-documents
           python next/tests/feature_workflows.py --host "$host" --compiler "$compiler" --runtime next/target/runtime.json --output next/target/feature-documents
           python next/tests/sketch_curves_workflows.py --host "$host" --compiler "$sketch_compiler" --runtime next/target/runtime.json --output next/target/sketch-curve-documents
           python next/tests/sketch_operations_workflows.py --host "$host" --compiler "$sketch_compiler" --runtime next/target/runtime.json --output next/target/sketch-operation-documents

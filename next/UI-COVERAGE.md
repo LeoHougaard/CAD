@@ -10,7 +10,7 @@ still owns modeling, constraints, references and history.
 | --- | --- | --- |
 | Document lifecycle | New, FCStd Open, Save/Save as through a filtered modal file browser, unsaved-change protection, native Undo/Redo and guarded writes. | Broader files and failure/recovery, multiple-document interaction and cross-process locking. Pixel GUI verifies filtered picking, folder navigation, replacement confirmation, cancellation and unsaved-change protection. |
 | Sketch creation and editing | Native XY/XZ/YZ origin-plane chooser, same-Body tree datum/sketch-frame and face support; Point, Line, Polyline, Rectangle, Circle, Arc, Ellipse, elliptic/hyperbolic/parabolic arcs and open/periodic B-splines; native internal geometry, snapping/inference, construction, boxes, dragging, trim/deletion and projected/defining/intersection references; fillet/chamfer, split/extend, Carbon Copy and spline degree/knot/pole/weight task forms. | Standalone orientation/reverse/offset dialog, broader support/reference policy, remaining native tools, spline variants and broader Binder/projection combinations. Pixel GUI plus native reopen checks cover fillet/chamfer, split/extension, Carbon Copy, spline degree/knot/pole/weight tasks and invalid-weight recovery; broader operation combinations remain. |
-| Sketch constraints | Common geometric constraints, length/coordinate/radius/diameter/angle dimensions, circular arc length/span and boundary clearances, expressions, names, reference/driving and activation controls. | Remaining native constraint families and combinations; full selection, conflict and recovery coverage. |
+| Sketch constraints | Common geometric constraints, length/coordinate/radius/diameter/angle dimensions, circular arc length/span and boundary clearances, native refraction ratios, Tangent/Perpendicular through an exposed point, expressions, names, reference/driving and activation controls. | Remaining native constraint families and combinations, including AngleViaPoint; full selection, conflict and recovery coverage. |
 | Sketch sessions | Action Undo/Redo, gesture previews, Finish validation and Cancel to baseline, including repair of consumed profiles. | Broader histories, topology changes and operation combinations; the weight task now has a real GUI Cancel-preserves-Redo check. |
 | Feature property forms | Native schema supplies defaults, enums, documentation, status and property types. Forms edit explicit overrides and expressions, including references, lists, vectors and placements; foreign Sketch profiles offer Independent/Dependent copy or Cross-reference in the feature transaction. | Every declared type's required inputs and conditional options; broader foreign-reference types, broader independent defining/intersection materialization combinations and task-specific behavior that generic writable fields cannot provide. |
 | Extrusions and revolutions | Pad/Pocket and Revolution/Groove forms expose native profile, extent/direction and available second-side options. | Complete termination modes, offsets, axes, parent changes, invalid selections, reopen and GUI workflows. |
@@ -35,3 +35,60 @@ performance tuning follow full functional Rust completion.
 
 See [VERIFICATION.md](VERIFICATION.md) for recorded evidence and
 [COMPONENTS.md](COMPONENTS.md) for implementation ownership and replacement gates.
+
+
+### Bounded refraction candidate
+
+Dimension > Refraction ratio n2/n1 creates native SnellsLaw from two selected
+straight-ray endpoints in n1, n2 order and a whole internal or projected boundary
+curve. Shift-click can select both coincident ray endpoints. The native constraint
+list and a pickable n2/n1 annotation open existing ratio/expression editing without
+length or angle units. Native reference/driving state remains available.
+
+Headless verification covers missing-relation preparation, geometric relationship
+skips, native solver results, explicit ratio and expression edits, quantity inputs,
+native solver failures, document and sketch-action Undo/Redo, previews and Cancel,
+consumed Pad sketch sessions, external-parent rotation, and save/reopen. Viewport
+tests verify rotated-attachment label picking and coincident endpoint selection.
+This evidence is not real GUI acceptance. Immutable generated GUI inputs and a
+read-only native verifier are retained locally. Real GUI creation, picking,
+dialog recovery and persistence remain pending.
+
+Creation uses finite ratios accepted by native Sketcher and selectable native
+boundary curves, excluding axes, curved rays and B-spline weight circles. Circle,
+arc, ellipse, ellipse arc, hyperbola arc and parabola arc workflows pass native
+checks. The tested B-spline case fails in direct native FreeCAD too and rolls back
+with an explicit error. This does not claim full Sketcher or general spline parity.
+
+The corrected candidate preserves valid signed ratios, negative reference
+measurements, inactive negative/zero constraints, native quantity conversion and
+unit-bearing native expressions. Coincident handle tests cover full Shift add
+and remove cycles with two through five handles, projected and arc endpoints,
+centers, transformed attachments, refresh and reset behavior. Real GUI acceptance
+remains pending.
+
+
+### Tangent and perpendicular through an exposed point
+
+The existing Constrain > Tangent and Constrain > Perpendicular commands accept
+two whole curves plus one exposed native point. The point may be selected first,
+middle or last; curve order stays as selected. The command submits one atomic
+native action without a dimension dialog. Existing two-element behavior is
+unchanged. Native constraint rows expose the resulting curve/point identities
+through the existing list, highlighting, naming, Active and Delete controls.
+
+Native workflow evidence covers line/circular/conic/spline families, missing
+PointOnObject preparation, spline substitution and expression-index remapping,
+external source updates, native exposed points, ordinary and sketch-action
+Undo/Redo, previews and Cancel, consumed Pad sketch Finish/Cancel, failure rollback
+and save/reopen. Independent native checks reproduce the pinned GUI procedure
+from each baseline and compare geometry, branch, constraint count/identity and
+expressions. These checks do not claim real GUI acceptance.
+
+The scope is the editor's existing selectable curve families and exposed point
+handles. Axis-curve selection and projection of standalone native vertices are
+outside the existing editor's exposed selection boundary. A baseline standalone
+vertex projection currently fails while serializing its missing native extension;
+this task does not change that separate projection workflow. Projected-edge
+endpoints are covered. AngleViaPoint, ratio validation and coincident-selection
+behavior are unchanged by this delta. Real GUI acceptance remains pending.

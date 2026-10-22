@@ -68,8 +68,37 @@ is 622.56 versus 631.07 ms. Every declared latency and memory gate passes, with
 zero CPU in six idle samples of at least five seconds. The fixture and limits
 are the headless 12-hole Pad workload described above.
 
-Linux integration and Pixel desktop acceptance of the revision extraction remain
-pending. The earlier journal checkpoint's successful Linux CI is separate evidence.
+Windows and Linux integration pass all 18 suites in
+[revision CI](https://github.com/LeoHougaard/CAD/actions/runs/39810919139).
+Pixel desktop acceptance of the revision extraction remains pending.
+
+## Refraction and constraints through an exposed point
+
+The integrated Rust editor and CLI share native SnellsLaw creation/datum edits
+and Tangent/Perpendicular creation through two curves and an exposed point.
+Native Sketcher prepares missing relationships, solves and retains constraint
+identities. Native spline substitution removes implied PointOnObject constraints
+through the native API, including its expression-index remapping.
+
+Windows integration passes 160 active Rust tests, strict Clippy, the existing
+18 native suites, 12 refraction cases, 42 via-point cases and 35 native
+compatibility cases. The compatibility test generates generic input documents
+and checks their hashes after oracle, edit and reopen checks. It requires no
+private models. Signed ratios, negative reference measurements, inactive zero
+and negative constraints and native quantity/expression conversions are retained.
+
+Independent combined review found no actionable defects. New probes combine
+spline substitution with a named signed refraction expression in the same sketch,
+then exercise preview recovery, action/document Undo/Redo, Cancel, Finish and
+reopen. Both saved results match direct native geometry and constraint checks.
+Eleven malformed or invalid requests preserve the documented rollback/revision
+contract. Headless pointer events verify 112 selection clicks, complete coincident
+handle cycles, attached coordinates, native negative IDs and ratio-label picking.
+
+These are source, compiled-input and native checks. Real Pixel GUI acceptance
+remains pending, as do broader constraint combinations, AngleViaPoint, axes and
+the separate projected-vertex serializer correction. Full FreeCAD parity is not
+established.
 
 ## Real Pixel desktop workflow
 

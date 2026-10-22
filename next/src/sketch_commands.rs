@@ -511,6 +511,74 @@ pub fn constrain(
             sketch.point(*element)?;
         }
     }
+    if matches!(kind, "Tangent" | "Perpendicular") && selection.len() == 3 {
+        if value.is_some() {
+            return Err("Via-point tangency and perpendicularity do not take a datum".into());
+        }
+        let curves: Vec<_> = selection.iter().copied().filter(|e| e.point == 0).collect();
+        let points: Vec<_> = selection.iter().copied().filter(|e| e.point != 0).collect();
+        if curves.len() != 2 || points.len() != 1 {
+            return Err(
+                "Select two whole curves and one exposed native point for a via-point constraint"
+                    .into(),
+            );
+        }
+        let fixed = |e: SketchElement| {
+            e.index < 0
+                || snapshot["sketch"]["constraints"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|c| {
+                        c["type"] == "Block"
+                            && c["first"].as_i64() == Some(i64::from(e.index))
+                            && c["first_pos"].as_i64() == Some(0)
+                    })
+        };
+        if curves.iter().all(|e| fixed(*e)) {
+            return Err(
+                "Cannot constrain two fixed curves; external and blocked curves are fixed".into(),
+            );
+        }
+        if curves.iter().any(|e| {
+            snapshot["sketch"]["spline_controls"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|c| c["control_index"].as_i64() == Some(i64::from(e.index)))
+        }) {
+            return Err("A B-spline weight circle cannot be a via-point curve".into());
+        }
+        return Ok(vec![json!({"op":"via_point","object":sketch.name,
+            "kind":format!("{kind}ViaPoint"),"args":[curves[0].index,curves[1].index,points[0].index,points[0].point]})]);
+    }
+    if kind == "SnellsLaw" {
+        let rays: Vec<_> = selection.iter().copied().filter(|e| e.point != 0).collect();
+        let boundaries: Vec<_> = selection.iter().copied().filter(|e| e.point == 0).collect();
+        if rays.len() != 2 || boundaries.len() != 1 {
+            return Err("Refraction needs two line endpoints in n1, n2 selection order and one whole boundary edge".into());
+        }
+        for ray in &rays {
+            if sketch.kind(*ray)? != "line" || !matches!(ray.point, 1 | 2) {
+                return Err("Refraction rays must be straight line endpoints".into());
+            }
+        }
+        let boundary = boundaries[0];
+        if rays[0].index == rays[1].index || rays.iter().any(|r| r.index == boundary.index) {
+            return Err("Refraction needs two distinct rays and a different boundary curve".into());
+        }
+        if selection.iter().all(|e| e.index < 0) {
+            return Err("Refraction cannot use external geometry only".into());
+        }
+        if value.is_some_and(|v| v.trim().is_empty()) {
+            return Err("Enter a refraction ratio n2/n1".into());
+        }
+        // Native point-on-curve tests must run between native additions, after
+        // each solve. The worker prepares the missing relations atomically.
+        return Ok(vec![json!({"op":"refraction", "object":sketch.name,
+            "args":[rays[0].index,rays[0].point,rays[1].index,rays[1].point,boundary.index,1.0],
+            "value":value.unwrap_or("1").trim()})]);
+    }
     let dimensional = [
         "Distance",
         "DistanceX",
@@ -759,6 +827,71 @@ pub fn constrain(
     if let Some(value) = value {
         edits.push(json!({"op":"datum", "object":sketch.name, "index":sketch.constraints, "value":value.trim()}));
     }
+    Ok(edits)
+}
+
+/// Compile existing native datum/expression edits from the same snapshot used by the UI.
+pub fn datum_edits(
+    snapshot: &Value,
+    index: usize,
+    value: &str,
+    expression: bool,
+) -> Result<Vec<Value>, String> {
+    let sketch = Sketch::new(snapshot)?;
+    let constraint = snapshot["sketch"]["constraints"]
+        .as_array()
+        .and_then(|cs| {
+            cs.iter()
+                .find(|c| c["index"].as_u64() == Some(index as u64))
+        })
+        .ok_or("Choose an existing native constraint")?;
+    if !matches!(
+        constraint["type"].as_str().unwrap_or_default(),
+        "Distance"
+            | "DistanceX"
+            | "DistanceY"
+            | "Radius"
+            | "Diameter"
+            | "Angle"
+            | "Weight"
+            | "SnellsLaw"
+    ) {
+        return Err("This constraint has no editable datum".into());
+    }
+    if constraint["driving"] == false {
+        return Err("Reference constraints do not accept driving values".into());
+    }
+    let value = value.trim();
+    if value.is_empty() {
+        return Err("Enter a datum value or expression".into());
+    }
+    let path = format!("Constraints[{index}]");
+    if expression {
+        return Ok(vec![
+            json!({"op":"expression","object":sketch.name,"property":path,"expression":value}),
+        ]);
+    }
+    let named = constraint["name"]
+        .as_str()
+        .filter(|n| !n.is_empty())
+        .map(|n| format!("Constraints.{n}"));
+    let bound = snapshot["properties"]["ExpressionEngine"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|entry| {
+            entry[0].as_str().is_some_and(|p| {
+                let p = p.trim_start_matches('.');
+                p == path || named.as_deref() == Some(p)
+            })
+        });
+    let mut edits = Vec::new();
+    if bound {
+        edits.push(
+            json!({"op":"expression","object":sketch.name,"property":path,"expression":null}),
+        );
+    }
+    edits.push(json!({"op":"datum","object":sketch.name,"index":index,"value":value}));
     Ok(edits)
 }
 
@@ -1049,5 +1182,103 @@ mod tests {
             )
             .is_err()
         );
+    }
+    #[test]
+    fn refraction_keeps_endpoint_order_with_boundary_in_any_selection_position() {
+        let snapshot = json!({"name":"Sketch","sketch":{"constraint_count":0,"geometry":[
+            {"index":0,"kind":"line","start":[-5,-5,0],"end":[0,0,0]},
+            {"index":1,"kind":"line","start":[0,0,0],"end":[5,5,0]},
+            {"index":2,"kind":"ellipse","center":[0,5,0]}]}});
+        for selection in [
+            vec![e(2, 0), e(0, 2), e(1, 1)],
+            vec![e(0, 2), e(2, 0), e(1, 1)],
+            vec![e(0, 2), e(1, 1), e(2, 0)],
+        ] {
+            let edits = constrain(&snapshot, "SnellsLaw", &selection, Some("1.5")).unwrap();
+            assert_eq!(edits[0]["args"], json!([0, 2, 1, 1, 2, 1.0]));
+            assert_eq!(edits[0]["value"], "1.5");
+        }
+        let swapped =
+            constrain(&snapshot, "SnellsLaw", &[e(1, 1), e(0, 2), e(2, 0)], None).unwrap();
+        assert_eq!(swapped[0]["args"], json!([1, 1, 0, 2, 2, 1.0]));
+        for selection in [
+            vec![e(0, 0), e(1, 0), e(2, 0)],
+            vec![e(0, 2), e(0, 1), e(2, 0)],
+            vec![e(0, 2), e(1, 1), e(0, 0)],
+            vec![e(0, 2), e(1, 1)],
+        ] {
+            assert!(constrain(&snapshot, "SnellsLaw", &selection, None).is_err());
+        }
+    }
+
+    #[test]
+    fn existing_ratio_datum_clears_native_named_expression_atomically() {
+        let snapshot = json!({"name":"Sketch","properties":{"ExpressionEngine":[[".Constraints.IndexRatio","3/2"]]},
+            "sketch":{"constraint_count":1,"geometry":[],"constraints":[{"index":0,"type":"SnellsLaw","name":"IndexRatio","driving":true}]}});
+        let edits = datum_edits(&snapshot, 0, "1.25", false).unwrap();
+        assert_eq!(edits.len(), 2);
+        assert_eq!(edits[0]["expression"], Value::Null);
+        assert_eq!(edits[1]["value"], "1.25");
+        let edits = datum_edits(&snapshot, 0, "5 / 4", true).unwrap();
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0]["expression"], "5 / 4");
+        assert!(datum_edits(&snapshot, 1, "1", false).is_err());
+    }
+    #[test]
+    fn via_point_preserves_curve_order_with_point_at_any_selection_position() {
+        let snapshot = json!({"name":"Sketch","sketch":{"constraint_count":0,"geometry":[
+            {"index":0,"kind":"circle","center":[0,5,0],"radius":5},
+            {"index":1,"kind":"line","start":[-5,0,0],"end":[5,0,0]},
+            {"index":2,"kind":"point","position":[0,0,0]}]}});
+        for kind in ["Tangent", "Perpendicular"] {
+            for selection in [
+                vec![e(2, 1), e(0, 0), e(1, 0)],
+                vec![e(0, 0), e(2, 1), e(1, 0)],
+                vec![e(0, 0), e(1, 0), e(2, 1)],
+            ] {
+                let edits = constrain(&snapshot, kind, &selection, None).unwrap();
+                assert_eq!(edits.len(), 1);
+                assert_eq!(edits[0]["op"], "via_point");
+                assert_eq!(edits[0]["args"], json!([0, 1, 2, 1]));
+                assert_eq!(edits[0]["kind"], format!("{kind}ViaPoint"));
+                assert!(edits[0].get("value").is_none());
+            }
+            let swapped = constrain(&snapshot, kind, &[e(1, 0), e(0, 0), e(2, 1)], None).unwrap();
+            assert_eq!(swapped[0]["args"], json!([1, 0, 2, 1]));
+            assert!(constrain(&snapshot, kind, &[e(0, 0), e(1, 0), e(-1, 1)], None).is_ok());
+            assert!(constrain(&snapshot, kind, &[e(0, 0), e(1, 0), e(0, 3)], None).is_ok());
+            assert!(constrain(&snapshot, kind, &[e(0, 0), e(1, 0), e(2, 1)], Some("2")).is_err());
+            assert_eq!(
+                constrain(&snapshot, kind, &[e(0, 0), e(1, 0)], None).unwrap()[0]["op"],
+                "constraint"
+            );
+        }
+    }
+
+    #[test]
+    fn via_point_rejects_fixed_curves_weight_circles_and_unexposed_points() {
+        let mut snapshot = json!({"name":"Sketch","sketch":{"constraint_count":2,"geometry":[
+            {"index":0,"kind":"circle","center":[0,5,0],"radius":5},
+            {"index":1,"kind":"line","start":[-5,0,0],"end":[5,0,0]},
+            {"index":2,"kind":"point","position":[0,0,0]}],
+            "constraints":[{"type":"Block","first":0,"first_pos":0},{"type":"Block","first":1,"first_pos":0}]}});
+        for kind in ["Tangent", "Perpendicular"] {
+            assert!(
+                constrain(&snapshot, kind, &[e(0, 0), e(1, 0), e(2, 1)], None)
+                    .unwrap_err()
+                    .contains("fixed")
+            );
+        }
+        snapshot["sketch"]["constraints"] = json!([]);
+        snapshot["sketch"]["spline_controls"] = json!([{"control_index":0}]);
+        assert!(
+            constrain(&snapshot, "Tangent", &[e(0, 0), e(1, 0), e(2, 1)], None)
+                .unwrap_err()
+                .contains("weight")
+        );
+        snapshot["sketch"]["spline_controls"] = json!([]);
+        assert!(constrain(&snapshot, "Tangent", &[e(0, 0), e(1, 0), e(1, 3)], None).is_err());
+        assert!(constrain(&snapshot, "Tangent", &[e(0, 0), e(2, 1), e(1, 1)], None).is_err());
+        assert!(constrain(&snapshot, "Angle", &[e(0, 0), e(1, 0), e(2, 1)], None).is_err());
     }
 }
