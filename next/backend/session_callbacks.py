@@ -4,6 +4,7 @@ import sys
 
 JOURNAL = "cad-next-sketch-journal"
 REVISIONS = "cad-next-revisions"
+LEASES = "cad-next-leases"
 _protocol = None
 _request_id = None
 _sequence = 0
@@ -48,7 +49,7 @@ def call(channel, action, document, **parameters):
         code, message = reply["error"]["code"], reply["error"]["message"]
         if not isinstance(code, str) or not isinstance(message, str):
             raise ValueError("Invalid session callback error")
-        if code.startswith(("journal_", "revision_", "callback_")):
+        if code.startswith(("journal_", "revision_", "lease_", "callback_")):
             raise ValueError(message)
     except Exception as error:
         raise CallbackTransportError(str(error)) from error

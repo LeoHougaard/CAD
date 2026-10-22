@@ -86,9 +86,24 @@ from each baseline and compare geometry, branch, constraint count/identity and
 expressions. These checks do not claim real GUI acceptance.
 
 The scope is the editor's existing selectable curve families and exposed point
-handles. Axis-curve selection and projection of standalone native vertices are
-outside the existing editor's exposed selection boundary. A baseline standalone
-vertex projection currently fails while serializing its missing native extension;
-this task does not change that separate projection workflow. Projected-edge
-endpoints are covered. AngleViaPoint, ratio validation and coincident-selection
-behavior are unchanged by this delta. Real GUI acceptance remains pending.
+handles. Axis-curve selection remains outside the existing selection boundary.
+Projected-edge endpoints are covered. AngleViaPoint, ratio validation and
+coincident-selection behavior are unchanged by this delta. Real GUI acceptance
+remains pending.
+
+Standalone native vertex projections now serialize using authoritative native
+property metadata, including their signed geometry IDs, persistent references
+and flags. Focused native workflows cover mixed face/edge/vertex caches, equal
+coordinates from different sources, shared Rust point selection and via-point
+commands, transformed source/target updates, missing-source history, conflicting
+edits, projection deletion with constraint remapping, and save/reopen. Existing
+Independent Copy is checked with projected and defining standalone points,
+including source preservation and native defining-point materialization. These
+are native/CLI checks; projected-point GUI picking has not been verified.
+
+Focused Independent Copy checks also cover already-materialized internal points
+with hidden external identity and mixed materialized curves with ordinary or
+construction points. Raw native Geometry XML and native IDs/modes are compared
+through preview/Cancel, failed-batch rollback, Undo/Redo and save/reopen. Source
+snapshots and native content bytes remain unchanged during the copy operation;
+only copied external identity is removed. These remain native/CLI checks.

@@ -6,10 +6,13 @@ object per line goes in and one response comes out. Diagnostics use stderr.
 The native request stream explicitly uses UTF-8 independently of the operating
 system locale, including portable Windows Python and Unicode file paths.
 
-The native worker can exchange private `cad-next-sketch-journal` and
-`cad-next-revisions` callback frames with `WorkerSession` while a public request
-is pending. Rust owns accepted sketch actions, replay order, the worker-local
-revision registry and missing/stale revision checks. Python chooses when native
+The native worker can exchange private `cad-next-sketch-journal`,
+`cad-next-revisions` and `cad-next-leases` callback frames with `WorkerSession`
+while a public request is pending. Rust owns accepted sketch actions, replay order, the worker-local
+revision registry, missing/stale revision checks and worker-wide gesture ownership.
+Rust also owns preview/sketch tokens, active-sketch edit scope, staged preview metadata, native-redo
+admission and poison state. Python supplies native transaction/redo facts and
+retains opaque replay payloads without an authorization token store. Python chooses when native
 acceptance or recovery requires publication. The native worker owns document mutations. These
 frames never reach public NDJSON clients. Version, outer request ID and a
 session-wide monotonic sequence correlate each callback. Callback replies and
@@ -354,6 +357,32 @@ be dragged. Re-read solved IDs after an edit. All-external dimensions are added
 as native reference measurements by appending `constraint_state` with
 `driving:false` in the same transaction.
 
+Pinned FreeCAD 1.1.4 Python `Part.Point` wrappers discard geometry extensions.
+For projected points, the worker recovers the native reference and flags from
+`dumpPropertyContent("ExternalGeo")`, validating the native property count and
+types in the same order used by native property serialization. It restores
+detached Python points to read the native extension. It does not restore or
+rewrite the document, infer source identity from coordinates, or equate source
+link indices with cache indices. Other geometry uses its existing extension.
+One property recovery pass serves all affected points in a snapshot.
+
+If native metadata cannot be read or validated, the point and its signed native
+ID remain visible. Its unresolved reference, source and flag fields are `null`
+with `metadata_error`; source-dependent deletion/intersection edits and
+Independent Copy fail explicitly. Recovered missing-source caches retain their
+native reference and `missing` flag, while an unavailable source link remains
+`null`. Independent Copy uses these same native flags, materializes defining
+points through native `addGeometry`, and removes copied external identity only
+when the Python geometry actually exposes it.
+
+Internal `Geometry` points have the same pinned wrapper limitation. Before
+Independent Copy tests or removes retained external identity, it restores their
+full native property records into detached points using the same validated
+property order. Native cloning/assignment then preserves Sketch geometry IDs,
+construction modes and the other serialized metadata while removing only the
+external extension. Missing native Sketch metadata fails explicitly; the worker
+does not invent a replacement point ID or repair the source document.
+
 The Rust property compiler accepts an ordered `transformations` array for
 MultiTransform. Each child has `type`, stable `name`, `create`, explicit
 `properties` and `expressions`. `removed_transformations` lists retired children.
@@ -651,3 +680,29 @@ constraint values/branch choices are retained. Refresh the complete snapshot
 rather than retaining old constraint indices. Ordinary transactions, preview
 replacement/Cancel, sketch actions and consumed-sketch Finish/Cancel own the
 atomic lifecycle. There is no frontend solver or second constraint history.
+
+## Private gesture owner boundary
+
+Shared-write rejection order is worker-wide sketch lease, worker-wide preview
+lease, document lookup, poison, expected revision, local preview lease and local
+sketch owner. Preview token validation and ownership follow those guards.
+A nested sketch preview therefore reports sketch_active for a foreign document,
+preview_active for a local ordinary write, and sketch_owner before preview_owner
+for a local preview with the wrong session token. A poisoned owner's Close still
+requires the current revision and then bypasses local gesture guards.
+
+Rust stages candidate preview metadata before snapshot preparation. Rejected
+preparation restores the exact prior metadata or releases an unpublished first
+candidate. Sketch Begin publishes its owner only with a prepared snapshot and
+releases the unpublished owner/journal on preparation failure. Native replay,
+validation, transaction commit/abort and recomputation stay in Python/FreeCAD.
+The existing publication and recovery rules above continue to apply. The private
+lease channel uses the same outer request ID, sequence and original deadline as
+the journal and revision channels. Internal lease-state errors terminate the
+session; ordinary ownership errors leave it usable. Close removes gesture and
+poison state, and reopening/reusing a name starts with no previous lease.
+
+Preview label validation precedes native redo admission. Rust requests the
+native RedoCount fact only for a first feature preview or unopened sketch
+transaction. Existing candidates and open sketch transactions skip that getter
+for admission. The demand and fact callbacks share the original request deadline.

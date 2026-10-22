@@ -718,3 +718,131 @@ All sixteen native suites pass on Windows x64 and Pixel Linux ARM64 for the
 initial frozen batch. The later change only fixes viewport annotation and adds
 zero/subpixel acceptance cases; its updated common-dimension suite passes on
 Windows. Real GUI acceptance and the final Pixel check are recorded below.
+
+The actual Pixel ARM64 editor and CLI binaries built from the verified source
+manifests. All sixteen native suites passed on the initial freeze; the updated
+common-dimension suite passed on the second freeze. Real defining-copy GUI
+interaction covered repeated preview replacement, Cancel, Apply, source radius
+changes, independent copied width/radius edits, a local height expression,
+document Undo/Redo and save/reopen. Five saved checkpoints passed separate
+native inspection. Original fixture hashes stayed unchanged.
+
+Remaining GUI gates include circular dimension creation/editing and zero/subpixel
+label picking, snapped clockwise arcs, and further intersection/transformed-copy
+cases. The Pixel desktop listener became unavailable, then USB disconnected.
+No session restart or process termination was attempted. These remaining gates
+have not passed.
+
+## Rust sketch-action journal and revision registry
+
+Rust owns accepted sketch-action groups, cursor, branch truncation, staged
+acceptance and replay plans. It also owns the worker-local revision map and
+monotonic clock, including malformed/missing/stale token checks and close/name
+reuse. Python still chooses native publication points and executes native replay,
+transactions, recomputation and solving. These are bounded ownership ports,
+not a replacement document or geometry kernel.
+
+Matched streams cover native sketch and consumed-profile action history,
+preview replacement and failures, multi-document writes, ownership, reopening
+and injected recovery failures. Five lifecycle serialization corrections keep
+ownership/history intact or advance the revision after native restoration.
+The public revision suite covers 310 guarded responses, and the lifecycle suite
+covers eight failure cases. Strict comparison checks whole response structure
+and native identities. Corruption controls reject changed geometry, ownership,
+constraints and resource measurements.
+
+Request and callback pipe writes share the original deadline through a bounded
+writer thread. Stalled-reader tests cover ordinary requests and replay callbacks.
+On Linux, timeout cleanup terminates the private launcher process group and its
+native descendants. The regression passed in Linux CI.
+
+The combined root journal/revision build passed matched headless Windows debug
+resource gates. Median combined working memory was 79.65 MiB baseline and
+80.09 MiB replacement; peak memory was 80.14 and 80.76 MiB. Warm startup was
+622.56 and 631.07 ms. Six samples of at least five idle seconds measured zero
+CPU. The workload uses a 12-hole Pad, 16 geometry items, 47 constraints, 64
+accepted actions and 32 action Undo/Redo operations. These warm-cache small-part
+measurements do not establish viewport speed or moderate-part performance.
+Real desktop acceptance of the ownership extraction remains open.
+
+## Native refraction and tangent/perpendicular via a point
+
+The shared Rust compiler exposes native SnellsLaw creation and datum/expression
+editing, and native Tangent/Perpendicular constraints through a third selected
+point. Native preparation adds missing relationships, solves between preparation
+steps and preserves native constraint/expression renumbering. Spline via-point
+preparation removes only the native procedure's matching point-on-spline
+constraints after substitution, preserving unrelated constraints.
+
+Twelve refraction workflows, 42 via-point workflows and 35 compatibility cases
+pass. Coverage includes signed ratios, reference/inactive constraints, native
+quantity behavior, external and transformed parents, consumed profiles, failed
+replacement recovery, action/document history and reopen. An independently
+rejected native spline fixture is recorded as a native limitation, not support
+for arbitrary spline refraction. AngleViaPoint and axis-curve selection remain
+outside this change.
+
+Independent combined review found no demonstrated P0/P1/P2 defect. It verified
+two combined native workflows with expression remapping, eleven rejection cases,
+two direct FreeCAD geometry/constraint comparisons and 112 headless egui selection
+clicks. Coincident Shift selection can add and remove every overlapping handle
+while preserving selection order. Real GUI acceptance remains pending.
+
+At commit 2223af0, all 21 public native suites and the Rust checks passed on both
+Windows x64 and Linux x64 in CI. The local desktop-enabled Rust suite passed
+160 active tests with two ignored native-runtime tests, alongside strict Clippy
+and all binary builds. This establishes the listed native/CLI workflows, not
+complete FreeCAD application parity.
+
+The next bounded extraction moves gesture tokens, worker-wide leases,
+active-sketch edit admission, staged preview ownership and poison state to Rust.
+Python retains native replay payloads and sequencing. The desktop-enabled root
+build passes 169 active Rust tests, two ignored native-runtime tests, strict
+Clippy and five Python callback transport tests. Thirty native getter-order
+cases pass with 177 responses. They verify label rejection before getter access,
+lazy redo admission, retained snapshot reads and recovery. A two-callback timeout
+test verifies the handshake uses one deadline. Independent re-review found no
+P0/P1/P2 defect and reproduced the prior getter-order failure as fixed. All 23
+current native suites pass on the root lease build. The later internal-point
+copy correction has separate acceptance below.
+
+Fresh matched resource gates pass for the actual combined root host and worker.
+Combined working memory was 80.35 MiB baseline and 80.43 MiB replacement; peak
+memory was 80.86 and 81.06 MiB. Warm startup medians were 627.83 and 625.50 ms.
+Transaction, action Undo/Redo, preview, Cancel and Finish latency medians pass
+the baseline-times-1.25-plus-2-ms gate. Working and peak memory each stay within
+baseline plus 32 MiB. Every metric is finite and nonnegative. Six measured idle
+samples of at least five seconds report zero CPU. The workload and headless
+Windows debug limits match the earlier journal/revision gate. Root source and
+binary hashes remained unchanged during measurement. This does not establish
+viewport performance or real desktop acceptance.
+
+Projected standalone vertices now retain their native persistent reference and
+flags in snapshots despite the pinned Python Point wrapper dropping extensions.
+The correction reads native serialized property metadata into detached points;
+it never restores or rewrites the document. Six root native workflows pass,
+covering mixed caches, equal coordinates from different sources, parent changes,
+missing-source history, shared Rust via-point commands, projection deletion and
+independent copies of projected/defining points. Native defining points become
+independent internal geometry without changing the source. Unknown metadata
+stays explicit and blocks source-dependent destructive edits. Projected-point
+GUI picking remains unverified. A separate read-only native verifier checks all
+twelve saved root files against raw native XML references/flags and native point
+handles. It also checks Missing-source caches and two simulated metadata failures.
+All twelve files retain their original hashes. The existing five circular-copy
+workflows still pass with the correction.
+
+Independent point review then found two inherited copy gaps. An already-internal
+point could retain hidden external identity, and cleaning another materialized
+curve could lose an internal point's native ID/construction state. The follow-up
+restores full native internal-point records before identity detection and native
+cloning. Three self-contained public workflows now pass for a materialized point,
+mixed ordinary point and mixed construction point. Raw native metadata checks
+compare IDs, modes, constraints, expressions and all other persisted extension
+attributes. They also verify source bytes, preview/Cancel, failed-copy rollback,
+Undo/Redo and three saved/reopened file pairs. The six projected-point and five
+circular-copy workflows still pass after this follow-up. Independent re-review
+found no remaining P0/P1/P2 defect. It reproduced both fixes on the original
+inputs, checked six saved source/result pairs and exercised unavailable metadata,
+rollback recovery and nondefault native geometry flags/layers. Real GUI
+acceptance remains open. Cross-platform CI runs all 24 public native suites.

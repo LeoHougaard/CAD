@@ -62,9 +62,9 @@ OBJECT_TYPES.update("PartDesign::" + operation + shape
                     for operation in ("Additive", "Subtractive")
                     for shape in ("Box", "Cylinder", "Sphere", "Cone", "Ellipsoid", "Torus", "Prism", "Wedge", "Helix"))
 _feature_schemas = {}
-_poisoned = set()
-_previews = {}
-_sketch_sessions = {}
+# Opaque native replay payloads only. Rust owns all public tokens and leases.
+_native_previews = {}
+_native_sketch_sessions = {}
 
 
 class Failure(Exception):
@@ -118,22 +118,9 @@ def document(request, writable=False):
         fail("not_found", "Document is not open in this worker")
     doc = App.getDocument(key)
     if writable:
-        if key in _poisoned and request.get("op") != "close":
-            fail("document_unavailable", "Rollback failed; close and reopen this document")
+        lease("pre_revision", key, request=request)
         revision_request("check", key, expected_revision=request.get("expected_revision"))
-        if key in _previews and not request.get("op", "").startswith("preview") and not (
-                key in _poisoned and request.get("op") == "close") and not (
-                key in _sketch_sessions and request.get("op") == "sketch_cancel"):
-            fail("preview_active", "Finish or cancel the active preview before another write")
-        session = _sketch_sessions.get(key)
-        if session and not (key in _poisoned and request.get("op") == "close"):
-            op = request.get("op")
-            if op not in {"transaction", "undo", "redo", "preview", "preview_commit", "preview_cancel",
-                          "sketch_finish", "sketch_cancel"}:
-                fail("sketch_active", "Finish or cancel sketch editing before another document write")
-            token = request.get("token") if op in {"sketch_finish", "sketch_cancel"} else request.get("sketch_token")
-            if token != session["token"]:
-                fail("sketch_owner", "Sketch editing belongs to another session")
+        lease("local", key, request=request)
     return doc
 
 
@@ -375,18 +362,31 @@ def sketch_geometry(obj):
             for index, geo in enumerate(obj.Geometry)]
 
 
+def lease(action, document=None, **parameters):
+    try:
+        return SessionCallbacks.call(SessionCallbacks.LEASES, action, document, **parameters)
+    except SessionCallbacks.CallbackError as error:
+        fail(error.code, str(error))
+
+
+def preview_ready(doc, request, opened=False):
+    facts = dict(request=request, opened=opened)
+    plan = lease("preview_ready", doc.Name, **facts)
+    if plan["needs_redo"]:
+        lease("preview_ready", doc.Name, **facts, redo=doc.RedoCount)
+    return plan["label"]
+
+
 def preview_metadata(doc):
-    active = _previews.get(doc.Name)
-    return {"token": active["token"], "label": active["label"]} if active else None
+    return lease("metadata", doc.Name)["preview"]
 
 
 def sketch_metadata(doc):
-    session = _sketch_sessions.get(doc.Name)
-    return {"token": session["token"], "object": session["object"]} if session else None
+    return lease("metadata", doc.Name)["sketch_edit"]
 
 
 def history_counts(doc):
-    session = _sketch_sessions.get(doc.Name)
+    session = sketch_metadata(doc)
     if session:
         return journal(doc, "counts")
     return {"undo_count": doc.UndoCount, "redo_count": doc.RedoCount}
@@ -468,7 +468,7 @@ def snapshot(doc, revision=None):
         objects.append(entry)
     return {"document": doc.Name, "revision": revision_request("current", doc.Name) if revision is None else revision, "objects": objects,
             **history_counts(doc), "sketch_edit": sketch_metadata(doc),
-            "available": doc.Name not in _poisoned, "preview": preview_metadata(doc)}
+            "available": lease("metadata", doc.Name)["available"], "preview": preview_metadata(doc)}
 
 
 def prepare_state(doc):
@@ -486,7 +486,7 @@ def publish_state(doc, state):
 
 
 def validate(doc, whole=False):
-    session = _sketch_sessions.get(doc.Name)
+    session = _native_sketch_sessions.get(doc.Name)
     objects = [object_in(doc, session["object"])] if session and not whole else doc.Objects
     for obj in objects:
         if not obj.isValid():
@@ -536,8 +536,7 @@ def apply_edit(doc, edit):
         except ProfileReferences.ReferenceError as error:
             fail(error.code, str(error))
     if op in FeatureHistory.OPERATIONS:
-        if doc.Name in _sketch_sessions or doc.Name in _previews:
-            fail("history_busy", "Body history edits require a committed transaction outside sketch editing and previews")
+        lease("history_guard", doc.Name)
         try:
             return FeatureHistory.apply(doc, edit)
         except FeatureHistory.HistoryError as error:
@@ -740,7 +739,7 @@ def transaction(doc, request):
     if not isinstance(edits, list) or not edits:
         fail("invalid_request", "Transaction requires a nonempty edits list")
     preflight_constraints(edits)
-    if doc.Name in _sketch_sessions:
+    if sketch_metadata(doc):
         return sketch_transaction(doc, request)
     doc.openTransaction(request.get("label", "Edit"))
     try:
@@ -757,7 +756,7 @@ def transaction(doc, request):
             doc.recompute()
             validate(doc)
         except Exception:
-            _poisoned.add(doc.Name)
+            lease("poison", doc.Name)
             traceback.print_exc(file=sys.stderr)
         # Abort restores model edits, but native element aliases and redo
         # history may have changed. Never reuse identities from before it.
@@ -779,18 +778,10 @@ def preflight_constraints(edits):
                 fail("invalid_request", str(error))
 
 
-def sketch_edits(session, edits):
-    if not isinstance(edits, list) or not edits:
-        fail("invalid_request", "Sketch editing requires a nonempty edits list")
+def sketch_edits(doc, edits):
+    lease("sketch_edits_shape", doc.Name, edits=edits)
     preflight_constraints(edits)
-    for edit in edits:
-        if not isinstance(edit, dict) or edit.get("object") != session["object"] or edit.get("op") not in {
-            "set", "expression", "geometry", "constraint", "datum", "move_geometry", "construction",
-            "delete_geometry", "delete_constraint", "constraint_state", "trim_geometry", "expose_internal",
-            "external_geometry", "external_state", "delete_external", "refraction", "via_point",
-            *SketchOperations.OPERATIONS,
-        }:
-            fail("sketch_active", "Only edits to the active sketch are allowed during sketch editing")
+    lease("sketch_edits", doc.Name, edits=edits)
 
 
 def solve_sketch(doc, session):
@@ -830,15 +821,15 @@ def restore_sketch(doc, session, candidate=None):
     try:
         replay_sketch(doc, session, candidate)
     except Exception:
-        _poisoned.add(doc.Name)
+        lease("poison", doc.Name)
         traceback.print_exc(file=sys.stderr)
     bump(doc)
 
 
 def sketch_transaction(doc, request):
-    session = _sketch_sessions[doc.Name]
+    session = _native_sketch_sessions[doc.Name]
     edits = request["edits"]
-    sketch_edits(session, edits)
+    sketch_edits(doc, edits)
     staged = False
     try:
         if not session["opened"]:
@@ -861,7 +852,7 @@ def sketch_transaction(doc, request):
 
 
 def sketch_history(doc, op):
-    session = _sketch_sessions[doc.Name]
+    session = _native_sketch_sessions[doc.Name]
     journal(doc, "stage_" + op)
     try:
         replay_sketch(doc, session)
@@ -875,30 +866,26 @@ def sketch_history(doc, op):
 
 
 def sketch_session(doc, request):
-    token = request.get("token")
-    if not isinstance(token, str) or not token or len(token) > 256:
-        fail("invalid_request", "Sketch token requires a nonempty string of at most 256 characters")
+    lease("sketch_validate", doc.Name, request=request)
     if request["op"] == "sketch_begin":
-        if doc.Name in _sketch_sessions:
-            fail("sketch_active", "Document already has an active sketch editing session")
         obj = object_in(doc, request["object"])
         if not obj.isDerivedFrom("Sketcher::SketchObject"):
             fail("invalid_request", "Sketch editing requires a native SketchObject")
         validate(doc, whole=True)
         journal(doc, "begin")
-        _sketch_sessions[doc.Name] = {"token": token, "object": obj.Name, "label": "Edit " + obj.Label,
+        lease("sketch_begin", doc.Name, request=request, object=obj.Name)
+        _native_sketch_sessions[doc.Name] = {"object": obj.Name, "label": "Edit " + obj.Label,
                                      "opened": False,
                                      "context_revision": revision_request("current", doc.Name)}
         try:
             state = prepare_state(doc)
         except Exception:
             journal(doc, "end")
-            del _sketch_sessions[doc.Name]
+            del _native_sketch_sessions[doc.Name]
+            lease("sketch_end", doc.Name)
             raise
         return publish_state(doc, state)
-    session = _sketch_sessions.get(doc.Name)
-    if session is None:
-        fail("no_sketch_edit", "Document has no active sketch editing session")
+    session = _native_sketch_sessions[doc.Name]
     if request["op"] == "sketch_cancel":
         try:
             if session["opened"]:
@@ -912,7 +899,7 @@ def sketch_session(doc, request):
         except Exception:
             # Abort/replay can change native identities. Restore the owned session
             # and gesture, then publish a new revision even if restoration poisons it.
-            restore_sketch(doc, session, _previews.get(doc.Name))
+            restore_sketch(doc, session, _native_previews.get(doc.Name))
             raise
     else:
         try:
@@ -928,19 +915,18 @@ def sketch_session(doc, request):
             restore_sketch(doc, session)
             raise
     journal(doc, "end")
-    del _sketch_sessions[doc.Name]
-    _previews.pop(doc.Name, None)
+    del _native_sketch_sessions[doc.Name]
+    _native_previews.pop(doc.Name, None)
+    lease("sketch_end", doc.Name)
     # Reuse the serialized geometry snapshot. Only infallible metadata and native
     # history counts change after acceptance; publish_state bumps before reading counts.
     return publish_state(doc, state)
 
 
-def sketch_preview(doc, request, token, active):
-    session = _sketch_sessions[doc.Name]
+def sketch_preview(doc, request, active):
+    session = _native_sketch_sessions[doc.Name]
     op = request["op"]
     if op != "preview":
-        if active is None:
-            fail("no_preview", "Document has no active preview")
         if op == "preview_commit":
             journal(doc, "stage_accept", group=active)
             try:
@@ -960,48 +946,42 @@ def sketch_preview(doc, request, token, active):
             except Exception:
                 restore_sketch(doc, session, active)
                 raise
-        del _previews[doc.Name]
+        del _native_previews[doc.Name]
+        lease("preview_end", doc.Name)
         return publish_state(doc, state)
     edits = request.get("edits")
-    sketch_edits(session, edits)
-    label = request.get("label", active["label"] if active else "Edit sketch")
-    if not isinstance(label, str):
-        fail("invalid_request", "Preview label must be a string")
-    if not session["opened"] and doc.RedoCount:
-        fail("preview_redo_conflict", "Native redo history is present; commit an edit to branch history")
-    candidate = {"token": token, "label": label, "edits": edits}
+    sketch_edits(doc, edits)
+    label = preview_ready(doc, request, opened=session["opened"])
+    candidate = {"label": label, "edits": edits}
+    staged = False
     try:
         results = replay_sketch(doc, session, candidate)
-        _previews[doc.Name] = candidate
+        _native_previews[doc.Name] = candidate
+        lease("preview_stage", doc.Name, request=request, label=label)
+        staged = True
         state = prepare_state(doc)
         json.dumps(results, allow_nan=False)
     except Exception:
+        if staged:
+            lease("preview_resolve", doc.Name, accepted=False)
         if active is None:
-            _previews.pop(doc.Name, None)
+            _native_previews.pop(doc.Name, None)
         else:
-            _previews[doc.Name] = active
+            _native_previews[doc.Name] = active
         restore_sketch(doc, session, active)
         raise
+    lease("preview_resolve", doc.Name, accepted=True)
     publish_state(doc, state)
     return {"document": doc.Name, "revision": revision_request("current", doc.Name), "edits": results, "state": state}
 
 
 def preview(doc, request):
-    token = request.get("token")
-    if not isinstance(token, str) or not token or len(token) > 256:
-        fail("invalid_request", "Preview token requires a nonempty string of at most 256 characters")
-    active = _previews.get(doc.Name)
-    if active and active["token"] != token:
-        fail("preview_owner", "Preview belongs to another gesture")
-    if doc.Name in _sketch_sessions:
-        return sketch_preview(doc, request, token, active)
-    if request["op"] == "preview" and isinstance(request.get("edits"), list) and any(
-            isinstance(edit, dict) and edit.get("op", edit.get("kind")) in FeatureHistory.OPERATIONS for edit in request["edits"]):
-        fail("history_busy", "Body history edits require a committed transaction outside previews")
+    lease("preview_validate", doc.Name, request=request)
+    active = _native_previews.get(doc.Name)
+    if sketch_metadata(doc):
+        return sketch_preview(doc, request, active)
     op = request["op"]
     if op != "preview":
-        if active is None:
-            fail("no_preview", "Document has no active preview")
         # Build and serialize the response before committing native history.
         if op == "preview_commit":
             state = prepare_state(doc)
@@ -1009,7 +989,7 @@ def preview(doc, request):
             try:
                 doc.commitTransaction()
             except Exception:
-                _poisoned.add(doc.Name)
+                lease("poison", doc.Name)
                 bump(doc)
                 raise
         else:
@@ -1020,43 +1000,42 @@ def preview(doc, request):
                 state = prepare_state(doc)
                 state["preview"] = None
             except Exception:
-                _poisoned.add(doc.Name)
-                _previews.pop(doc.Name, None)
+                lease("poison", doc.Name)
+                _native_previews.pop(doc.Name, None)
+                lease("preview_end", doc.Name)
                 bump(doc)
                 raise
-        del _previews[doc.Name]
+        del _native_previews[doc.Name]
+        lease("preview_end", doc.Name)
         return publish_state(doc, state)
     edits = request.get("edits")
     if not isinstance(edits, list) or not edits:
         fail("invalid_request", "Preview requires a nonempty edits list")
     preflight_constraints(edits)
-    label = request.get("label", active["label"] if active else "Edit")
-    if not isinstance(label, str):
-        fail("invalid_request", "Preview label must be a string")
-    # FreeCAD clears redo as soon as an actual transaction starts, including
-    # transactions later aborted. Refuse before mutation rather than erase
-    # history merely by opening a dialog or dragging and pressing Escape.
-    if active is None and doc.RedoCount:
-        fail("preview_redo_conflict", "Native redo history is present; use a committed edit to branch history")
+    label = preview_ready(doc, request)
     if active:
         try:
             doc.abortTransaction()
             doc.recompute()
             validate(doc)
         except Exception:
-            _poisoned.add(doc.Name)
+            lease("poison", doc.Name)
             bump(doc)
             raise
     doc.openTransaction(label)
+    staged = False
     try:
         results = [apply_edit(doc, edit) for edit in edits]
         if doc.recompute() is False:
             fail("invalid_model", "Native recompute failed")
         validate(doc)
+        lease("preview_stage", doc.Name, request=request, label=label)
+        staged = True
         state = prepare_state(doc)
-        state["preview"] = {"token": token, "label": label}
         json.dumps(results, allow_nan=False)
     except Exception:
+        if staged:
+            lease("preview_resolve", doc.Name, accepted=False)
         try:
             doc.abortTransaction()
             doc.recompute()
@@ -1067,13 +1046,14 @@ def preview(doc, request):
                 doc.recompute()
             validate(doc)
         except Exception:
-            _poisoned.add(doc.Name)
+            lease("poison", doc.Name)
             traceback.print_exc(file=sys.stderr)
         # Abort/replay can change native element aliases even for an initial
         # candidate that failed. Callers must re-inspect before another write.
         bump(doc)
         raise
-    _previews[doc.Name] = {"token": token, "label": label, "edits": edits}
+    lease("preview_resolve", doc.Name, accepted=True)
+    _native_previews[doc.Name] = {"label": label, "edits": edits}
     publish_state(doc, state)
     return {"document": doc.Name, "revision": revision_request("current", doc.Name),
             "edits": results, "state": state}
@@ -1103,18 +1083,7 @@ def dispatch(request):
         if type_id not in _feature_schemas:
             fail("unsupported_object_type", "Unsupported native object type: " + str(type_id))
         return _feature_schemas[type_id]
-    # Native transactions are coordinated by FreeCAD's application, including
-    # across documents. Another document's write can commit the open gesture.
-    # Keep a worker-wide write lease until its owner commits or cancels.
-    if _sketch_sessions and op in {"new", "open", "transaction", "undo", "redo", "save", "close",
-                                  "preview", "preview_commit", "preview_cancel",
-                                  "sketch_begin", "sketch_finish", "sketch_cancel", "export_exchange"}:
-        if op in {"new", "open"} or request.get("document") not in _sketch_sessions:
-            fail("sketch_active", "Finish or cancel sketch editing before another document write")
-    if _previews and op in {"new", "open", "transaction", "undo", "redo", "save", "close",
-                            "preview", "preview_commit", "preview_cancel", "sketch_begin", "sketch_finish", "sketch_cancel", "export_exchange"}:
-        if op in {"new", "open"} or request.get("document") not in _previews:
-            fail("preview_active", "Finish or cancel the active preview before another document write")
+    lease("global", request=request)
     if op in ("new", "open"):
         if op == "new":
             key = name(request["name"])
@@ -1166,7 +1135,7 @@ def dispatch(request):
     if op in ("preview", "preview_commit", "preview_cancel"):
         return preview(doc, request)
     if op in ("undo", "redo"):
-        if doc.Name in _sketch_sessions:
+        if sketch_metadata(doc):
             return sketch_history(doc, op)
         if getattr(doc, "UndoCount" if op == "undo" else "RedoCount") == 0:
             fail("nothing_to_" + op, "No native transaction to " + op)
@@ -1185,7 +1154,7 @@ def dispatch(request):
                 doc.recompute()
                 validate(doc)
             except Exception:
-                _poisoned.add(doc.Name)
+                lease("poison", doc.Name)
                 traceback.print_exc(file=sys.stderr)
             raise
         return publish_state(doc, state)
@@ -1199,14 +1168,13 @@ def dispatch(request):
         key = doc.Name
         App.closeDocument(key)
         revision_request("close", key)
-        _poisoned.discard(key)
-        _previews.pop(key, None)
-        _sketch_sessions.pop(key, None)
+        lease("close", key)
+        _native_previews.pop(key, None)
+        _native_sketch_sessions.pop(key, None)
         journal(key, "end")
         return {"document": key, "closed": True}
     if op in ("mesh", "topology"):
-        if doc.Name in _poisoned:
-            fail("document_unavailable", "Rollback failed; close and reopen this document")
+        lease("read_guard", doc.Name)
         validate(doc)
         obj = object_in(doc, request["object"])
         if not hasattr(obj, "Shape") or obj.Shape.isNull():
@@ -1218,7 +1186,7 @@ def dispatch(request):
             return {"document": doc.Name, "revision": revision_request("current", doc.Name), "object": obj.Name,
                     "preview": preview_metadata(doc),
                     "sketch_edit": sketch_metadata(doc),
-                    "context_revision": _sketch_sessions[doc.Name]["context_revision"] if doc.Name in _sketch_sessions and obj.Name != _sketch_sessions[doc.Name]["object"] else revision_request("current", doc.Name),
+                    "context_revision": _native_sketch_sessions[doc.Name]["context_revision"] if sketch_metadata(doc) and obj.Name != sketch_metadata(doc)["object"] else revision_request("current", doc.Name),
                     "world_from_shape": world_from_shape(obj),
                     **topology(obj.Shape, deflection)}
         positions, normals, triangles, faces = [], [], [], []
@@ -1237,7 +1205,7 @@ def dispatch(request):
         return {"document": doc.Name, "revision": revision_request("current", doc.Name), "object": obj.Name,
                 "preview": preview_metadata(doc),
                 "sketch_edit": sketch_metadata(doc),
-                "context_revision": _sketch_sessions[doc.Name]["context_revision"] if doc.Name in _sketch_sessions and obj.Name != _sketch_sessions[doc.Name]["object"] else revision_request("current", doc.Name),
+                "context_revision": _native_sketch_sessions[doc.Name]["context_revision"] if sketch_metadata(doc) and obj.Name != sketch_metadata(doc)["object"] else revision_request("current", doc.Name),
                 "world_from_shape": world_from_shape(obj),
                 "positions": positions, "normals": normals, "triangles": triangles, "faces": faces}
 

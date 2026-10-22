@@ -1,6 +1,9 @@
 """Native sketch curves and projected references. No independent geometry model."""
 
 import math
+import io
+import zipfile
+import xml.etree.ElementTree as ET
 
 import FreeCAD as App
 import Part
@@ -184,25 +187,79 @@ def _links(obj):
     return links
 
 
+def _extension_metadata(geo):
+    extension = geo.getExtensionOfType("Sketcher::ExternalGeometryExtension")
+    return {"persistent_reference": extension.Ref,
+            "defining": extension.testFlag("Defining"),
+            "missing": extension.testFlag("Missing"), "frozen": extension.testFlag("Frozen")}
+
+
+def restore_point_extensions(obj, property_name, geometries):
+    """Recover native extensions discarded by 1.1.4 GeomPoint::getPyObject.
+
+    PropertyGeometryList::getPyObject and Save traverse the same native list.
+    Use that exact property order, never source-link order or coordinates.
+    Restore only detached Python points; the document remains untouched.
+    """
+    if not any(isinstance(geo, Part.Point) for geo in geometries):
+        return geometries
+    with zipfile.ZipFile(io.BytesIO(obj.dumpPropertyContent(property_name))) as archive:
+        native = ET.fromstring(archive.read("Persistence.xml")).find("GeometryList")
+    records = list(native)
+    if int(native.attrib["count"]) != len(geometries) or len(records) != len(geometries) or any(
+            node.attrib.get("type") != geo.TypeId for node, geo in zip(records, geometries)):
+        raise GeometryError("Native " + property_name + " property serialization does not match its geometry list")
+    result = list(geometries)
+    for slot, geo in enumerate(geometries):
+        if not isinstance(geo, Part.Point):
+            continue
+        content = ET.Element("Content")
+        content.extend(records[slot])
+        payload = io.BytesIO()
+        with zipfile.ZipFile(payload, "w") as archive:
+            archive.writestr("Persistence.xml", ET.tostring(content, encoding="utf-8"))
+        detached = Part.Point()
+        detached.restoreContent(bytearray(payload.getvalue()))
+        if not detached.hasExtensionOfType("Sketcher::SketchGeometryExtension"):
+            raise GeometryError("Native point serialization has no Sketch geometry metadata")
+        result[slot] = detached
+    return result
+
+
 def externals(obj):
     links = _links(obj)
     types = obj.ExternalTypes
+    geometries = obj.ExternalGeo
+    point_metadata, metadata_error = {}, None
+    if any(isinstance(geo, Part.Point) and not geo.hasExtensionOfType("Sketcher::ExternalGeometryExtension")
+           for geo in geometries[2:]):
+        try:
+            recovered = restore_point_extensions(obj, "ExternalGeo", geometries)
+            point_metadata = {slot: _extension_metadata(geo) for slot, geo in enumerate(recovered)
+                              if isinstance(geo, Part.Point)}
+        except Exception as error:
+            # Metadata/display limitations must not reject valid native geometry.
+            # Keep unknown fields explicit and block source-dependent edits below.
+            metadata_error = "Native projected-point metadata unavailable: " + str(error)
     result = []
-    for index, geo in enumerate(obj.ExternalGeo[2:]):
-        extension = geo.getExtensionOfType("Sketcher::ExternalGeometryExtension")
-        matches = [(i, link) for i, (link, keys) in enumerate(links) if extension.Ref in keys]
+    for index, geo in enumerate(geometries[2:]):
+        metadata = (_extension_metadata(geo) if geo.hasExtensionOfType("Sketcher::ExternalGeometryExtension")
+                    else point_metadata.get(index + 2))
+        if metadata is None:
+            metadata = {"persistent_reference": None, "defining": None, "missing": None, "frozen": None}
+        matches = [(i, link) for i, (link, keys) in enumerate(links) if metadata["persistent_reference"] in keys]
         source_index, source = matches[0] if len(matches) == 1 else (None, None)
         geometry_index = -3 - index
         geometry = geometry_entry(geo, geometry_index, True, sketch=obj)
         geometry["editable"] = False
         mode = types[source_index] if source_index is not None and source_index < len(types) else None
-        result.append({"index": index, "geometry_index": geometry_index, "source": source,
-                       "source_index": source_index, "persistent_reference": extension.Ref,
-                       "defining": extension.testFlag("Defining"),
-                       "intersection": mode in (1, 2) if mode is not None else None,
-                       "projection": mode in (0, 2) if mode is not None else None,
-                       "missing": extension.testFlag("Missing"),
-                       "frozen": extension.testFlag("Frozen"), "geometry": geometry})
+        entry = {"index": index, "geometry_index": geometry_index, "source": source,
+                 "source_index": source_index, **metadata,
+                 "intersection": mode in (1, 2) if mode is not None else None,
+                 "projection": mode in (0, 2) if mode is not None else None, "geometry": geometry}
+        if metadata["persistent_reference"] is None:
+            entry["metadata_error"] = metadata_error or "Native external geometry has no readable extension"
+        result.append(entry)
     return result
 
 
@@ -224,6 +281,8 @@ def external_edit(obj, edit):
     if type(index) is not int or not 0 <= index < len(obj.ExternalGeo) - 2:
         raise GeometryError("External geometry index is outside the current native list")
     if op == "delete_external":
+        if externals(obj)[index]["persistent_reference"] is None:
+            raise GeometryError("Native external metadata is unresolved; cannot safely delete its source group")
         obj.delExternal(index)
     elif op == "external_state":
         if "defining" in edit:

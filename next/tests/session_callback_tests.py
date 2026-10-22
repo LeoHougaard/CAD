@@ -50,6 +50,8 @@ class TransportTests(unittest.TestCase):
     def test_internal_errors_malformed_errors_and_eof_are_fatal(self):
         for error in [dict(code="revision_state", message="Missing state"),
                       dict(code="journal_state", message="Missing state"),
+                      dict(code="lease_state", message="Missing lease state"),
+                      dict(code="lease_protocol", message="Malformed native lease facts"),
                       dict(code=17, message="Bad code"), dict(code="stale_revision", message=17)]:
             self.module._sequence = 0
             reply = self.frame()
@@ -60,6 +62,20 @@ class TransportTests(unittest.TestCase):
         sys.stdin = io.StringIO("")
         with self.assertRaises(self.module.CallbackTransportError):
             self.module.call(self.module.REVISIONS, "current", "Doc")
+
+    def test_lease_admission_is_ordinary_and_internal_lease_failure_is_fatal(self):
+        reply = dict(kind=self.module.LEASES, version=1, id=-19, sequence=1,
+                     ok=False, error=dict(code="sketch_owner", message="Owned by another session"))
+        sys.stdin = io.StringIO(json.dumps(reply) + "\n")
+        with self.assertRaises(self.module.CallbackError):
+            self.module.call(self.module.LEASES, "local", "Doc")
+        reply.update(sequence=2, error=dict(code="lease_state", message="Pending stage missing"))
+        sys.stdin = io.StringIO(json.dumps(reply) + "\n")
+        with self.assertRaises(self.module.CallbackTransportError):
+            self.module.call(self.module.LEASES, "preview_resolve", "Doc", accepted=True)
+        sent = [json.loads(line) for line in self.output.getvalue().splitlines()]
+        self.assertEqual([f["sequence"] for f in sent], [1, 2])
+        self.assertEqual([f["id"] for f in sent], [-19, -19])
 
     def test_pipe_write_failure_is_fatal(self):
         self.output.close()

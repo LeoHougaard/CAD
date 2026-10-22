@@ -68,6 +68,7 @@ jobs:
           python next/tests/sketch_editor_workflows.py --host "$host" --runtime next/target/runtime.json --output next/target/sketch-editor-documents
           python next/tests/revision_workflows.py --host "$host" --runtime next/target/runtime.json --output next/target/revision-documents
           python next/tests/session_lifecycle_workflows.py --host "$host" --runtime next/target/runtime.json --output next/target/session-lifecycle-documents
+          python next/tests/preview_facts_workflows.py --host "$host" --runtime next/target/runtime.json --output next/target/preview-facts-documents
           python next/tests/body_workflows.py --host "$host" --compiler "$compiler" --runtime next/target/runtime.json --output next/target/body-documents
           python next/tests/history_workflows.py --host "$host" --compiler "$compiler" --runtime next/target/runtime.json --output next/target/history-documents
           python next/tests/sketch_creation_workflows.py --host "$host" --compiler "$compiler" --runtime next/target/runtime.json --output next/target/sketch-creation-documents
@@ -77,6 +78,8 @@ jobs:
           python next/tests/refraction_workflows.py --host "$host" --compiler "$sketch_compiler" --runtime next/target/runtime.json --output next/target/refraction-documents
           python next/tests/refraction_compatibility_workflows.py --host "$host" --compiler "$sketch_compiler" --runtime next/target/runtime.json --output next/target/refraction-compatibility-documents
           python next/tests/via_point_workflows.py --host "$host" --compiler "$sketch_compiler" --runtime next/target/runtime.json --output next/target/via-point-documents
+          python next/tests/projected_point_workflows.py --host "$host" --compiler "$sketch_compiler" --runtime next/target/runtime.json --output next/target/projected-point-documents
+          python next/tests/internal_point_copy_workflows.py --host "$host" --runtime next/target/runtime.json --output next/target/internal-point-copy-documents
           python next/tests/feature_workflows.py --host "$host" --compiler "$compiler" --runtime next/target/runtime.json --output next/target/feature-documents
           python next/tests/sketch_curves_workflows.py --host "$host" --compiler "$sketch_compiler" --runtime next/target/runtime.json --output next/target/sketch-curve-documents
           python next/tests/sketch_operations_workflows.py --host "$host" --compiler "$sketch_compiler" --runtime next/target/runtime.json --output next/target/sketch-operation-documents

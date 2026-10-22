@@ -63,6 +63,41 @@ def main():
             assert inspect(doc) == before, op
 
 
+    def lease_checks(doc, other, sketch=False):
+        before, foreign = inspect(doc), inspect(other)
+        owner_error = "sketch_active" if sketch else "preview_active"
+        # Global lease guards precede document existence, revision and token errors.
+        writes = ["new", "open", "transaction", "undo", "redo", "save", "close", "preview",
+                  "preview_commit", "preview_cancel", "sketch_begin", "sketch_finish", "sketch_cancel", "export_exchange"]
+        for op in writes:
+            for target in [other, "Missing", None, 17]:
+                for revision in [None, 0, foreign["revision"]]:
+                    call(op, owner_error, document=target, expected_revision=revision,
+                         token=[], sketch_token={}, edits=[], name="DeniedLease", path=str(output/"denied-lease.FCStd"))
+            if op not in {"new", "open"}:
+                for target in [[], {}]:
+                    call(op,"native_error",document=target,expected_revision=0,token=[])
+        # Same-document revision checking precedes local gesture/session ownership.
+        call("preview_cancel","missing_revision",document=doc,token=[])
+        call("preview_cancel","stale_revision",document=doc,expected_revision=0,token=[])
+        local = dict(document=doc,expected_revision=before["revision"])
+        for op in ["transaction","undo","redo","save","close","sketch_begin","sketch_finish","export_exchange"]:
+            call(op,"preview_active",**local,token="wrong",sketch_token="wrong",edits=[])
+        if sketch:
+            call("sketch_cancel","sketch_owner",**local,token="wrong")
+            for op in ["preview","preview_commit","preview_cancel"]:
+                call(op,"sketch_owner",**local,token=[],sketch_token="wrong")
+                call(op,"invalid_request",**local,token=[],sketch_token="s")
+                call(op,"preview_owner",**local,token="wrong",sketch_token="s")
+        else:
+            call("sketch_cancel","preview_active",**local,token="wrong")
+            for op in ["preview","preview_commit","preview_cancel"]:
+                call(op,"invalid_request",**local,token=[])
+                call(op,"preview_owner",**local,token="wrong")
+        assert inspect(doc) == before and inspect(other) == foreign
+        assert not (output/"denied-lease.FCStd").exists()
+
+
     try:
         call("capabilities")
         call("feature_schema",type="Part::Box")
@@ -94,6 +129,12 @@ def main():
             ("export_exchange",dict(path=str(output/"denied.step"),objects=["Box"]))])
         assert not (output/"missing-denied.FCStd").exists() and not (output/"denied.step").exists()
         before = inspect(doc)
+        for token in [None, True, 17, 1.0, [], {}, "", "x"*257, "🦀"*257]:
+            mutate("sketch_begin",doc,"invalid_request",object="Sketch",token=token)
+            mutate("preview",doc,"invalid_request",token=token,edits=[])
+        for token in ["x"*256, "🦀"*256]:
+            mutate("sketch_begin",doc,"not_found",object="Missing",token=token)
+            mutate("preview_commit",doc,"no_preview",token=token)
         mutate("transaction",doc,"invalid_request",edits=[])
         mutate("transaction",doc,"invalid_request",edits=[dict(op="constraint",object="Sketch",kind="NotAConstraint",args=[])])
         assert inspect(doc) == before
@@ -128,7 +169,10 @@ def main():
         mutate("preview",doc,"invalid_model",token="first",edits=[add("Part::Cut","Invalid")])
         state = inspect(doc)
         assert state["revision"] == old + 1 and state["preview"] is None
+        for edit in [dict(op="body_tip",object="Missing",tip=None),dict(kind="body_reorder",object="Missing",target=None,after=True)]:
+            mutate("preview",doc,"history_busy",token="p",edits=[edit])
         state = mutate("preview",doc,token="p",edits=[set_value("Box","Length",50)])["state"]
+        lease_checks(doc,other)
         old = state["revision"]
         mutate("preview",doc,"invalid_model",token="p",edits=[add("Part::Cut","Invalid")])
         state = inspect(doc)
@@ -149,10 +193,22 @@ def main():
             ("preview",dict(sketch_token="s",token="drag",edits=[])),
             ("sketch_finish",dict(token="s")),("sketch_cancel",dict(token="s"))])
         call("transaction","sketch_active",document=other,edits=[])
+        before = inspect(doc)
+        for operation in ["transaction","preview"]:
+            args = dict(sketch_token="s",token="scope") if operation == "preview" else dict(sketch_token="s")
+            for edit in [None, [], {}, dict(op="datum",object="Box",index=0,value=20),
+                         dict(op="add_object",object="Sketch",type="Part::Box",name="Denied"),
+                         dict(op="unknown",object="Sketch")]:
+                mutate(operation,doc,"sketch_active",**args,edits=[edit])
+            for op in [[],{}]:
+                mutate(operation,doc,"native_error",**args,edits=[dict(object="Sketch",op=op)])
+            mutate(operation,doc,"invalid_request",**args,edits=[dict(op="constraint",object="Box",kind="Unknown",args=[])])
+            assert inspect(doc) == before
         mutate("transaction",doc,sketch_token="s",edits=[dict(op="datum",object="Sketch",index=9,value=50)])
         mutate("undo",doc,sketch_token="s")
         mutate("redo",doc,sketch_token="s")
         mutate("preview",doc,sketch_token="s",token="drag",edits=[dict(op="datum",object="Sketch",index=9,value=60)])
+        lease_checks(doc,other,sketch=True)
         mutate("preview_cancel",doc,sketch_token="s",token="drag")
         mutate("preview",doc,sketch_token="s",token="drag",edits=[dict(op="datum",object="Sketch",index=9,value=70)])
         mutate("preview_commit",doc,sketch_token="s",token="drag")

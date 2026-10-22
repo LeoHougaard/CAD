@@ -10,6 +10,7 @@ import re
 
 import FreeCAD as App
 import expression_links as ExpressionLinks
+import sketch_geometry as SketchGeometry
 
 
 OPERATIONS = ("reference_copy",)
@@ -65,8 +66,7 @@ def same_constraints(copy, expected):
     return True
 
 
-def same_geometry(source, copy):
-    frozen = [g for g in source.ExternalGeo[2:] if g.getExtensionOfType("Sketcher::ExternalGeometryExtension").testFlag("Defining")]
+def same_geometry(source, copy, frozen):
     if source.GeometryCount + len(frozen) != copy.GeometryCount or source.Placement != copy.Placement:
         return False
     for index, (left, right) in enumerate(zip([*source.Geometry, *frozen], copy.Geometry)):
@@ -87,7 +87,12 @@ def same_geometry(source, copy):
 def independent(doc, source, body, name):
     if not source.isDerivedFrom("Sketcher::SketchObject"):
         raise ReferenceError("unsupported_reference", "Independent profile copying requires a native Sketch")
-    frozen = [g for g in source.ExternalGeo[2:] if g.getExtensionOfType("Sketcher::ExternalGeometryExtension").testFlag("Defining")]
+    # Pinned Point Python wrappers lose native extensions. Use the same exact
+    # property metadata recovery as display, and never silently omit an unknown.
+    external = SketchGeometry.externals(source)
+    if any(entry["defining"] is None for entry in external):
+        raise ReferenceError("unsupported_reference", "Native external defining metadata is unresolved")
+    frozen = [geo for geo, entry in zip(source.ExternalGeo[2:], external) if entry["defining"]]
     expected = internal_constraints(source)
     entries = ExpressionLinks.entries(source)
     copy = doc.addObject(source.TypeId, name)
@@ -114,12 +119,14 @@ def independent(doc, source, body, name):
     # Individual property restoration does not finalize Sketch persistent maps.
     # Without this native object roundtrip delExternal can erase all constraints.
     copy.restoreContent(copy.dumpContent())
-    # Earlier materializations can leave external identity on internal curves.
-    # Native clones retain their Sketch geometry IDs while removing that identity.
-    if any(geometry.hasExtensionOfType("Sketcher::ExternalGeometryExtension") for geometry in copy.Geometry):
-        internal = [geometry.clone() for geometry in copy.Geometry]
+    # Internal Point wrappers also drop extensions. Recover their full native
+    # content before testing identity or cloning, preserving IDs/construction.
+    internal = SketchGeometry.restore_point_extensions(copy, "Geometry", copy.Geometry)
+    if any(geometry.hasExtensionOfType("Sketcher::ExternalGeometryExtension") for geometry in internal):
+        internal = [geometry.clone() for geometry in internal]
         for geometry in internal:
-            geometry.deleteExtensionOfType("Sketcher::ExternalGeometryExtension")
+            if geometry.hasExtensionOfType("Sketcher::ExternalGeometryExtension"):
+                geometry.deleteExtensionOfType("Sketcher::ExternalGeometryExtension")
         copy.Geometry = internal
     # Bind after native restore finalization. Restoring an already-bound engine
     # can leave its external dependency edges stale until the next file reopen.
@@ -131,7 +138,8 @@ def independent(doc, source, body, name):
     # Preserve defining profile curves as independent native internal geometry.
     for geometry in frozen:
         internal = geometry.copy()
-        internal.deleteExtensionOfType("Sketcher::ExternalGeometryExtension")
+        if internal.hasExtensionOfType("Sketcher::ExternalGeometryExtension"):
+            internal.deleteExtensionOfType("Sketcher::ExternalGeometryExtension")
         index = copy.addGeometry(internal, False)
         # Native addGeometry(False) retains an existing construction flag.
         copy.setConstruction(index, False)
@@ -150,7 +158,7 @@ def independent(doc, source, body, name):
         raise ReferenceError("invalid_model", "Native independent copy retained external geometry")
     if copy.AttachmentSupport or copy.MapMode != "Deactivated":
         raise ReferenceError("invalid_model", "Native independent copy remained attached")
-    if not same_geometry(source, copy):
+    if not same_geometry(source, copy, frozen):
         raise ReferenceError("unsupported_reference", "Native independent copy changed the solved profile geometry")
     return copy
 

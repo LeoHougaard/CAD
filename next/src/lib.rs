@@ -4,6 +4,7 @@ pub mod body_commands;
 #[cfg(feature = "desktop")]
 pub mod editor;
 pub mod feature_commands;
+mod gesture_leases;
 pub mod history_commands;
 pub mod packages;
 pub mod profile_reference_commands;
@@ -109,6 +110,7 @@ pub struct WorkerSession {
     journals: sketch_journal::Journals,
     callback_sequence: u64,
     revisions: revision_registry::Revisions,
+    leases: gesture_leases::Leases,
 }
 
 impl WorkerSession {
@@ -163,6 +165,7 @@ impl WorkerSession {
             journals: sketch_journal::Journals::default(),
             callback_sequence: 0,
             revisions: revision_registry::Revisions::default(),
+            leases: gesture_leases::Leases::default(),
         };
         session.capabilities = session.call("capabilities", Map::new())?;
         Ok(session)
@@ -295,6 +298,7 @@ impl WorkerSession {
             };
             if response["kind"] == sketch_journal::CHANNEL
                 || response["kind"] == revision_registry::CHANNEL
+                || response["kind"] == gesture_leases::CHANNEL
             {
                 callbacks += 1;
                 let sequence = self
@@ -313,8 +317,10 @@ impl WorkerSession {
                 self.callback_sequence = sequence;
                 let mut reply = if response["kind"] == sketch_journal::CHANNEL {
                     self.journals.respond(&response)
-                } else {
+                } else if response["kind"] == revision_registry::CHANNEL {
                     self.revisions.respond(&response)
+                } else {
+                    self.leases.respond(&response)
                 };
                 let reply_object = reply
                     .as_object_mut()
@@ -466,12 +472,35 @@ mod tests {
                         }
                     }
                 }
+                "lease_fact_delay" => {
+                    for fact in [None, Some(0)] {
+                        sequence += 1;
+                        let mut frame = json!({"kind":gesture_leases::CHANNEL,"version":1,
+                            "id":request["id"],"sequence":sequence,"action":"preview_ready",
+                            "document":"Fixture","request":{"op":"preview","token":"p"}});
+                        if let Some(redo) = fact {
+                            frame["redo"] = json!(redo);
+                        }
+                        println!("{frame}");
+                        io::stdout().flush().unwrap();
+                        let Some(reply) = lines.next() else { return };
+                        let reply: Value = serde_json::from_str(&reply.unwrap()).unwrap();
+                        assert_eq!(reply["ok"], true);
+                        assert_eq!(reply["result"]["needs_redo"], fact.is_none());
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                }
                 "revision_roundtrip"
                 | "revision_bad_id"
                 | "revision_bad_sequence"
                 | "revision_bad_version"
                 | "revision_delay"
-                | "revision_unknown_channel" => {
+                | "revision_unknown_channel"
+                | "lease_roundtrip"
+                | "lease_bad_id"
+                | "lease_bad_sequence"
+                | "lease_bad_version"
+                | "lease_delay" => {
                     fixture_revision += 1;
                     let mut replies = Vec::new();
                     for (channel, action, extra) in [
@@ -484,6 +513,7 @@ mod tests {
                             "check",
                             json!({"expected_revision":fixture_revision}),
                         ),
+                        (gesture_leases::CHANNEL, "metadata", json!({})),
                         (sketch_journal::CHANNEL, "end", json!({})),
                         (revision_registry::CHANNEL, "close", json!({})),
                     ] {
@@ -495,11 +525,19 @@ mod tests {
                             .unwrap()
                             .extend(extra.as_object().unwrap().clone());
                         // Reach the revision channel before injecting transport faults.
-                        if channel == revision_registry::CHANNEL {
+                        if (channel == revision_registry::CHANNEL
+                            && !request["op"].as_str().unwrap().starts_with("lease_"))
+                            || (channel == gesture_leases::CHANNEL
+                                && request["op"].as_str().unwrap().starts_with("lease_"))
+                        {
                             match request["op"].as_str().unwrap() {
-                                "revision_bad_id" => frame["id"] = json!(9999),
-                                "revision_bad_sequence" => frame["sequence"] = json!(0),
-                                "revision_bad_version" => frame["version"] = json!(2),
+                                "revision_bad_id" | "lease_bad_id" => frame["id"] = json!(9999),
+                                "revision_bad_sequence" | "lease_bad_sequence" => {
+                                    frame["sequence"] = json!(0)
+                                }
+                                "revision_bad_version" | "lease_bad_version" => {
+                                    frame["version"] = json!(2)
+                                }
                                 "revision_unknown_channel" => {
                                     frame["kind"] = json!("unknown-callback")
                                 }
@@ -512,8 +550,10 @@ mod tests {
                         let reply: Value = serde_json::from_str(&reply.unwrap()).unwrap();
                         assert_eq!(reply["ok"], true);
                         replies.push(reply["result"].clone());
-                        if channel == revision_registry::CHANNEL
-                            && request["op"] == "revision_delay"
+                        if (channel == revision_registry::CHANNEL
+                            && request["op"] == "revision_delay")
+                            || (channel == gesture_leases::CHANNEL
+                                && request["op"] == "lease_delay")
                         {
                             std::thread::sleep(Duration::from_secs(1));
                         }
@@ -660,7 +700,7 @@ mod tests {
             let result = session.call("revision_roundtrip", Map::new()).unwrap();
             assert_eq!(
                 result["callbacks"],
-                json!([null, null, 0, revision, revision, null, null])
+                json!([null, null, 0, revision, revision, {"preview":null,"sketch_edit":null,"available":true}, null, null])
             );
         }
         session.call("journal_roundtrip", Map::new()).unwrap();
@@ -674,6 +714,9 @@ mod tests {
             "revision_bad_version",
             "revision_bad_sequence",
             "revision_unknown_channel",
+            "lease_bad_id",
+            "lease_bad_version",
+            "lease_bad_sequence",
         ] {
             let mut session = session();
             assert!(
@@ -693,6 +736,48 @@ mod tests {
             Err(Error::Timeout(_))
         ));
         assert!(session.child.try_wait().unwrap().is_some());
+    }
+
+    #[test]
+    fn lease_callback_keeps_outer_integer_id_and_original_deadline() {
+        for id in [json!(i64::MIN), json!(u64::MAX)] {
+            let mut session = session();
+            let response = session
+                .request(json!({"id":id,"op":"lease_roundtrip"}))
+                .unwrap();
+            assert_eq!(response["id"], id);
+            assert_eq!(session.callback_sequence, 8);
+        }
+        let mut session = session();
+        session.timeout = Duration::from_millis(30);
+        assert!(matches!(
+            session.call("lease_delay", Map::new()),
+            Err(Error::Timeout(_))
+        ));
+        assert!(session.child.try_wait().unwrap().is_some());
+        assert!(matches!(
+            session.call("inspect", Map::new()),
+            Err(Error::Closed)
+        ));
+    }
+
+    #[test]
+    fn lazy_preview_fact_handshake_keeps_the_original_request_deadline() {
+        let mut session = session();
+        session.timeout = Duration::from_millis(150);
+        assert!(matches!(
+            session.call("lease_fact_delay", Map::new()),
+            Err(Error::Timeout(_))
+        ));
+        assert_eq!(
+            session.callback_sequence, 2,
+            "Both demand and fact replies used the same request"
+        );
+        assert!(session.child.try_wait().unwrap().is_some());
+        assert!(matches!(
+            session.call("inspect", Map::new()),
+            Err(Error::Closed)
+        ));
     }
 
     #[test]
