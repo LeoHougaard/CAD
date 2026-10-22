@@ -10,10 +10,11 @@ application.
 Rust now owns accepted sketch edit groups, the action cursor, staged acceptance
 and history moves, branching, counts and replay planning. Native document
 transactions, replay execution and geometry remain native; Python still owns
-gesture tokens, leases, revisions and native orchestration. This is a bounded
+gesture tokens, leases and native orchestration. This is a bounded
 component extraction, not a complete Rust session or modeling port.
 
-Windows checks pass 146 active Rust tests, strict Clippy and all 16 native suites.
+The journal checkpoint passed 146 active Rust tests, strict Clippy and all 16
+native suites on Windows.
 Matched headless evidence covers 368 broad responses, 30 deterministic journal
 responses, five recovery states and 59 additional anchored responses per side.
 Comparison retains coordinates, constraints, ownership, revisions and history.
@@ -26,7 +27,10 @@ The callback writer has deadline tests for stalled large replay replies and
 ordinary request writes. A 256 KiB stalled callback with a 200 ms deadline exits
 in about 262 ms including host startup. The previous blocking writer took about
 1.56 seconds. Timeout closes and reaps the configured worker. Unix descendant
-termination has a Linux-specific test and still requires a Linux run.
+termination passes its Linux-specific test in
+[Windows/Linux CI](https://github.com/LeoHougaard/CAD/actions/runs/39809621100).
+Both platforms pass their full Rust checks and all 16 native suites for the
+journal checkpoint.
 
 Matched Windows debug headless resource checks use a native Pad with 12 holes,
 16 geometry items, 47 constraints, 64 accepted actions and 32 Undo/Redo pairs.
@@ -36,6 +40,36 @@ All declared latency and memory gates pass. CPU use is zero in six idle samples
 of at least five seconds. These measurements do not establish GUI responsiveness,
 cold-cache startup or general complex-part performance. Pixel desktop acceptance
 of this extraction remains open.
+
+## Revision registry extraction and lifecycle recovery
+
+Rust now exclusively owns document revision state and missing/stale token
+checks. Python retains gesture leases and the decision when acceptance or
+recovery requires a new revision. A separate review found no actionable defects
+in the five-file extraction. It verified malformed tokens and identifiers,
+integer request IDs, name reuse, callback failures and lifecycle recovery through
+286 additional native responses and focused Rust/Python tests.
+
+The merged desktop source passes 151 active Rust tests, strict Clippy and four
+Python callback-transport tests. Public native regression scripts exercise 310
+guarded responses and eight injected snapshot-failure cases. They cover all
+published operations, worker-wide leases, stale writes, failed preparation,
+retained preview ownership, action history and successful retry. Rejected sketch
+preview Commit preserves the candidate and redo; Finish prepares its snapshot
+once before commit. Failed sketch Cancel and preview Cancel restore their owned
+state and advance the revision. Failed Begin releases its unpublished session
+without advancing revision.
+
+All 18 merged native suites pass on Windows. Fresh matched resource checks
+compare the original Python journal/revision baseline with the actual combined
+Rust journal, deadline writer and revision host. Combined median working set is
+79.65 versus 80.09 MiB; peak working set is 80.14 versus 80.76 MiB. Warm startup
+is 622.56 versus 631.07 ms. Every declared latency and memory gate passes, with
+zero CPU in six idle samples of at least five seconds. The fixture and limits
+are the headless 12-hole Pad workload described above.
+
+Linux integration and Pixel desktop acceptance of the revision extraction remain
+pending. The earlier journal checkpoint's successful Linux CI is separate evidence.
 
 ## Real Pixel desktop workflow
 

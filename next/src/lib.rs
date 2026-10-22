@@ -8,6 +8,7 @@ pub mod history_commands;
 pub mod packages;
 pub mod profile_reference_commands;
 pub mod property_commands;
+mod revision_registry;
 pub mod sketch_commands;
 pub mod sketch_creation_commands;
 pub mod sketch_curve_commands;
@@ -106,7 +107,8 @@ pub struct WorkerSession {
     closed: bool,
     capabilities: Value,
     journals: sketch_journal::Journals,
-    journal_sequence: u64,
+    callback_sequence: u64,
+    revisions: revision_registry::Revisions,
 }
 
 impl WorkerSession {
@@ -159,7 +161,8 @@ impl WorkerSession {
             closed: false,
             capabilities: Value::Null,
             journals: sketch_journal::Journals::default(),
-            journal_sequence: 0,
+            callback_sequence: 0,
+            revisions: revision_registry::Revisions::default(),
         };
         session.capabilities = session.call("capabilities", Map::new())?;
         Ok(session)
@@ -290,24 +293,32 @@ impl WorkerSession {
                     continue;
                 }
             };
-            if response["kind"] == sketch_journal::CHANNEL {
+            if response["kind"] == sketch_journal::CHANNEL
+                || response["kind"] == revision_registry::CHANNEL
+            {
                 callbacks += 1;
                 let sequence = self
-                    .journal_sequence
+                    .callback_sequence
                     .checked_add(1)
-                    .ok_or_else(|| Error::Protocol("journal sequence exhausted".into()))?;
+                    .ok_or_else(|| Error::Protocol("session callback sequence exhausted".into()))?;
                 if callbacks > 4096
                     || response["version"] != PROTOCOL_VERSION
                     || response["id"] != *id
                     || response["sequence"].as_u64() != Some(sequence)
                 {
                     return Err(Error::Protocol(
-                        "invalid sketch journal callback correlation".into(),
+                        "invalid session callback correlation".into(),
                     ));
                 }
-                self.journal_sequence = sequence;
-                let mut reply = self.journals.respond(&response);
-                let reply_object = reply.as_object_mut().expect("journal response object");
+                self.callback_sequence = sequence;
+                let mut reply = if response["kind"] == sketch_journal::CHANNEL {
+                    self.journals.respond(&response)
+                } else {
+                    self.revisions.respond(&response)
+                };
+                let reply_object = reply
+                    .as_object_mut()
+                    .expect("session callback response object");
                 for key in ["kind", "version", "id", "sequence"] {
                     reply_object.insert(key.into(), response[key].clone());
                 }
@@ -399,6 +410,7 @@ mod tests {
         io::stdout().flush().unwrap();
         let mut count = 0;
         let mut sequence = 0;
+        let mut fixture_revision = 0;
         let stdin = io::stdin();
         let mut lines = stdin.lock().lines();
         while let Some(line) = lines.next() {
@@ -453,6 +465,60 @@ mod tests {
                             std::thread::sleep(Duration::from_secs(1));
                         }
                     }
+                }
+                "revision_roundtrip"
+                | "revision_bad_id"
+                | "revision_bad_sequence"
+                | "revision_bad_version"
+                | "revision_delay"
+                | "revision_unknown_channel" => {
+                    fixture_revision += 1;
+                    let mut replies = Vec::new();
+                    for (channel, action, extra) in [
+                        (sketch_journal::CHANNEL, "begin", json!({})),
+                        (revision_registry::CHANNEL, "lookup", json!({})),
+                        (revision_registry::CHANNEL, "peek", json!({})),
+                        (revision_registry::CHANNEL, "bump", json!({})),
+                        (
+                            revision_registry::CHANNEL,
+                            "check",
+                            json!({"expected_revision":fixture_revision}),
+                        ),
+                        (sketch_journal::CHANNEL, "end", json!({})),
+                        (revision_registry::CHANNEL, "close", json!({})),
+                    ] {
+                        sequence += 1;
+                        let mut frame = json!({"kind":channel,"version":1,"id":request["id"],
+                            "sequence":sequence,"action":action,"document":"Fixture"});
+                        frame
+                            .as_object_mut()
+                            .unwrap()
+                            .extend(extra.as_object().unwrap().clone());
+                        // Reach the revision channel before injecting transport faults.
+                        if channel == revision_registry::CHANNEL {
+                            match request["op"].as_str().unwrap() {
+                                "revision_bad_id" => frame["id"] = json!(9999),
+                                "revision_bad_sequence" => frame["sequence"] = json!(0),
+                                "revision_bad_version" => frame["version"] = json!(2),
+                                "revision_unknown_channel" => {
+                                    frame["kind"] = json!("unknown-callback")
+                                }
+                                _ => (),
+                            }
+                        }
+                        println!("{frame}");
+                        io::stdout().flush().unwrap();
+                        let Some(reply) = lines.next() else { return };
+                        let reply: Value = serde_json::from_str(&reply.unwrap()).unwrap();
+                        assert_eq!(reply["ok"], true);
+                        replies.push(reply["result"].clone());
+                        if channel == revision_registry::CHANNEL
+                            && request["op"] == "revision_delay"
+                        {
+                            std::thread::sleep(Duration::from_secs(1));
+                        }
+                    }
+                    response["result"]["callbacks"] = json!(replies);
                 }
                 "crash" => std::process::exit(17),
                 #[cfg(target_os = "linux")]
@@ -587,6 +653,49 @@ mod tests {
     }
 
     #[test]
+    fn shared_callback_sequence_routes_journal_and_revision_state() {
+        let mut session = session();
+        session.call("journal_roundtrip", Map::new()).unwrap();
+        for revision in 1..=2 {
+            let result = session.call("revision_roundtrip", Map::new()).unwrap();
+            assert_eq!(
+                result["callbacks"],
+                json!([null, null, 0, revision, revision, null, null])
+            );
+        }
+        session.call("journal_roundtrip", Map::new()).unwrap();
+        assert!(session.call("inspect", Map::new()).is_ok());
+    }
+
+    #[test]
+    fn revision_callback_correlation_and_deadline_fail_closed() {
+        for op in [
+            "revision_bad_id",
+            "revision_bad_version",
+            "revision_bad_sequence",
+            "revision_unknown_channel",
+        ] {
+            let mut session = session();
+            assert!(
+                matches!(session.call(op, Map::new()), Err(Error::Protocol(_))),
+                "{op}"
+            );
+            assert!(matches!(
+                session.call("inspect", Map::new()),
+                Err(Error::Closed)
+            ));
+            assert!(session.child.try_wait().unwrap().is_some());
+        }
+        let mut session = session();
+        session.timeout = Duration::from_millis(30);
+        assert!(matches!(
+            session.call("revision_delay", Map::new()),
+            Err(Error::Timeout(_))
+        ));
+        assert!(session.child.try_wait().unwrap().is_some());
+    }
+
+    #[test]
     fn worker_crash_and_clean_eof_are_errors() {
         for op in ["crash", "eof"] {
             let mut session = session();
@@ -611,7 +720,7 @@ mod tests {
             Err(Error::Timeout(_))
         ));
         assert_eq!(
-            session.journal_sequence, 4,
+            session.callback_sequence, 4,
             "The replay callback reached its blocked write"
         );
         assert!(start.elapsed() < Duration::from_secs(2));

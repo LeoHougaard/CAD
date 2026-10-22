@@ -50,6 +50,7 @@ jobs:
           cargo clippy --manifest-path next/Cargo.toml --all-features --all-targets --locked -- -D warnings
           cargo test --manifest-path next/Cargo.toml --all-features --locked
           cargo build --manifest-path next/Cargo.toml --all-features --bins --locked
+          python -B next/tests/session_callback_tests.py
       - name: Verified native runtime
         run: python next/tools/setup_runtime.py --output next/target/runtime.json
       - name: Native sketch editing, attachment, fillets, Bodies and history
@@ -65,6 +66,8 @@ jobs:
           if [ "$RUNNER_OS" = Windows ]; then sketch_compiler="$sketch_compiler.exe"; fi
           python next/tests/sketch_commands_workflows.py --host "$host" --compiler "$sketch_compiler" --runtime next/target/runtime.json --output next/target/sketch-command-documents
           python next/tests/sketch_editor_workflows.py --host "$host" --runtime next/target/runtime.json --output next/target/sketch-editor-documents
+          python next/tests/revision_workflows.py --host "$host" --runtime next/target/runtime.json --output next/target/revision-documents
+          python next/tests/session_lifecycle_workflows.py --host "$host" --runtime next/target/runtime.json --output next/target/session-lifecycle-documents
           python next/tests/body_workflows.py --host "$host" --compiler "$compiler" --runtime next/target/runtime.json --output next/target/body-documents
           python next/tests/history_workflows.py --host "$host" --compiler "$compiler" --runtime next/target/runtime.json --output next/target/history-documents
           python next/tests/sketch_creation_workflows.py --host "$host" --compiler "$compiler" --runtime next/target/runtime.json --output next/target/sketch-creation-documents

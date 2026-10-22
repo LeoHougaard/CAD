@@ -27,6 +27,7 @@ import profile_references as ProfileReferences
 import expression_links as ExpressionLinks
 import exchange as Exchange
 import sketch_journal as SketchJournal
+import session_callbacks as SessionCallbacks
 
 SketchJournal.configure(_protocol)
 
@@ -61,11 +62,9 @@ OBJECT_TYPES.update("PartDesign::" + operation + shape
                     for operation in ("Additive", "Subtractive")
                     for shape in ("Box", "Cylinder", "Sphere", "Cone", "Ellipsoid", "Torus", "Prism", "Wedge", "Helix"))
 _feature_schemas = {}
-_revisions = {}
 _poisoned = set()
 _previews = {}
 _sketch_sessions = {}
-_clock = 0
 
 
 class Failure(Exception):
@@ -102,25 +101,26 @@ def sketch_index(value, count):
     return value
 
 
-def bump(doc):
-    global _clock
-    _clock += 1
-    _revisions[doc.Name] = _clock
+def revision_request(action, key, **parameters):
+    try:
+        return SessionCallbacks.call(SessionCallbacks.REVISIONS, action, key, **parameters)
+    except SessionCallbacks.CallbackError as error:
+        fail(error.code, str(error))
 
+
+def bump(doc):
+    return revision_request("bump", doc.Name)
 
 def document(request, writable=False):
     key = request.get("document")
-    if key not in _revisions:
+    hash(key)  # Preserve native request errors for unhashable document identifiers.
+    if revision_request("lookup", key) is None:
         fail("not_found", "Document is not open in this worker")
     doc = App.getDocument(key)
     if writable:
         if key in _poisoned and request.get("op") != "close":
             fail("document_unavailable", "Rollback failed; close and reopen this document")
-        expected = request.get("expected_revision")
-        if expected is None:
-            fail("missing_revision", "Document mutations require expected_revision")
-        if type(expected) is not int or expected != _revisions[key]:
-            fail("stale_revision", "Document revision changed")
+        revision_request("check", key, expected_revision=request.get("expected_revision"))
         if key in _previews and not request.get("op", "").startswith("preview") and not (
                 key in _poisoned and request.get("op") == "close") and not (
                 key in _sketch_sessions and request.get("op") == "sketch_cancel"):
@@ -466,13 +466,13 @@ def snapshot(doc, revision=None):
                                                 "virtual": c.InVirtualSpace, "active": c.IsActive}
                                                for i, c in enumerate(obj.Constraints)]}
         objects.append(entry)
-    return {"document": doc.Name, "revision": _revisions[doc.Name] if revision is None else revision, "objects": objects,
+    return {"document": doc.Name, "revision": revision_request("current", doc.Name) if revision is None else revision, "objects": objects,
             **history_counts(doc), "sketch_edit": sketch_metadata(doc),
             "available": doc.Name not in _poisoned, "preview": preview_metadata(doc)}
 
 
 def prepare_state(doc):
-    state = snapshot(doc, _revisions.get(doc.Name, 0))
+    state = snapshot(doc, revision_request("peek", doc.Name))
     # Serialization is part of accepting a mutation, before it becomes durable
     # in the native undo history or visible under a new revision.
     json.dumps(state, allow_nan=False)
@@ -480,8 +480,8 @@ def prepare_state(doc):
 
 
 def publish_state(doc, state):
-    bump(doc)
-    state.update(revision=_revisions[doc.Name], **history_counts(doc))
+    current_revision = bump(doc)
+    state.update(revision=current_revision, **history_counts(doc))
     return state
 
 
@@ -748,7 +748,7 @@ def transaction(doc, request):
         bump(doc)
         raise
     publish_state(doc, state)
-    return {"document": doc.Name, "revision": _revisions[doc.Name],
+    return {"document": doc.Name, "revision": revision_request("current", doc.Name),
             "edits": results, "state": state}
 
 
@@ -839,7 +839,7 @@ def sketch_transaction(doc, request):
         raise
     journal(doc, "resolve", accepted=True)
     publish_state(doc, state)
-    return {"document": doc.Name, "revision": _revisions[doc.Name], "edits": results, "state": state}
+    return {"document": doc.Name, "revision": revision_request("current", doc.Name), "edits": results, "state": state}
 
 
 def sketch_history(doc, op):
@@ -870,8 +870,14 @@ def sketch_session(doc, request):
         journal(doc, "begin")
         _sketch_sessions[doc.Name] = {"token": token, "object": obj.Name, "label": "Edit " + obj.Label,
                                      "opened": False,
-                                     "context_revision": _revisions[doc.Name]}
-        return publish_state(doc, prepare_state(doc))
+                                     "context_revision": revision_request("current", doc.Name)}
+        try:
+            state = prepare_state(doc)
+        except Exception:
+            journal(doc, "end")
+            del _sketch_sessions[doc.Name]
+            raise
+        return publish_state(doc, state)
     session = _sketch_sessions.get(doc.Name)
     if session is None:
         fail("no_sketch_edit", "Document has no active sketch editing session")
@@ -882,9 +888,13 @@ def sketch_session(doc, request):
                 session["opened"] = False
             doc.recompute()
             validate(doc, whole=True)
+            state = prepare_state(doc)
+            state.update(sketch_edit=None, preview=None)
+            json.dumps(state, allow_nan=False)
         except Exception:
-            _poisoned.add(doc.Name)
-            bump(doc)
+            # Abort/replay can change native identities. Restore the owned session
+            # and gesture, then publish a new revision even if restoration poisons it.
+            restore_sketch(doc, session, _previews.get(doc.Name))
             raise
     else:
         try:
@@ -892,6 +902,7 @@ def sketch_session(doc, request):
                 fail("invalid_model", "Native finish recompute failed")
             validate(doc, whole=True)
             state = prepare_state(doc)
+            state.update(sketch_edit=None, preview=None)
             json.dumps(state, allow_nan=False)
             if session["opened"]:
                 doc.commitTransaction()
@@ -901,7 +912,9 @@ def sketch_session(doc, request):
     journal(doc, "end")
     del _sketch_sessions[doc.Name]
     _previews.pop(doc.Name, None)
-    return publish_state(doc, prepare_state(doc))
+    # Reuse the serialized geometry snapshot. Only infallible metadata and native
+    # history counts change after acceptance; publish_state bumps before reading counts.
+    return publish_state(doc, state)
 
 
 def sketch_preview(doc, request, token, active):
@@ -912,16 +925,25 @@ def sketch_preview(doc, request, token, active):
             fail("no_preview", "Document has no active preview")
         if op == "preview_commit":
             journal(doc, "stage_accept", group=active)
+            try:
+                state = prepare_state(doc)
+                state["preview"] = None
+                json.dumps(state, allow_nan=False)
+            except Exception:
+                journal(doc, "resolve", accepted=False)
+                raise
             journal(doc, "resolve", accepted=True)
         else:
             try:
                 replay_sketch(doc, session)
+                state = prepare_state(doc)
+                state["preview"] = None
+                json.dumps(state, allow_nan=False)
             except Exception:
-                _poisoned.add(doc.Name)
-                bump(doc)
+                restore_sketch(doc, session, active)
                 raise
         del _previews[doc.Name]
-        return publish_state(doc, prepare_state(doc))
+        return publish_state(doc, state)
     edits = request.get("edits")
     sketch_edits(session, edits)
     label = request.get("label", active["label"] if active else "Edit sketch")
@@ -943,7 +965,7 @@ def sketch_preview(doc, request, token, active):
         restore_sketch(doc, session, active)
         raise
     publish_state(doc, state)
-    return {"document": doc.Name, "revision": _revisions[doc.Name], "edits": results, "state": state}
+    return {"document": doc.Name, "revision": revision_request("current", doc.Name), "edits": results, "state": state}
 
 
 def preview(doc, request):
@@ -1035,7 +1057,7 @@ def preview(doc, request):
         raise
     _previews[doc.Name] = {"token": token, "label": label, "edits": edits}
     publish_state(doc, state)
-    return {"document": doc.Name, "revision": _revisions[doc.Name],
+    return {"document": doc.Name, "revision": revision_request("current", doc.Name),
             "edits": results, "state": state}
 
 
@@ -1120,7 +1142,7 @@ def dispatch(request):
         except Exchange.ExchangeError as error:
             fail(error.code, str(error))
         result["exported_objects"] = result.pop("objects")
-        return {"document": doc.Name, "revision": _revisions[doc.Name], **result}
+        return {"document": doc.Name, "revision": revision_request("current", doc.Name), **result}
     if op in ("sketch_begin", "sketch_finish", "sketch_cancel"):
         return sketch_session(doc, request)
     if op in ("preview", "preview_commit", "preview_cancel"):
@@ -1154,11 +1176,11 @@ def dispatch(request):
         path = native_path(request["path"])
         doc.saveAs(path)
         bump(doc)
-        return {"document": doc.Name, "revision": _revisions[doc.Name], "path": path}
+        return {"document": doc.Name, "revision": revision_request("current", doc.Name), "path": path}
     if op == "close":
         key = doc.Name
         App.closeDocument(key)
-        del _revisions[key]
+        revision_request("close", key)
         _poisoned.discard(key)
         _previews.pop(key, None)
         _sketch_sessions.pop(key, None)
@@ -1175,10 +1197,10 @@ def dispatch(request):
         if deflection <= 0:
             fail("invalid_request", "Deflection must be positive")
         if op == "topology":
-            return {"document": doc.Name, "revision": _revisions[doc.Name], "object": obj.Name,
+            return {"document": doc.Name, "revision": revision_request("current", doc.Name), "object": obj.Name,
                     "preview": preview_metadata(doc),
                     "sketch_edit": sketch_metadata(doc),
-                    "context_revision": _sketch_sessions[doc.Name]["context_revision"] if doc.Name in _sketch_sessions and obj.Name != _sketch_sessions[doc.Name]["object"] else _revisions[doc.Name],
+                    "context_revision": _sketch_sessions[doc.Name]["context_revision"] if doc.Name in _sketch_sessions and obj.Name != _sketch_sessions[doc.Name]["object"] else revision_request("current", doc.Name),
                     "world_from_shape": world_from_shape(obj),
                     **topology(obj.Shape, deflection)}
         positions, normals, triangles, faces = [], [], [], []
@@ -1194,10 +1216,10 @@ def dispatch(request):
             triangles.extend([[offset + i for i in tri] for tri in facets])
             faces.append({"subelement": "Face" + str(index), "first_triangle": first,
                           "triangle_count": len(facets)})
-        return {"document": doc.Name, "revision": _revisions[doc.Name], "object": obj.Name,
+        return {"document": doc.Name, "revision": revision_request("current", doc.Name), "object": obj.Name,
                 "preview": preview_metadata(doc),
                 "sketch_edit": sketch_metadata(doc),
-                "context_revision": _sketch_sessions[doc.Name]["context_revision"] if doc.Name in _sketch_sessions and obj.Name != _sketch_sessions[doc.Name]["object"] else _revisions[doc.Name],
+                "context_revision": _sketch_sessions[doc.Name]["context_revision"] if doc.Name in _sketch_sessions and obj.Name != _sketch_sessions[doc.Name]["object"] else revision_request("current", doc.Name),
                 "world_from_shape": world_from_shape(obj),
                 "positions": positions, "normals": normals, "triangles": triangles, "faces": faces}
 
@@ -1221,7 +1243,7 @@ def main():
                                                 "message": str(exc)}}
         _protocol.write(json.dumps(response, allow_nan=False, separators=(",", ":")) + "\n")
         _protocol.flush()
-    for key in list(_revisions):
+    for key in list(App.listDocuments()):
         App.closeDocument(key)
 
 

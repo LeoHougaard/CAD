@@ -6,15 +6,20 @@ object per line goes in and one response comes out. Diagnostics use stderr.
 The native request stream explicitly uses UTF-8 independently of the operating
 system locale, including portable Windows Python and Unicode file paths.
 
-The native worker can exchange private `cad-next-sketch-journal` callback frames
-with `WorkerSession` while a public request is pending. Rust owns accepted sketch
-actions and their replay order; the native worker owns document mutations. These
+The native worker can exchange private `cad-next-sketch-journal` and
+`cad-next-revisions` callback frames with `WorkerSession` while a public request
+is pending. Rust owns accepted sketch actions, replay order, the worker-local
+revision registry and missing/stale revision checks. Python chooses when native
+acceptance or recovery requires publication. The native worker owns document mutations. These
 frames never reach public NDJSON clients. Version, outer request ID and a
 session-wide monotonic sequence correlate each callback. Callback replies and
 ordinary request writes share the original request deadline, including blocked
 pipe writes. Transport failure closes the session because the mutation outcome
 may be unknown. On Unix the configured launcher and descendants run in a private
 process group so timeout termination also reaches the native worker.
+Closing a document removes its registry entry without resetting the global
+clock; reusing its name cannot reuse an old revision. Clock exhaustion terminates
+the session at publication. It does not reserve capacity before native edits.
 
 Requests contain `version: 1`, a caller-chosen integer `id`, `op`, and operation
 parameters. Responses repeat version and id, contain `ok`, and contain either
@@ -152,7 +157,7 @@ Downstream features are deliberately left pending: an open intermediate profile
 is editable even when a Pad consumes it.
 
 The first edit opens one native transaction for the complete session. A small
-worker-owned command journal groups accepted sketch actions. Session Undo/Redo
+Rust-owned command journal groups accepted sketch actions. Session Undo/Redo
 abort and replay the selected action prefix against the same native document;
 they do not alter a frontend geometry/history graph. This also avoids FreeCAD's
 20-entry native undo limit discarding a long session's cancellation baseline.
@@ -173,6 +178,14 @@ undo entry. The first actual edit
 branches native redo just like an ordinary transaction. Preexisting redo blocks
 a native drag preview before that first edit; a UI can defer its committed edit
 until release while keeping its pointer overlay separate from native geometry.
+
+Snapshots are prepared before accepting a sketch action or finishing the native
+transaction. Failed preview Commit preparation retains the existing candidate,
+action history and revision. Failed Begin preparation releases its unpublished
+session and retains the revision. If Cancel preparation fails after abort/replay,
+the worker restores the owned action prefix and gesture and advances revision.
+The client must inspect before retrying with a fresh revision. Failed restoration
+marks the document unavailable; Close remains available for recovery.
 
 Snapshots include `sketch_edit: null` outside a session. Mesh/topology during a
 session also include its metadata and `context_revision`. For the active sketch,
