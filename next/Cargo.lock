@@ -188,6 +188,7 @@ dependencies = [
  "eframe",
  "egui-file-dialog",
  "glam",
+ "libc",
  "serde",
  "serde_json",
 ]

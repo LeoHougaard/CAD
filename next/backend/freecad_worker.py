@@ -26,6 +26,9 @@ import feature_history as FeatureHistory
 import profile_references as ProfileReferences
 import expression_links as ExpressionLinks
 import exchange as Exchange
+import sketch_journal as SketchJournal
+
+SketchJournal.configure(_protocol)
 
 
 VERSION = 1
@@ -368,7 +371,7 @@ def oriented_normal(face, u, v):
 
 
 def sketch_geometry(obj):
-    return [SketchGeometry.geometry_entry(geo, index, obj.getConstruction(index))
+    return [SketchGeometry.geometry_entry(geo, index, obj.getConstruction(index), sketch=obj)
             for index, geo in enumerate(obj.Geometry)]
 
 
@@ -385,7 +388,7 @@ def sketch_metadata(doc):
 def history_counts(doc):
     session = _sketch_sessions.get(doc.Name)
     if session:
-        return {"undo_count": session["cursor"], "redo_count": len(session["groups"]) - session["cursor"]}
+        return journal(doc, "counts")
     return {"undo_count": doc.UndoCount, "redo_count": doc.RedoCount}
 
 
@@ -779,11 +782,18 @@ def solve_sketch(doc, session):
     validate(doc)
 
 
+def journal(doc, action, **parameters):
+    try:
+        return SketchJournal.call(action, doc if isinstance(doc, str) else doc.Name, **parameters)
+    except SketchJournal.JournalError as error:
+        fail(error.code, str(error))
+
+
 def replay_sketch(doc, session, candidate=None):
     if session["opened"]:
         doc.abortTransaction()
         session["opened"] = False
-    groups = session["groups"][:session["cursor"]]
+    groups = journal(doc, "replay")
     if groups or candidate:
         doc.openTransaction(session["label"])
         session["opened"] = True
@@ -811,38 +821,38 @@ def sketch_transaction(doc, request):
     session = _sketch_sessions[doc.Name]
     edits = request["edits"]
     sketch_edits(session, edits)
-    old_groups, old_cursor = session["groups"], session["cursor"]
+    staged = False
     try:
         if not session["opened"]:
             doc.openTransaction(session["label"])
             session["opened"] = True
         results = [apply_edit(doc, edit) for edit in edits]
         solve_sketch(doc, session)
-        session["groups"] = old_groups[:old_cursor] + [{"label": request.get("label", "Edit sketch"), "edits": edits}]
-        session["cursor"] = len(session["groups"])
+        journal(doc, "stage_accept", group={"label": request.get("label", "Edit sketch"), "edits": edits})
+        staged = True
         state = prepare_state(doc)
         json.dumps(results, allow_nan=False)
     except Exception:
-        session["groups"], session["cursor"] = old_groups, old_cursor
+        if staged:
+            journal(doc, "resolve", accepted=False)
         restore_sketch(doc, session)
         raise
+    journal(doc, "resolve", accepted=True)
     publish_state(doc, state)
     return {"document": doc.Name, "revision": _revisions[doc.Name], "edits": results, "state": state}
 
 
 def sketch_history(doc, op):
     session = _sketch_sessions[doc.Name]
-    cursor = session["cursor"]
-    if (op == "undo" and cursor == 0) or (op == "redo" and cursor == len(session["groups"])):
-        fail("nothing_to_" + op, "No sketch action to " + op)
-    session["cursor"] += -1 if op == "undo" else 1
+    journal(doc, "stage_" + op)
     try:
         replay_sketch(doc, session)
         state = prepare_state(doc)
     except Exception:
-        session["cursor"] = cursor
+        journal(doc, "resolve", accepted=False)
         restore_sketch(doc, session)
         raise
+    journal(doc, "resolve", accepted=True)
     return publish_state(doc, state)
 
 
@@ -857,8 +867,9 @@ def sketch_session(doc, request):
         if not obj.isDerivedFrom("Sketcher::SketchObject"):
             fail("invalid_request", "Sketch editing requires a native SketchObject")
         validate(doc, whole=True)
+        journal(doc, "begin")
         _sketch_sessions[doc.Name] = {"token": token, "object": obj.Name, "label": "Edit " + obj.Label,
-                                     "groups": [], "cursor": 0, "opened": False,
+                                     "opened": False,
                                      "context_revision": _revisions[doc.Name]}
         return publish_state(doc, prepare_state(doc))
     session = _sketch_sessions.get(doc.Name)
@@ -887,6 +898,7 @@ def sketch_session(doc, request):
         except Exception:
             restore_sketch(doc, session)
             raise
+    journal(doc, "end")
     del _sketch_sessions[doc.Name]
     _previews.pop(doc.Name, None)
     return publish_state(doc, prepare_state(doc))
@@ -899,8 +911,8 @@ def sketch_preview(doc, request, token, active):
         if active is None:
             fail("no_preview", "Document has no active preview")
         if op == "preview_commit":
-            session["groups"] = session["groups"][:session["cursor"]] + [active]
-            session["cursor"] = len(session["groups"])
+            journal(doc, "stage_accept", group=active)
+            journal(doc, "resolve", accepted=True)
         else:
             try:
                 replay_sketch(doc, session)
@@ -1150,6 +1162,7 @@ def dispatch(request):
         _poisoned.discard(key)
         _previews.pop(key, None)
         _sketch_sessions.pop(key, None)
+        journal(key, "end")
         return {"document": key, "closed": True}
     if op in ("mesh", "topology"):
         if doc.Name in _poisoned:
@@ -1197,6 +1210,7 @@ def main():
             request = json.loads(line, parse_constant=lambda value: fail("invalid_request", "Nonfinite JSON number"))
             if not isinstance(request, dict):
                 fail("invalid_request", "Request must be a JSON object")
+            SketchJournal.request(request.get("id"))
             result = dispatch(request)
             response = {"version": VERSION, "id": request["id"], "ok": True, "result": result}
         except Exception as exc:

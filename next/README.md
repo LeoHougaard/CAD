@@ -54,7 +54,9 @@ inference. Construction or G toggles construction geometry.
 Select points or curves, then use Constrain for horizontal, vertical, coincident,
 point-on-object, parallel, perpendicular, tangent, equal, symmetric or fixed
 constraints. D chooses a length, radius or angle from the selection; the Dimension
-menu also offers explicit horizontal/vertical distances and diameter. Double-click
+menu also offers explicit horizontal/vertical distances and diameter. Explicit
+Length measures an arc length or circular boundary clearance; explicit Angle
+measures an arc span. Smart Dimension retains its existing selection choices. Double-click
 a dimension to edit it. The constraint panel supports native expressions,
 driving/reference dimensions, names, activation and deletion. The native solver's
 solved geometry and remaining freedom are authoritative.
@@ -96,8 +98,10 @@ and leaves the source unchanged. Intentional expression links to other objects
 remain live. Dependent creates a native ShapeBinder; Cross-reference links the
 original sketch directly. All three choices share the feature preview and one
 Apply transaction. Cancel restores the baseline. Unsupported independent copies
-fail atomically; defining/intersection geometry and custom dynamic properties
-still need broader support. Choose Dependent or Cross-reference when appropriate.
+fail atomically. Defining and intersection curves are materialized as native
+internal geometry without copied external identities. Circular fixtures cover
+this behavior; broader curve combinations and custom dynamic properties remain
+open coverage. Choose Dependent or Cross-reference when appropriate.
 
 The multi-Body code now provides New body, active Body selection, all visible
 unconsumed native Body tips, face/edge multiselection and history grouped by Body.

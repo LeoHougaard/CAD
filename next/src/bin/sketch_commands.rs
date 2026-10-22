@@ -1,6 +1,6 @@
 //! Local NDJSON sketch command compiler. It does not open or mutate documents.
 
-use cad_next::sketch_commands::{SketchElement, Tool, constrain, draw_edits};
+use cad_next::sketch_commands::{SketchElement, Tool, constrain, draw_edits, draw_snapped_edits};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::io::{self, BufRead, Write};
@@ -16,6 +16,8 @@ enum Request {
         index: usize,
         #[serde(default)]
         construction: bool,
+        #[serde(default)]
+        snaps: Vec<Option<SketchElement>>,
     },
     Edit {
         snapshot: Value,
@@ -40,7 +42,14 @@ fn compile(line: &str) -> Result<Vec<Value>, String> {
             points,
             index,
             construction,
-        } => draw_edits(&object, tool, &points, index, construction),
+            snaps,
+        } => {
+            if snaps.is_empty() {
+                draw_edits(&object, tool, &points, index, construction)
+            } else {
+                draw_snapped_edits(&object, tool, &points, index, construction, &snaps)
+            }
+        }
         Request::Edit {
             snapshot,
             kind,
@@ -60,7 +69,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(argument) = std::env::args().nth(1) {
         if argument == "--help" || argument == "-h" {
             println!(
-                "cad-next-sketch\nCompile one local JSON request per stdin line into native sketch edits.\nDraw: {{\"op\":\"draw\",\"object\":\"Sketch\",\"tool\":\"line\",\"points\":[[0,0,0],[10,0,0]],\"index\":0,\"construction\":false}}\nConstraint: {{\"op\":\"constraint\",\"snapshot\":<native sketch object>,\"kind\":\"Distance\",\"selection\":[{{\"index\":0,\"point\":0}}],\"value\":\"10 mm\"}}\nEdit: {{\"op\":\"edit\",\"snapshot\":<native sketch object>,\"kind\":\"extend\",\"selection\":[{{\"index\":0,\"point\":2}}],\"parameters\":{{\"increment\":\"5 mm\"}}}}\nOutput: {{\"ok\":true,\"edits\":[...]}} or {{\"ok\":false,\"error\":{{\"code\":\"invalid_sketch_command\",\"message\":\"...\"}}}}\nNo document is opened or changed. Submit returned edits with a native revision guard."
+                "cad-next-sketch\nCompile one local JSON request per stdin line into native sketch edits.\nDraw: {{\"op\":\"draw\",\"object\":\"Sketch\",\"tool\":\"line\",\"points\":[[0,0,0],[10,0,0]],\"index\":0,\"construction\":false}}\nConstraint: {{\"op\":\"constraint\",\"snapshot\":<native sketch object>,\"kind\":\"Distance\",\"selection\":[{{\"index\":0,\"point\":0}}],\"value\":\"10 mm\"}}\nEdit: {{\"op\":\"edit\",\"snapshot\":<native sketch object>,\"kind\":\"extend\",\"selection\":[{{\"index\":0,\"point\":2}}],\"parameters\":{{\"increment\":\"5 mm\"}}}}\nDraw may include snaps:[null,{{\"index\":0,\"point\":1}},null] paired with the input points.\nOutput: {{\"ok\":true,\"edits\":[...]}} or {{\"ok\":false,\"error\":{{\"code\":\"invalid_sketch_command\",\"message\":\"...\"}}}}\nNo document is opened or changed. Submit returned edits with a native revision guard."
             );
             return Ok(());
         }

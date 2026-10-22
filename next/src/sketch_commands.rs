@@ -221,6 +221,104 @@ pub fn draw_edits(
     Ok(edits)
 }
 
+/// Add snapped references using the same click interpretation as the editor.
+/// Native Sketcher numbers clockwise arc endpoints in CCW-XY order, opposite
+/// the start/end order accepted by Part.ArcOfCircle's three-point constructor.
+pub fn draw_snapped_edits(
+    object: &str,
+    tool: Tool,
+    points: &[[f64; 3]],
+    geometry_count: usize,
+    construction: bool,
+    snaps: &[Option<SketchElement>],
+) -> Result<Vec<Value>, String> {
+    let mut edits = draw_edits(object, tool, points, geometry_count, construction)?;
+    if snaps.len() != points.len() {
+        return Err("Each input point must have a corresponding optional snap".into());
+    }
+    if snaps
+        .iter()
+        .flatten()
+        .any(|target| !matches!(target.point, 0..=3) || target.index == -2000)
+    {
+        return Err("Snap targets must identify native geometry or point handles".into());
+    }
+    let refs: Vec<(usize, usize, i32)> = match tool {
+        Tool::Point => vec![(0, geometry_count, 1)],
+        Tool::Line => {
+            vec![
+                (0, geometry_count, 1),
+                (points.len() - 1, geometry_count, 2),
+            ]
+        }
+        Tool::Polyline => (0..points.len())
+            .map(|click| {
+                if click == 0 {
+                    (click, geometry_count, 1)
+                } else {
+                    (click, geometry_count + click - 1, 2)
+                }
+            })
+            .collect(),
+        Tool::Arc => {
+            let first = delta(points[0], points[1]);
+            let second = delta(points[0], points[2]);
+            let clockwise = first[0] * second[1] - first[1] * second[0] < 0.;
+            let (start, end) = if clockwise { (2, 1) } else { (1, 2) };
+            vec![(0, geometry_count, start), (2, geometry_count, end)]
+        }
+        Tool::Circle | Tool::Ellipse | Tool::EllipseArc | Tool::HyperbolaArc => {
+            vec![(0, geometry_count, 3)]
+        }
+        Tool::BSpline => vec![
+            (0, geometry_count, 1),
+            (points.len() - 1, geometry_count, 2),
+        ],
+        Tool::Rectangle => {
+            let minx = points[0][0].min(points[1][0]);
+            let miny = points[0][1].min(points[1][1]);
+            (0..2)
+                .map(|click| {
+                    let corner = match (points[click][0] > minx, points[click][1] > miny) {
+                        (false, false) => 0,
+                        (true, false) => 1,
+                        (true, true) => 2,
+                        (false, true) => 3,
+                    };
+                    (click, geometry_count + corner, 1)
+                })
+                .collect()
+        }
+        _ => vec![],
+    };
+    for (click, index, point) in refs {
+        if let Some(target) = snaps[click] {
+            let index = i32::try_from(index).map_err(|_| "Native geometry index is too large")?;
+            edits.push(if target.point == 0 {
+                constraint(object, "PointOnObject", json!([index, point, target.index]))
+            } else {
+                constraint(
+                    object,
+                    "Coincident",
+                    json!([index, point, target.index, target.point]),
+                )
+            });
+        }
+    }
+    if tool == Tool::Circle
+        && let Some(target) = snaps[1].filter(|target| target.point != 0)
+    {
+        let index =
+            i32::try_from(geometry_count).map_err(|_| "Native geometry index is too large")?;
+        edits.push(constraint(
+            object,
+            "PointOnObject",
+            json!([target.index, target.point, index]),
+        ));
+    }
+    Ok(edits)
+}
+
 struct Sketch<'a> {
     name: &'a str,
     geometry: &'a [Value],
@@ -431,218 +529,231 @@ pub fn constrain(
     if dimensional && value.is_some() && selection.iter().all(|element| element.index < 0) {
         return Err("Dimensions between fixed references are measured; create a reference dimension without a driving value".into());
     }
-    let args = match kind {
-        "Horizontal" | "Vertical" => {
-            if selection.len() == 1 {
-                sketch.line(selection[0])?;
-                json!([selection[0].index])
-            } else {
+    let circular = crate::sketch_dimensions::measure(snapshot, kind, selection)?;
+    let args = if let Some(measurement) = circular {
+        measurement.args
+    } else {
+        match kind {
+            "Horizontal" | "Vertical" => {
+                if selection.len() == 1 {
+                    sketch.line(selection[0])?;
+                    json!([selection[0].index])
+                } else {
+                    let (first, second) = pair(selection)?;
+                    sketch.point(first)?;
+                    sketch.point(second)?;
+                    point_args(first, second)
+                }
+            }
+            "Coincident" => {
                 let (first, second) = pair(selection)?;
                 sketch.point(first)?;
                 sketch.point(second)?;
                 point_args(first, second)
             }
-        }
-        "Coincident" => {
-            let (first, second) = pair(selection)?;
-            sketch.point(first)?;
-            sketch.point(second)?;
-            point_args(first, second)
-        }
-        "PointOnObject" => {
-            let (mut first, mut second) = pair(selection)?;
-            if first.point == 0 {
-                std::mem::swap(&mut first, &mut second);
-            }
-            sketch.point(first)?;
-            sketch.entity(second)?;
-            if first.index == second.index {
-                return Err("Select a point and a different curve".into());
-            }
-            json!([first.index, first.point, second.index])
-        }
-        "Parallel" | "Equal" => {
-            let (first, second) = pair(selection)?;
-            let first_kind = sketch.entity(first)?;
-            let second_kind = sketch.entity(second)?;
-            if kind == "Parallel" {
-                sketch.line(first)?;
-                sketch.line(second)?;
-            } else if !equal_compatible(first_kind, second_kind) {
-                return Err("Equal needs two compatible lines, circular curves or conics".into());
-            }
-            json!([first.index, second.index])
-        }
-        "Perpendicular" | "Tangent" => {
-            let (mut first, mut second) = pair(selection)?;
-            if first.point == 0 && second.point != 0 {
-                std::mem::swap(&mut first, &mut second);
-            }
-            if first.index == second.index {
-                return Err("Select two distinct curves".into());
-            }
-            sketch.kind(first)?;
-            sketch.kind(second)?;
-            if !matches!(first.point, 0..=2) || !matches!(second.point, 0..=2) {
-                return Err("Select curve endpoints or whole curves, rather than centers".into());
-            }
-            if kind == "Tangent" && sketch.kind(first)? == "line" && sketch.kind(second)? == "line"
-            {
-                return Err("Use Parallel for two straight lines".into());
-            }
-            match (first.point, second.point) {
-                (0, 0) => json!([first.index, second.index]),
-                (_, 0) => json!([first.index, first.point, second.index]),
-                _ => point_args(first, second),
-            }
-        }
-        "Symmetric" => {
-            if selection.len() != 3 {
-                return Err(
-                    "Select two points and an axis line, or three points with the center last"
-                        .into(),
-                );
-            }
-            let points: Vec<_> = selection
-                .iter()
-                .copied()
-                .filter(|element| element.point != 0)
-                .collect();
-            if points.len() == 2 {
-                let axis = *selection.iter().find(|element| element.point == 0).unwrap();
-                sketch.line(axis)?;
-                json!([
-                    points[0].index,
-                    points[0].point,
-                    points[1].index,
-                    points[1].point,
-                    axis.index
-                ])
-            } else if points.len() == 3 {
-                json!([
-                    points[0].index,
-                    points[0].point,
-                    points[1].index,
-                    points[1].point,
-                    points[2].index,
-                    points[2].point
-                ])
-            } else {
-                return Err("Symmetry needs two points and a line, or three points".into());
-            }
-        }
-        "Block" => {
-            let mut edits = Vec::new();
-            for element in selection {
-                if element.index < 0 {
-                    return Err(if element.index == -1 {
-                        "The sketch origin is already fixed"
-                    } else {
-                        "External geometry is controlled by its source and cannot be blocked"
-                    }
-                    .into());
-                }
-                if element.point == 0 {
-                    edits.push(constraint(sketch.name, "Block", json!([element.index])));
-                } else {
-                    let point = sketch.point(*element)?;
-                    edits.push(constraint(
-                        sketch.name,
-                        "DistanceX",
-                        json!([element.index, element.point, point[0]]),
-                    ));
-                    edits.push(constraint(
-                        sketch.name,
-                        "DistanceY",
-                        json!([element.index, element.point, point[1]]),
-                    ));
-                }
-            }
-            return Ok(edits);
-        }
-        "Radius" | "Diameter" => {
-            if selection.len() != 1 || !["circle", "arc"].contains(&sketch.entity(selection[0])?) {
-                return Err("Select one circle or arc".into());
-            }
-            let radius = sketch.geometry(selection[0])?["radius"]
-                .as_f64()
-                .ok_or("Solved radius is unavailable")?;
-            let measure = nonzero(radius, "Selected curve has an invalid radius")?
-                * if kind == "Diameter" { 2. } else { 1. };
-            if radius <= 0. || !measure.is_finite() {
-                return Err("Selected curve has an invalid radius".into());
-            }
-            json!([selection[0].index, measure])
-        }
-        "Angle" => {
-            let first = sketch.line(selection[0])?;
-            if selection.len() == 1 {
-                json!([selection[0].index, first[1].atan2(first[0]).rem_euclid(TAU)])
-            } else {
-                let (_, second) = pair(selection)?;
-                let second_line = sketch.line(second)?;
-                let angle = (first[0] * second_line[1] - first[1] * second_line[0])
-                    .atan2(first[0] * second_line[0] + first[1] * second_line[1])
-                    .rem_euclid(TAU);
-                json!([selection[0].index, second.index, angle])
-            }
-        }
-        "Distance" | "DistanceX" | "DistanceY" => {
-            let (mut args, measure) = if selection.len() == 1 && selection[0].point == 0 {
-                let vector = sketch.line(selection[0])?;
-                (vec![json!(selection[0].index)], measure(kind, vector))
-            } else if selection.len() == 1 {
-                let point = sketch.point(selection[0])?;
-                let args = if kind == "Distance" {
-                    vec![
-                        json!(-1),
-                        json!(1),
-                        json!(selection[0].index),
-                        json!(selection[0].point),
-                    ]
-                } else {
-                    vec![json!(selection[0].index), json!(selection[0].point)]
-                };
-                (args, measure(kind, [point[0], point[1]]))
-            } else {
+            "PointOnObject" => {
                 let (mut first, mut second) = pair(selection)?;
-                if kind == "Distance" && (first.point == 0 || second.point == 0) {
-                    if first.point == 0 {
-                        std::mem::swap(&mut first, &mut second);
-                    }
-                    let point = sketch.point(first)?;
-                    let direction = sketch.line(second)?;
-                    let start = vector(&sketch.geometry(second)?["start"])?;
-                    let offset = delta(start, point);
-                    let distance = (direction[0] * offset[1] - direction[1] * offset[0]).abs()
-                        / length(direction);
-                    (
-                        vec![json!(first.index), json!(first.point), json!(second.index)],
-                        distance,
-                    )
-                } else {
-                    let delta = delta(sketch.point(first)?, sketch.point(second)?);
-                    (
-                        vec![
-                            json!(first.index),
-                            json!(first.point),
-                            json!(second.index),
-                            json!(second.point),
-                        ],
-                        measure(kind, delta),
-                    )
+                if first.point == 0 {
+                    std::mem::swap(&mut first, &mut second);
                 }
-            };
-            if !measure.is_finite() {
-                return Err("Dimension exceeds finite native coordinates".into());
+                sketch.point(first)?;
+                sketch.entity(second)?;
+                if first.index == second.index {
+                    return Err("Select a point and a different curve".into());
+                }
+                json!([first.index, first.point, second.index])
             }
-            if kind == "Distance" {
-                nonzero(measure, "Use Coincident for points at zero distance")?;
+            "Parallel" | "Equal" => {
+                let (first, second) = pair(selection)?;
+                let first_kind = sketch.entity(first)?;
+                let second_kind = sketch.entity(second)?;
+                if kind == "Parallel" {
+                    sketch.line(first)?;
+                    sketch.line(second)?;
+                } else if !equal_compatible(first_kind, second_kind) {
+                    return Err(
+                        "Equal needs two compatible lines, circular curves or conics".into(),
+                    );
+                }
+                json!([first.index, second.index])
             }
-            args.push(json!(measure));
-            Value::Array(args)
+            "Perpendicular" | "Tangent" => {
+                let (mut first, mut second) = pair(selection)?;
+                if first.point == 0 && second.point != 0 {
+                    std::mem::swap(&mut first, &mut second);
+                }
+                if first.index == second.index {
+                    return Err("Select two distinct curves".into());
+                }
+                sketch.kind(first)?;
+                sketch.kind(second)?;
+                if !matches!(first.point, 0..=2) || !matches!(second.point, 0..=2) {
+                    return Err(
+                        "Select curve endpoints or whole curves, rather than centers".into(),
+                    );
+                }
+                if kind == "Tangent"
+                    && sketch.kind(first)? == "line"
+                    && sketch.kind(second)? == "line"
+                {
+                    return Err("Use Parallel for two straight lines".into());
+                }
+                match (first.point, second.point) {
+                    (0, 0) => json!([first.index, second.index]),
+                    (_, 0) => json!([first.index, first.point, second.index]),
+                    _ => point_args(first, second),
+                }
+            }
+            "Symmetric" => {
+                if selection.len() != 3 {
+                    return Err(
+                        "Select two points and an axis line, or three points with the center last"
+                            .into(),
+                    );
+                }
+                let points: Vec<_> = selection
+                    .iter()
+                    .copied()
+                    .filter(|element| element.point != 0)
+                    .collect();
+                if points.len() == 2 {
+                    let axis = *selection.iter().find(|element| element.point == 0).unwrap();
+                    sketch.line(axis)?;
+                    json!([
+                        points[0].index,
+                        points[0].point,
+                        points[1].index,
+                        points[1].point,
+                        axis.index
+                    ])
+                } else if points.len() == 3 {
+                    json!([
+                        points[0].index,
+                        points[0].point,
+                        points[1].index,
+                        points[1].point,
+                        points[2].index,
+                        points[2].point
+                    ])
+                } else {
+                    return Err("Symmetry needs two points and a line, or three points".into());
+                }
+            }
+            "Block" => {
+                let mut edits = Vec::new();
+                for element in selection {
+                    if element.index < 0 {
+                        return Err(if element.index == -1 {
+                            "The sketch origin is already fixed"
+                        } else {
+                            "External geometry is controlled by its source and cannot be blocked"
+                        }
+                        .into());
+                    }
+                    if element.point == 0 {
+                        edits.push(constraint(sketch.name, "Block", json!([element.index])));
+                    } else {
+                        let point = sketch.point(*element)?;
+                        edits.push(constraint(
+                            sketch.name,
+                            "DistanceX",
+                            json!([element.index, element.point, point[0]]),
+                        ));
+                        edits.push(constraint(
+                            sketch.name,
+                            "DistanceY",
+                            json!([element.index, element.point, point[1]]),
+                        ));
+                    }
+                }
+                return Ok(edits);
+            }
+            "Radius" | "Diameter" => {
+                if selection.len() != 1
+                    || !["circle", "arc"].contains(&sketch.entity(selection[0])?)
+                {
+                    return Err("Select one circle or arc".into());
+                }
+                let radius = sketch.geometry(selection[0])?["radius"]
+                    .as_f64()
+                    .ok_or("Solved radius is unavailable")?;
+                let measure = nonzero(radius, "Selected curve has an invalid radius")?
+                    * if kind == "Diameter" { 2. } else { 1. };
+                if radius <= 0. || !measure.is_finite() {
+                    return Err("Selected curve has an invalid radius".into());
+                }
+                json!([selection[0].index, measure])
+            }
+            "Angle" => {
+                let first = sketch.line(selection[0])?;
+                if selection.len() == 1 {
+                    json!([selection[0].index, first[1].atan2(first[0]).rem_euclid(TAU)])
+                } else {
+                    let (_, second) = pair(selection)?;
+                    let second_line = sketch.line(second)?;
+                    let angle = (first[0] * second_line[1] - first[1] * second_line[0])
+                        .atan2(first[0] * second_line[0] + first[1] * second_line[1])
+                        .rem_euclid(TAU);
+                    json!([selection[0].index, second.index, angle])
+                }
+            }
+            "Distance" | "DistanceX" | "DistanceY" => {
+                let (mut args, measure) = if selection.len() == 1 && selection[0].point == 0 {
+                    let vector = sketch.line(selection[0])?;
+                    (vec![json!(selection[0].index)], measure(kind, vector))
+                } else if selection.len() == 1 {
+                    let point = sketch.point(selection[0])?;
+                    let args = if kind == "Distance" {
+                        vec![
+                            json!(-1),
+                            json!(1),
+                            json!(selection[0].index),
+                            json!(selection[0].point),
+                        ]
+                    } else {
+                        vec![json!(selection[0].index), json!(selection[0].point)]
+                    };
+                    (args, measure(kind, [point[0], point[1]]))
+                } else {
+                    let (mut first, mut second) = pair(selection)?;
+                    if kind == "Distance" && (first.point == 0 || second.point == 0) {
+                        if first.point == 0 {
+                            std::mem::swap(&mut first, &mut second);
+                        }
+                        let point = sketch.point(first)?;
+                        let direction = sketch.line(second)?;
+                        let start = vector(&sketch.geometry(second)?["start"])?;
+                        let offset = delta(start, point);
+                        let distance = (direction[0] * offset[1] - direction[1] * offset[0]).abs()
+                            / length(direction);
+                        (
+                            vec![json!(first.index), json!(first.point), json!(second.index)],
+                            distance,
+                        )
+                    } else {
+                        let delta = delta(sketch.point(first)?, sketch.point(second)?);
+                        (
+                            vec![
+                                json!(first.index),
+                                json!(first.point),
+                                json!(second.index),
+                                json!(second.point),
+                            ],
+                            measure(kind, delta),
+                        )
+                    }
+                };
+                if !measure.is_finite() {
+                    return Err("Dimension exceeds finite native coordinates".into());
+                }
+                if kind == "Distance" {
+                    nonzero(measure, "Use Coincident for points at zero distance")?;
+                }
+                args.push(json!(measure));
+                Value::Array(args)
+            }
+            _ => return Err(format!("Unsupported sketch constraint: {kind}")),
         }
-        _ => return Err(format!("Unsupported sketch constraint: {kind}")),
     };
     let mut edits = vec![constraint(sketch.name, kind, args)];
     if let Some(value) = value {
@@ -859,5 +970,84 @@ mod tests {
         snapshot["sketch"]["geometry"][1]["handles"] = json!([]);
         assert!(constrain(&snapshot, "Coincident", &[e(1, 1), e(-3, 1)], None).is_err());
         assert_eq!(Tool::PeriodicBSpline.required_points(), 3);
+    }
+    #[test]
+    fn snapped_arcs_follow_native_ccw_point_order_for_both_sweep_sizes() {
+        for (middle, end, ids) in [
+            ([3., 3., 0.], [0., 5., 0.], [1, 2]),
+            ([3., -3., 0.], [0., -5., 0.], [2, 1]),
+            ([0., 5., 0.], [0., -5., 0.], [1, 2]),
+            ([0., -5., 0.], [0., 5., 0.], [2, 1]),
+        ] {
+            let edits = draw_snapped_edits(
+                "Sketch",
+                Tool::Arc,
+                &[[5., 0., 0.], middle, end],
+                2,
+                false,
+                &[Some(e(0, 1)), Some(e(7, 1)), Some(e(1, 1))],
+            )
+            .unwrap();
+            assert_eq!(
+                edits.len(),
+                3,
+                "Middle click places the curve but adds no snap constraint"
+            );
+            assert_eq!(edits[0]["mid"], json!(middle));
+            assert_eq!(edits[1]["args"], json!([2, ids[0], 0, 1]));
+            assert_eq!(edits[2]["args"], json!([2, ids[1], 1, 1]));
+        }
+    }
+    #[test]
+    fn snapped_circle_and_rectangle_preserve_existing_center_rim_and_corner_forms() {
+        let circle = draw_snapped_edits(
+            "Sketch",
+            Tool::Circle,
+            &[[0., 0., 0.], [2., 0., 0.]],
+            3,
+            false,
+            &[Some(e(0, 1)), Some(e(1, 1))],
+        )
+        .unwrap();
+        assert_eq!(circle[1]["args"], json!([3, 3, 0, 1]));
+        assert_eq!(circle[2]["args"], json!([1, 1, 3]));
+        let rectangle = draw_snapped_edits(
+            "Sketch",
+            Tool::Rectangle,
+            &[[5., 6., 0.], [-2., -3., 0.]],
+            4,
+            false,
+            &[Some(e(0, 1)), Some(e(1, 1))],
+        )
+        .unwrap();
+        assert_eq!(rectangle[12]["args"], json!([6, 1, 0, 1]));
+        assert_eq!(rectangle[13]["args"], json!([4, 1, 1, 1]));
+    }
+    #[test]
+    fn polyline_snaps_refer_to_each_actual_segment_and_invalid_snap_counts_fail() {
+        let points = [[0., 0., 0.], [4., 0., 0.], [4., 3., 0.]];
+        let edits = draw_snapped_edits(
+            "Sketch",
+            Tool::Polyline,
+            &points,
+            3,
+            false,
+            &[Some(e(-1, 1)), None, Some(e(0, 1))],
+        )
+        .unwrap();
+        assert_eq!(edits[3]["args"], json!([3, 1, -1, 1]));
+        assert_eq!(edits[4]["args"], json!([4, 2, 0, 1]));
+        assert!(draw_snapped_edits("Sketch", Tool::Arc, &points, 0, false, &[None, None]).is_err());
+        assert!(
+            draw_snapped_edits(
+                "Sketch",
+                Tool::Line,
+                &points[..2],
+                0,
+                false,
+                &[Some(e(0, 7)), None]
+            )
+            .is_err()
+        );
     }
 }

@@ -11,6 +11,8 @@ pub mod property_commands;
 pub mod sketch_commands;
 pub mod sketch_creation_commands;
 pub mod sketch_curve_commands;
+pub mod sketch_dimensions;
+mod sketch_journal;
 pub mod sketch_operation_commands;
 pub mod transform_commands;
 #[cfg(feature = "desktop")]
@@ -22,8 +24,8 @@ use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
-use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::mpsc::{self, Receiver};
+use std::process::{Child, Command, Stdio};
+use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::time::{Duration, Instant};
 
 pub const PROTOCOL_VERSION: u64 = 1;
@@ -86,18 +88,25 @@ struct RemoteError {
     message: String,
 }
 
+struct FrameWrite {
+    bytes: Vec<u8>,
+    complete: SyncSender<io::Result<()>>,
+}
+
 /// One worker, one authoritative native document session, one request at a time.
 /// A failed transaction is a normal remote error and leaves the session usable.
 /// Transport/protocol failures terminate the child because mutation outcome may
 /// be unknown. Callers must reopen the last saved native document explicitly.
 pub struct WorkerSession {
     child: Child,
-    input: Option<ChildStdin>,
+    input: Option<SyncSender<FrameWrite>>,
     output: Receiver<io::Result<String>>,
     timeout: Duration,
     next_id: u64,
     closed: bool,
     capabilities: Value,
+    journals: sketch_journal::Journals,
+    journal_sequence: u64,
 }
 
 impl WorkerSession {
@@ -107,14 +116,30 @@ impl WorkerSession {
                 "response timeout must be positive".into(),
             ));
         }
-        let mut child = Command::new(&config.executable)
+        let mut command = Command::new(&config.executable);
+        command
             .args(&config.args)
             .arg(&config.script)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()?;
-        let input = child.stdin.take().expect("piped worker stdin");
+            .stderr(Stdio::inherit());
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
+        let mut child = command.spawn()?;
+        let mut input = child.stdin.take().expect("piped worker stdin");
+        let (writes, pending) = mpsc::sync_channel::<FrameWrite>(1);
+        std::thread::spawn(move || {
+            while let Ok(frame) = pending.recv() {
+                let result = input.write_all(&frame.bytes).and_then(|_| input.flush());
+                let failed = result.is_err();
+                if frame.complete.send(result).is_err() || failed {
+                    break;
+                }
+            }
+        });
         let output = child.stdout.take().expect("piped worker stdout");
         let (sender, receiver) = mpsc::channel();
         std::thread::spawn(move || {
@@ -127,12 +152,14 @@ impl WorkerSession {
         });
         let mut session = Self {
             child,
-            input: Some(input),
+            input: Some(writes),
             output: receiver,
             timeout: config.response_timeout,
             next_id: 1,
             closed: false,
             capabilities: Value::Null,
+            journals: sketch_journal::Journals::default(),
+            journal_sequence: 0,
         };
         session.capabilities = session.call("capabilities", Map::new())?;
         Ok(session)
@@ -202,12 +229,34 @@ impl WorkerSession {
         result
     }
 
+    /// A blocked pipe writer must not hold the model thread past its deadline.
+    /// Only one frame is outstanding; expiry closes and kills the native worker.
+    fn write_frame(&self, frame: &Value, start: Instant) -> Result<(), Error> {
+        let mut bytes = serde_json::to_vec(frame).map_err(io::Error::other)?;
+        bytes.push(b'\n');
+        let remaining = self
+            .timeout
+            .checked_sub(start.elapsed())
+            .ok_or(Error::Timeout(self.timeout))?;
+        let (complete, result) = mpsc::sync_channel(1);
+        self.input
+            .as_ref()
+            .ok_or(Error::Closed)?
+            .try_send(FrameWrite { bytes, complete })
+            .map_err(|error| Error::Protocol(format!("worker write unavailable: {error}")))?;
+        match result.recv_timeout(remaining) {
+            Ok(result) => result.map_err(Error::Io),
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(Error::Timeout(self.timeout)),
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                Err(Error::WorkerExited("stdin writer closed".into()))
+            }
+        }
+    }
+
     fn exchange(&mut self, request: &Value, id: &Value) -> Result<Value, Error> {
-        let input = self.input.as_mut().ok_or(Error::Closed)?;
-        serde_json::to_writer(&mut *input, request).map_err(io::Error::other)?;
-        input.write_all(b"\n")?;
-        input.flush()?;
         let start = Instant::now();
+        self.write_frame(request, start)?;
+        let mut callbacks = 0;
         loop {
             let remaining = self
                 .timeout
@@ -241,6 +290,30 @@ impl WorkerSession {
                     continue;
                 }
             };
+            if response["kind"] == sketch_journal::CHANNEL {
+                callbacks += 1;
+                let sequence = self
+                    .journal_sequence
+                    .checked_add(1)
+                    .ok_or_else(|| Error::Protocol("journal sequence exhausted".into()))?;
+                if callbacks > 4096
+                    || response["version"] != PROTOCOL_VERSION
+                    || response["id"] != *id
+                    || response["sequence"].as_u64() != Some(sequence)
+                {
+                    return Err(Error::Protocol(
+                        "invalid sketch journal callback correlation".into(),
+                    ));
+                }
+                self.journal_sequence = sequence;
+                let mut reply = self.journals.respond(&response);
+                let reply_object = reply.as_object_mut().expect("journal response object");
+                for key in ["kind", "version", "id", "sequence"] {
+                    reply_object.insert(key.into(), response[key].clone());
+                }
+                self.write_frame(&reply, start)?;
+                continue;
+            }
             validate_response(&response, id)?;
             return Ok(response);
         }
@@ -248,8 +321,22 @@ impl WorkerSession {
 
     /// Stop the child. Does not save native documents implicitly.
     pub fn shutdown(&mut self) {
+        if self.closed {
+            return;
+        }
         self.closed = true;
         self.input.take();
+        #[cfg(unix)]
+        {
+            // The configured launcher and its native worker share the private
+            // process group created at spawn. AppRun may retain a shell parent.
+            // SAFETY: this positive child PID is our private process-group ID.
+            if let Ok(pid) = libc::pid_t::try_from(self.child.id()) {
+                unsafe {
+                    libc::kill(-pid, libc::SIGKILL);
+                }
+            }
+        }
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
@@ -311,12 +398,76 @@ mod tests {
         println!("FreeCAD startup diagnostic");
         io::stdout().flush().unwrap();
         let mut count = 0;
-        for line in io::stdin().lock().lines() {
+        let mut sequence = 0;
+        let stdin = io::stdin();
+        let mut lines = stdin.lock().lines();
+        while let Some(line) = lines.next() {
             let request: Value = serde_json::from_str(&line.unwrap()).unwrap();
             count += 1;
             let mut response = json!({"version":1,"id":request["id"],"ok":true,"result":{"count":count,"request":request}});
             match request["op"].as_str().unwrap() {
+                "journal_roundtrip"
+                | "journal_bad_id"
+                | "journal_bad_sequence"
+                | "journal_bad_version"
+                | "journal_delay"
+                | "journal_stalled_replay" => {
+                    for (action, extra) in [
+                        ("begin", json!({})),
+                        (
+                            "stage_accept",
+                            json!({"group":{"edits":[{"op":"datum","value":20}]}}),
+                        ),
+                        ("resolve", json!({"accepted":true})),
+                        ("replay", json!({})),
+                        ("end", json!({})),
+                    ] {
+                        sequence += 1;
+                        let mut frame = json!({"kind":sketch_journal::CHANNEL,"version":1,
+                            "id":request["id"],"sequence":sequence,"action":action,"document":"Fixture"});
+                        frame
+                            .as_object_mut()
+                            .unwrap()
+                            .extend(extra.as_object().unwrap().clone());
+                        if request["op"] == "journal_stalled_replay" && action == "stage_accept" {
+                            frame["group"]["edits"][0]["value"] = json!("x".repeat(512 * 1024));
+                        }
+                        match request["op"].as_str().unwrap() {
+                            "journal_bad_id" => frame["id"] = json!(9999),
+                            "journal_bad_sequence" => frame["sequence"] = json!(0),
+                            "journal_bad_version" => frame["version"] = json!(2),
+                            _ => (),
+                        }
+                        println!("{frame}");
+                        io::stdout().flush().unwrap();
+                        if request["op"] == "journal_stalled_replay" && action == "replay" {
+                            std::thread::sleep(Duration::from_secs(4));
+                        }
+                        let Some(reply) = lines.next() else { return };
+                        let reply: Value = serde_json::from_str(&reply.unwrap()).unwrap();
+                        assert_eq!(reply["ok"], true);
+                        if action == "replay" {
+                            response["result"]["journal"] = reply["result"].clone();
+                        }
+                        if request["op"] == "journal_delay" {
+                            std::thread::sleep(Duration::from_secs(1));
+                        }
+                    }
+                }
                 "crash" => std::process::exit(17),
+                #[cfg(target_os = "linux")]
+                // This fixture intentionally leaves a live descendant for the
+                // host's private-process-group termination test.
+                #[allow(clippy::zombie_processes)]
+                "spawn_descendant" => {
+                    let descendant = Command::new("sleep")
+                        .arg("30")
+                        .stdin(Stdio::null())
+                        .stdout(Stdio::null())
+                        .spawn()
+                        .unwrap();
+                    response["result"]["descendant"] = json!(descendant.id());
+                }
                 "eof" => return,
                 "malformed" => {
                     println!("{{not valid json}}");
@@ -337,6 +488,9 @@ mod tests {
             }
             println!("{response}");
             io::stdout().flush().unwrap();
+            if request["op"] == "stall_stdin" {
+                std::thread::sleep(Duration::from_secs(4));
+            }
         }
     }
 
@@ -390,6 +544,49 @@ mod tests {
     }
 
     #[test]
+    fn journal_callbacks_are_private_correlated_and_keep_the_outer_response() {
+        let mut session = session();
+        for _ in 0..2 {
+            let response = session
+                .request(json!({"id":-91,"op":"journal_roundtrip"}))
+                .unwrap();
+            assert_eq!(response["id"], -91);
+            assert_eq!(
+                response["result"]["journal"],
+                json!([{"edits":[{"op":"datum","value":20}]}])
+            );
+        }
+        assert!(session.call("inspect", Map::new()).is_ok());
+    }
+
+    #[test]
+    fn journal_protocol_errors_and_callback_timeout_close_the_session() {
+        for op in [
+            "journal_bad_id",
+            "journal_bad_version",
+            "journal_bad_sequence",
+        ] {
+            let mut session = session();
+            assert!(
+                matches!(session.call(op, Map::new()), Err(Error::Protocol(_))),
+                "{op}"
+            );
+            assert!(matches!(
+                session.call("inspect", Map::new()),
+                Err(Error::Closed)
+            ));
+            assert!(session.child.try_wait().unwrap().is_some());
+        }
+        let mut session = session();
+        session.timeout = Duration::from_millis(30);
+        assert!(matches!(
+            session.call("journal_delay", Map::new()),
+            Err(Error::Timeout(_))
+        ));
+        assert!(session.child.try_wait().unwrap().is_some());
+    }
+
+    #[test]
     fn worker_crash_and_clean_eof_are_errors() {
         for op in ["crash", "eof"] {
             let mut session = session();
@@ -402,6 +599,73 @@ mod tests {
                 Err(Error::Closed)
             ));
         }
+    }
+
+    #[test]
+    fn stalled_large_replay_write_times_out_and_reaps_the_worker() {
+        let mut session = session();
+        session.timeout = Duration::from_millis(300);
+        let start = Instant::now();
+        assert!(matches!(
+            session.call("journal_stalled_replay", Map::new()),
+            Err(Error::Timeout(_))
+        ));
+        assert_eq!(
+            session.journal_sequence, 4,
+            "The replay callback reached its blocked write"
+        );
+        assert!(start.elapsed() < Duration::from_secs(2));
+        assert!(session.child.try_wait().unwrap().is_some());
+        assert!(matches!(
+            session.call("inspect", Map::new()),
+            Err(Error::Closed)
+        ));
+    }
+
+    #[test]
+    fn stalled_large_outer_request_write_uses_the_same_deadline() {
+        let mut session = session();
+        session.call("stall_stdin", Map::new()).unwrap();
+        session.timeout = Duration::from_millis(300);
+        let start = Instant::now();
+        assert!(matches!(
+            session.request(json!({"op":"inspect", "payload":"x".repeat(512 * 1024)})),
+            Err(Error::Timeout(_))
+        ));
+        assert!(start.elapsed() < Duration::from_secs(2));
+        assert!(session.child.try_wait().unwrap().is_some());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn timeout_terminates_launcher_descendants_in_its_private_group() {
+        let mut session = session();
+        let pid = session.call("spawn_descendant", Map::new()).unwrap()["descendant"]
+            .as_u64()
+            .unwrap();
+        session.timeout = Duration::from_millis(30);
+        assert!(matches!(
+            session.call("delay", Map::new()),
+            Err(Error::Timeout(_))
+        ));
+        let path = format!("/proc/{pid}/stat");
+        let stopped = || {
+            std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|stat| {
+                    stat.split_once(") ")
+                        .map(|(_, rest)| rest.starts_with('Z') || rest.starts_with('X'))
+                })
+                .unwrap_or(true)
+        };
+        let start = Instant::now();
+        while !stopped() && start.elapsed() < Duration::from_millis(500) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            stopped(),
+            "The native descendant must not outlive a timed-out launcher"
+        );
     }
 
     #[test]

@@ -5,6 +5,38 @@ sketch editing. This record does not establish complete Part Studio, FreeCAD
 sketch-tool or Onshape parity, or a replacement release for the earlier Windows
 application.
 
+## Accepted-action journal extraction
+
+Rust now owns accepted sketch edit groups, the action cursor, staged acceptance
+and history moves, branching, counts and replay planning. Native document
+transactions, replay execution and geometry remain native; Python still owns
+gesture tokens, leases, revisions and native orchestration. This is a bounded
+component extraction, not a complete Rust session or modeling port.
+
+Windows checks pass 146 active Rust tests, strict Clippy and all 16 native suites.
+Matched headless evidence covers 368 broad responses, 30 deterministic journal
+responses, five recovery states and 59 additional anchored responses per side.
+Comparison retains coordinates, constraints, ownership, revisions and history.
+Explicit native-repeat alternatives account for underconstrained motion;
+origin-anchored task fixtures eliminate that freedom. Eighteen deliberately
+corrupted results are rejected, including large coordinate drift and excessive
+peak memory. Four memory threshold boundary checks pass.
+
+The callback writer has deadline tests for stalled large replay replies and
+ordinary request writes. A 256 KiB stalled callback with a 200 ms deadline exits
+in about 262 ms including host startup. The previous blocking writer took about
+1.56 seconds. Timeout closes and reaps the configured worker. Unix descendant
+termination has a Linux-specific test and still requires a Linux run.
+
+Matched Windows debug headless resource checks use a native Pad with 12 holes,
+16 geometry items, 47 constraints, 64 accepted actions and 32 Undo/Redo pairs.
+Combined median working set is 79.71 MiB before versus 80.21 MiB after; peak
+working set is 80.21 versus 80.83 MiB. Warm startup is 624.45 versus 633.20 ms.
+All declared latency and memory gates pass. CPU use is zero in six idle samples
+of at least five seconds. These measurements do not establish GUI responsiveness,
+cold-cache startup or general complex-part performance. Pixel desktop acceptance
+of this extraction remains open.
+
 ## Real Pixel desktop workflow
 
 The native Linux ARM64 editor ran as a separate application beside the existing
@@ -497,9 +529,9 @@ native history and the expression engine remain native components.
 The independent-copy adapter deliberately avoids three pinned task-copy defects:
 source external-constraint pruning, copied external-cache resurrection and stale
 copied expression dependencies. It uses native serialization/setters and checks
-the resulting solved geometry. Unsupported independent defining/intersection
-materialization and custom dynamic properties reject atomically. Their broader
-coverage remains open. Native fixtures complement the separate real GUI gates;
+the resulting solved geometry. At this checkpoint, independent defining/intersection
+materialization and custom dynamic properties reject atomically. The later
+circular-materialization gate below extends the former; broader coverage remains open. Native fixtures complement the separate real GUI gates;
 they do not establish complete reference-task or FreeCAD parity.
 
 
@@ -567,3 +599,59 @@ Executable paths and command lines establish those process roles. All measured
 zero CPU and swap. This is a small-part observation, not a moderate-complexity
 performance gate or a release-build speed comparison. The owned Pixel test app
 was closed cleanly; other running apps and original documents were preserved.
+
+
+## Circular dimensions, native endpoint identities and independent copies
+
+The shared Rust dimension builder and viewport witnesses add explicit circular
+arc length/span, point-to-circle, circle-to-line and circle-pair boundary
+clearances. Smart Dimension keeps its prior selection choices. Ten Windows
+native workflows cover both arc orientations, signed overlap/containment and
+subpixel clearance, including previews, Cancel/Apply, expressions, units,
+reference/driving state, Undo/Redo and save/reopen. A separate native zero
+reference clearance survives history and reopen without changing the circles.
+The pinned native API rejects assigning a zero driving Distance datum; this
+adapter preserves that restriction.
+
+Three additional cases cover external arc parent propagation, native clockwise
+endpoint dimensions and consumed-profile sketch sessions. Seven snapped-arc
+cases exercise both directions and sweep sizes, shifted/rotated coordinates,
+Coincident and whole-curve PointOnObject targets, action/document Undo/Redo and
+reopen. The old endpoint mapping could produce a native-valid distorted arc:
+one minor arc length changed from 7.8539816 to 34.1810334. With the shared Rust
+snapping builder its input endpoints and trace remain intact. Snapshot handles
+now use native Sketch.getPoint identities, while raw curve samples preserve
+tracing order. The editor and agent CLI use the same edit builder.
+
+Independent review matched 52 circular clearance seeds against native reference
+measurements with unchanged geometry. It also found zero/subpixel dimensions
+lost their label and hit target. The corrected Rust viewport supplies a finite
+fallback direction and short display leader. A regression checks native
+constraint identity, finite label/leader coordinates and label picking for
+point-circle, circle-line and circle-pair gaps at zero and +/-0.01 mm, both
+ordinary and attached frames. All 140 active Rust tests and strict Clippy pass.
+
+Five Windows native independent-copy workflows cover a defining circle, a
+circle from genuine cylindrical-face intersection, both in moved Bodies, and an
+already-internal curve carrying legacy external identity. The copy materializes
+defining curves before removing links. It removes ExternalGeometryExtension
+identity from every copied internal curve, retains native Sketch geometry IDs,
+constraints, local expressions and comments, and leaves the source untouched.
+An earlier candidate with an empty OutList still retained external identity and
+was rejected by native extension inspection. An empty link list alone is not
+sufficient evidence of independence.
+
+Each copy workflow checks preview replacement/Cancel, Apply, atomic failed edits,
+Undo/Redo, source-parent isolation, copy edits and reopen. Analytical volumes
+are 234.292036732051 initially, 344.292036732051 after Width 12 drives Height 6,
+and 297.168146928204 after the copied circle radius becomes 2. Live source
+serialization remains unchanged during copying. Native save/restore can
+normalize Shape.Map serialization, so restored source bytes are compared with
+an independently restored source-only control. Original geometry IDs and
+expression comments also receive native inspection. These circular fixtures
+do not establish broader defining/intersection curve and constraint coverage.
+
+All sixteen native suites pass on Windows x64 and Pixel Linux ARM64 for the
+initial frozen batch. The later change only fixes viewport annotation and adds
+zero/subpixel acceptance cases; its updated common-dimension suite passes on
+Windows. Real GUI acceptance and the final Pixel check are recorded below.

@@ -16,6 +16,9 @@ glam = { version = "0.30", optional = true }
 bytemuck = { version = "1", optional = true }
 egui-file-dialog = { version = "=0.12.0", default-features = false, optional = true }
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [features]
 desktop = ["dep:eframe", "dep:glam", "dep:bytemuck", "dep:egui-file-dialog"]
 

@@ -436,8 +436,76 @@ impl Viewport {
             let value = constraint["value"].as_f64().unwrap_or(0.);
             let mut segments = vec![];
             let mut label = None;
-            if matches!(kind, "Distance" | "DistanceX" | "DistanceY") {
-                let endpoints = if first_point == 0 {
+            let circular = crate::sketch_dimensions::annotation(sketch, constraint);
+            if let Some(crate::sketch_dimensions::Witness::Arc {
+                center,
+                start,
+                radius,
+                sweep,
+            }) = &circular
+            {
+                let center = Vec3::from_array(center.map(|n| n as f32));
+                let start = Vec3::from_array(start.map(|n| n as f32));
+                let radial = start - center;
+                let start_angle = radial.y.atan2(radial.x);
+                let sweep = *sweep as f32;
+                let native_radius = *radius as f32;
+                let display_radius = native_radius + 20. / self.scale;
+                let project = |angle: f32, radius: f32| {
+                    self.project(
+                        self.sketch_origin
+                            + self.sketch_rotation
+                                * (center + Vec3::new(angle.cos(), angle.sin(), 0.) * radius),
+                    )
+                    .0
+                };
+                for step in 0..48 {
+                    segments.push([
+                        project(start_angle + sweep * step as f32 / 48., display_radius),
+                        project(
+                            start_angle + sweep * (step + 1) as f32 / 48.,
+                            display_radius,
+                        ),
+                    ]);
+                }
+                for angle in [start_angle, start_angle + sweep] {
+                    let a = project(angle, native_radius);
+                    let b = project(angle, display_radius + 4. / self.scale);
+                    segments.push([a, b]);
+                    let middle = project(angle, display_radius);
+                    // Screen-space ticks follow the projected circular arc.
+                    let tangent = (project(angle + 0.01, display_radius)
+                        - project(angle - 0.01, display_radius))
+                    .normalized()
+                        * 4.;
+                    segments.push([middle - tangent, middle + tangent]);
+                }
+                let middle = start_angle + sweep * 0.5;
+                let position = project(middle, display_radius + 18. / self.scale);
+                let origin = self
+                    .project(self.sketch_origin + self.sketch_rotation * center)
+                    .0;
+                label = Some((
+                    position,
+                    (position - origin).normalized(),
+                    if kind == "Angle" {
+                        format!("{:.1}\u{00b0}", value.to_degrees())
+                    } else {
+                        format!("?{value:.2} mm")
+                    },
+                ));
+            } else if matches!(kind, "Distance" | "DistanceX" | "DistanceY") {
+                let endpoints = if let Some(crate::sketch_dimensions::Witness::Linear {
+                    start,
+                    end,
+                }) = circular
+                {
+                    let world = |p: [f64; 3]| {
+                        self.sketch_origin
+                            + self.sketch_rotation * Vec3::from_array(p.map(|n| n as f32))
+                    };
+                    Some((world(start), world(end)))
+                } else if first_point == 0 {
                     self.curves
                         .iter()
                         .find(|curve| curve.native.index == first && curve.points.len() == 2)
@@ -473,7 +541,11 @@ impl Viewport {
                 };
                 if let Some((world_a, world_b)) = endpoints {
                     let (a, b) = (self.project(world_a).0, self.project(world_b).0);
-                    let mut direction = (b - a).normalized();
+                    let mut direction = if (b - a).length_sq() > 1e-8 {
+                        (b - a).normalized()
+                    } else {
+                        Vec2::new(1., 0.)
+                    };
                     let (dimension_a, dimension_b, normal) =
                         if kind == "DistanceX" || kind == "DistanceY" {
                             // Project native sketch axes, so attached or orbited sketches keep their datum orientation.
@@ -505,11 +577,18 @@ impl Viewport {
                             }
                             (a + normal * 26., b + normal * 26., normal)
                         };
-                    if dimension_a.distance(dimension_b) > 1. {
+                    {
+                        // A native zero or subpixel gap still needs a visible,
+                        // pickable dimension. Extend only its display leader.
+                        let (leader_a, leader_b) = if dimension_a.distance(dimension_b) <= 1. {
+                            (dimension_a - direction * 8., dimension_b + direction * 8.)
+                        } else {
+                            (dimension_a, dimension_b)
+                        };
                         segments.extend([
                             [a, dimension_a + normal * 5.],
                             [b, dimension_b + normal * 5.],
-                            [dimension_a, dimension_b],
+                            [leader_a, leader_b],
                         ]);
                         let tick = (direction + normal).normalized() * 4.;
                         for endpoint in [dimension_a, dimension_b] {
@@ -626,7 +705,10 @@ impl Viewport {
                     }
                 }
             }
-            if let Some((position, normal, text)) = label {
+            if let Some((position, normal, mut text)) = label {
+                if constraint["driving"] == false {
+                    text.push_str(" ref");
+                }
                 for segment in &segments {
                     painter.line_segment(*segment, stroke);
                 }
@@ -1007,6 +1089,60 @@ mod tests {
                 .intersects(viewport.dimension_hits[1].label)
         );
     }
+    #[test]
+    fn zero_and_subpixel_clearances_keep_finite_pickable_labels() {
+        for gap in [0., 0.01, -0.01] {
+            for family in 0..3 {
+                let (geometry, first_point) = match family {
+                    0 => (
+                        json!([
+                            {"index":0,"kind":"circle","center":[0,0,0],"radius":2},
+                            {"index":1,"kind":"circle","center":[5.+gap,0,0],"radius":3}
+                        ]),
+                        0,
+                    ),
+                    1 => (
+                        json!([
+                            {"index":0,"kind":"circle","center":[0,2.+gap,0],"radius":2},
+                            {"index":1,"kind":"line","start":[-10,0,0],"end":[10,0,0]}
+                        ]),
+                        0,
+                    ),
+                    _ => (
+                        json!([
+                            {"index":0,"kind":"point","position":[2.+gap,0,0]},
+                            {"index":1,"kind":"circle","center":[0,0,0],"radius":2}
+                        ]),
+                        1,
+                    ),
+                };
+                for moved in [false, true] {
+                    let mut sketch = json!({"name":"Sketch","sketch":{
+                        "geometry":geometry,"constraints":[{"index":4,"type":"Distance",
+                        "first":0,"first_pos":first_point,"second":1,"second_pos":0,
+                        "value":gap,"driving":false}]}});
+                    if moved {
+                        sketch["global_placement"] = json!({"position":[100,200,300],
+                            "rotation":[0,0,1,0]});
+                    }
+                    let mut viewport = Viewport::default();
+                    viewport.set_sketch(Some(sketch));
+                    viewport.align_sketch();
+                    let context = egui::Context::default();
+                    let _ = context.run(egui::RawInput::default(), |ctx| {
+                        egui::CentralPanel::default()
+                            .show(ctx, |ui| viewport.draw_dimensions(ui.painter()));
+                    });
+                    assert_eq!(viewport.dimension_hits.len(), 1, "{gap}/{family}/{moved}");
+                    let hit = &viewport.dimension_hits[0];
+                    assert!(hit.label.is_finite());
+                    assert!(hit.segments.iter().flatten().all(|point| point.is_finite()));
+                    assert_eq!(viewport.dimension_hit(hit.label.center()), Some(4));
+                    assert!(hit.segments[2][0].distance(hit.segments[2][1]) >= 16.);
+                }
+            }
+        }
+    }
     fn external_line(token: &str) -> Value {
         json!({"index":0,"geometry_index":-3,"source_index":4,
             "source":{"link":"Source","subelements":["Edge7"]},"persistent_reference":token,
@@ -1149,5 +1285,55 @@ mod tests {
         assert_eq!(hit.index, 11);
         assert!(hit.segments[0][0].distance(viewport.sketch_screen_point([10., -10., 0.])) < 1e-5);
         assert!(hit.segments[1][0].distance(viewport.sketch_screen_point([10., 10., 0.])) < 1e-5);
+    }
+    #[test]
+    fn circular_clearance_annotation_uses_boundary_witnesses_and_native_hit_identity() {
+        let mut viewport = viewport();
+        let sketch = json!({"name":"Sketch","sketch":{"geometry":[
+            {"index":0,"kind":"circle","center":[0,0,0],"radius":2},
+            {"index":1,"kind":"circle","center":[10,0,0],"radius":3}],
+            "constraints":[{"index":12,"type":"Distance","first":0,"first_pos":0,"second":1,"second_pos":0,"value":5}]}});
+        viewport.set_sketch(Some(sketch));
+        let ctx = egui::Context::default();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| viewport.draw_dimensions(ui.painter()));
+        });
+        let hit = &viewport.dimension_hits[0];
+        assert_eq!(hit.index, 12);
+        assert!(hit.segments[0][0].distance(viewport.sketch_screen_point([2., 0., 0.])) < 1e-5);
+        assert!(hit.segments[1][0].distance(viewport.sketch_screen_point([7., 0., 0.])) < 1e-5);
+        assert_eq!(viewport.dimension_hit(hit.label.center()), Some(12));
+        assert_eq!(
+            viewport.dimension_hit(hit.segments[2][0].lerp(hit.segments[2][1], 0.5)),
+            Some(12)
+        );
+    }
+    #[test]
+    fn major_arc_length_and_angle_have_pickable_annotations_after_attachment_rotation() {
+        for kind in ["Distance", "Angle"] {
+            let mut viewport = viewport();
+            let sketch = json!({"name":"Sketch","global_placement":{"position":[12,4,7],"rotation":[0,0,std::f64::consts::FRAC_1_SQRT_2,std::f64::consts::FRAC_1_SQRT_2]},
+                "sketch":{"geometry":[{"index":0,"kind":"arc","center":[0,0,0],"radius":5,"axis":[0,0,1],
+                "start":[5,0,0],"mid":[-2.0807341827,4.546487134,0],"end":[-3.268218104,-3.784012476,0],"first_parameter":0.,"last_parameter":4.}],
+                "constraints":[{"index":4,"type":kind,"first":0,"first_pos":0,"value":if kind=="Angle" {4.} else {20.},"driving":false}]}});
+            viewport.set_sketch(Some(sketch));
+            viewport.align_sketch();
+            let ctx = egui::Context::default();
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default()
+                    .show(ctx, |ui| viewport.draw_dimensions(ui.painter()));
+            });
+            assert_eq!(viewport.dimension_hits.len(), 1);
+            let hit = &viewport.dimension_hits[0];
+            assert_eq!(viewport.dimension_hit(hit.label.center()), Some(4));
+            assert!(hit.segments.len() >= 52);
+            assert_eq!(
+                viewport.dimension_hit(hit.segments[12][0].lerp(hit.segments[12][1], 0.5)),
+                Some(4)
+            );
+            let a = hit.segments[0][0];
+            let b = hit.segments[47][1];
+            assert!(a.distance(b) > 20.);
+        }
     }
 }

@@ -1,6 +1,6 @@
 //! Interaction state only: every accepted geometry change is solved natively.
 use super::{Editor, constraints::DimensionEdit};
-use crate::sketch_commands::{SketchElement, Tool, draw_edits};
+use crate::sketch_commands::{SketchElement, Tool, draw_snapped_edits};
 use eframe::egui::{self, Color32, Key};
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
@@ -381,7 +381,7 @@ impl Editor {
             }
             ui.menu_button(
                 if self.sketch_ui.external {
-                    "External •"
+                    "External â€¢"
                 } else {
                     "External"
                 },
@@ -571,12 +571,13 @@ impl Editor {
             .sketch_snapshot()
             .and_then(|s| s["sketch"]["geometry_count"].as_u64())
             .unwrap_or(0) as usize;
-        let mut edits = match draw_edits(
+        let mut edits = match draw_snapped_edits(
             &object,
             tool,
             &self.sketch_ui.points,
             count,
             self.sketch_ui.construction,
+            &self.sketch_ui.snaps,
         ) {
             Ok(e) => e,
             Err(e) => {
@@ -586,49 +587,6 @@ impl Editor {
                 return;
             }
         };
-        let refs: Vec<(usize, usize, i32)> = match tool {
-            Tool::Point => vec![(0, count, 1)],
-            Tool::Line | Tool::Polyline | Tool::Arc => {
-                vec![(0, count, 1), (tool.required_points() - 1, count, 2)]
-            }
-            Tool::Circle | Tool::Ellipse | Tool::EllipseArc | Tool::HyperbolaArc => {
-                vec![(0, count, 3)]
-            }
-            Tool::BSpline => vec![(0, count, 1), (self.sketch_ui.points.len() - 1, count, 2)],
-            Tool::Rectangle => {
-                let p = &self.sketch_ui.points;
-                let minx = p[0][0].min(p[1][0]);
-                let miny = p[0][1].min(p[1][1]);
-                (0..2)
-                    .map(|click| {
-                        let right = p[click][0] > minx;
-                        let top = p[click][1] > miny;
-                        let corner = match (right, top) {
-                            (false, false) => 0,
-                            (true, false) => 1,
-                            (true, true) => 2,
-                            (false, true) => 3,
-                        };
-                        (click, count + corner, 1)
-                    })
-                    .collect()
-            }
-            _ => vec![],
-        };
-        for (click, index, point) in refs {
-            if let Some(target) = self.sketch_ui.snaps[click] {
-                if target.point == 0 {
-                    edits.push(json!({"op":"constraint","object":object,"kind":"PointOnObject","args":[index,point,target.index]}));
-                } else {
-                    edits.push(json!({"op":"constraint","object":object,"kind":"Coincident","args":[index,point,target.index,target.point]}));
-                }
-            }
-        }
-        if tool == Tool::Circle
-            && let Some(target) = self.sketch_ui.snaps[1].filter(|t| t.point != 0)
-        {
-            edits.push(json!({"op":"constraint","object":object,"kind":"PointOnObject","args":[target.index,target.point,count]}));
-        }
         if infer
             && matches!(tool, Tool::Line | Tool::Polyline)
             && self.sketch_ui.snaps.iter().filter(|s| s.is_some()).count() < 2

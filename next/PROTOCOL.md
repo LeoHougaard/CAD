@@ -6,6 +6,16 @@ object per line goes in and one response comes out. Diagnostics use stderr.
 The native request stream explicitly uses UTF-8 independently of the operating
 system locale, including portable Windows Python and Unicode file paths.
 
+The native worker can exchange private `cad-next-sketch-journal` callback frames
+with `WorkerSession` while a public request is pending. Rust owns accepted sketch
+actions and their replay order; the native worker owns document mutations. These
+frames never reach public NDJSON clients. Version, outer request ID and a
+session-wide monotonic sequence correlate each callback. Callback replies and
+ordinary request writes share the original request deadline, including blocked
+pipe writes. Transport failure closes the session because the mutation outcome
+may be unknown. On Unix the configured launcher and descendants run in a private
+process group so timeout termination also reaches the native worker.
+
 Requests contain `version: 1`, a caller-chosen integer `id`, `op`, and operation
 parameters. Responses repeat version and id, contain `ok`, and contain either
 `result` or `error: {code, message}`. Unknown versions and operations fail.
@@ -485,7 +495,12 @@ It removes external geometry and its persistent cache from the copy only,
 leaves attachment deactivated, and verifies the solved profile is unchanged.
 Explicit expression links to other document objects are retained. Unsupported
 properties or a changed solved profile reject the complete batch atomically.
-Defining/intersection materialization is not yet supported by this operation.
+Defining/intersection curves are captured before target recomputation and
+materialized as native internal copy geometry. External identity extensions are
+removed from both those curves and any already-internal copied curves; ordinary
+sketch geometry IDs remain native. Circular defining/intersection fixtures and
+a legacy materialized curve cover this policy. Broader curve and constraint
+combinations still require acceptance; a changed solved profile rejects the batch.
 Dependent creates a native ShapeBinder with whole-object Support and native
 TraceSupport defaults. Copy placement follows pinned native local-frame behavior;
 there is no client world-placement compensation.
@@ -505,3 +520,27 @@ native comments. Existing objects are not rewritten and no extra transaction is
 created. The compensating history path uses the same repair before recomputation.
 This fixes the verified restoration cases; it does not replace native history or
 claim a general Rust expression engine.
+
+
+## Native arc handles and dimension commands
+
+Snapshot geometry `handles` use native `Sketch.getPoint(index, point)` identities.
+Raw curve `start`/`end` and sampled points retain the native curve's tracing order.
+These orders differ for clockwise arcs: native point 2 is the first three-point
+input click, and point 1 is the final click. Use handles for solver constraints
+and input picking, and the curve interval/axis for its display trace.
+
+The Rust sketch compiler's Draw request accepts optional `snaps`, one null or
+`{index,point}` per input click. The editor and compiler share the same snapped
+edit builder. Point targets add Coincident; whole-curve targets add PointOnObject.
+The middle click constructs a three-point arc without a new snap constraint.
+Native Sketcher remains responsible for solving the compiled edits.
+
+Explicit Distance on one circular arc uses native arc length; Angle uses its
+span in radians at the constructor boundary. Explicit Distance also supports
+point-to-circle, circle-to-line and circle-pair boundary clearances. Native
+signed overlap/containment conventions apply. Arc/circle references use native
+solved snapshots and the same Rust witness calculation as viewport annotations.
+Smart Dimension retains its existing radius and center-distance choices. Native
+units, expressions, reference/driving state and history retain their existing
+protocol behavior.

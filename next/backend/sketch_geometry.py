@@ -99,11 +99,13 @@ def make_geometry(edit):
     raise GeometryError("Unsupported native curve kind: " + str(kind))
 
 
-def geometry_entry(geo, index, construction, deflection=0.03):
+def geometry_entry(geo, index, construction, deflection=0.03, sketch=None):
     entry = {"index": index, "geometry_type": geo.TypeId, "kind": "unsupported",
              "construction": bool(construction), "points": [], "handles": [], "editable": True}
 
     def handle(point, position):
+        if sketch is not None:
+            position = sketch.getPoint(index, point)
         entry["handles"].append({"index": index, "point": point, "position": xyz(position),
                                  "draggable": index >= 0})
 
@@ -190,7 +192,7 @@ def externals(obj):
         matches = [(i, link) for i, (link, keys) in enumerate(links) if extension.Ref in keys]
         source_index, source = matches[0] if len(matches) == 1 else (None, None)
         geometry_index = -3 - index
-        geometry = geometry_entry(geo, geometry_index, True)
+        geometry = geometry_entry(geo, geometry_index, True, sketch=obj)
         geometry["editable"] = False
         mode = types[source_index] if source_index is not None and source_index < len(types) else None
         result.append({"index": index, "geometry_index": geometry_index, "source": source,

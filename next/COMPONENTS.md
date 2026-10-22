@@ -15,7 +15,8 @@ Third-party addons and unrelated FreeCAD workbenches have no blanket parity comm
 | Sketch geometry, constraints and solver | Native Sketcher C++; Python task adapter; Rust drawing, constraints and sketch-task command construction/interaction. | Entire declared geometry/constraint scope, solved freedom, conflicts, drag/trim/split/extend, fillet/chamfer, Carbon Copy, spline edits, external references and units. |
 | Document graph, references and attachment | FreeCAD App/Part C++; Python adapter; Rust ownership/display queries. | Linked edits, topology remapping, transformed attachment, suppression, reorder and dependency failures. |
 | Expressions and units | Native C++ expression engine and quantities. | Dimensional compatibility, dependency propagation, named constraints, cycles, errors and saved expressions. |
-| Transactions, history and recomputation | C++ document transactions; Python preview/sketch-session orchestration; Rust request ownership. | Atomic failure, revision guards, preview ownership, action/document Undo/Redo, Cancel and validated final recomputation. |
+| Accepted sketch-action journal | Rust owns accepted edit groups, cursor, staged acceptance/history moves, branch truncation, replay planning and counts. Python performs native replay. | Matched action/history, rejected staging and recovery, consumed profiles, reopen, strict snapshots and resource gates. Desktop acceptance of this extraction remains open. |
+| Transactions, history and recomputation | C++ document transactions; Python preview/sketch-session tokens, leases, revisions and native orchestration; Rust request ownership and accepted-action journal. | Atomic failure, revision guards, preview ownership, action/document Undo/Redo, Cancel and validated final recomputation. |
 | Persistence and interchange | C++ FCStd and STEP/IGES through Python; Rust file browser; legacy prototype preserved separately. | Editable graph and references after reopen; explicit import/export coverage, browser cancellation/replacement, unsupported-data reporting and original preservation. |
 | PartDesign feature families | Native C++ features; selected operations exposed through Python and Rust forms/packages. | Each feature's complete declared options, linked parent edits, failure recovery, history and persistence. |
 | Assemblies | No replacement assembly implementation; native C++ Body placement available. | Joint/constraint behavior, component references, transforms, recomputation and saved assemblies. |
@@ -29,7 +30,8 @@ assemblies and executable extensions. The Rust feature catalog and typed native 
 a native type appearing in an allowlist or form does not establish a complete
 end-to-end workflow. See [UI-COVERAGE.md](UI-COVERAGE.md).
 
-A bounded next port is preview/sketch-session orchestration: ownership, revisions,
-replay, cancellation and failure recovery. Match the native workflow suites, then
-remove the Python owner. Native document transactions, solving and BRep geometry
-remain separate ports.
+The accepted-action journal is the first bounded extraction from preview/sketch
+session orchestration. Its matched native and resource checks pass on Windows;
+desktop acceptance remains open. It does not own gesture tokens, leases, native
+transaction sequencing or the revision clock. Those remain further bounded ports.
+Native document transactions, solving and BRep geometry remain separate ports.

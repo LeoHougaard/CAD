@@ -66,10 +66,11 @@ def same_constraints(copy, expected):
 
 
 def same_geometry(source, copy):
-    if source.GeometryCount != copy.GeometryCount or source.Placement != copy.Placement:
+    frozen = [g for g in source.ExternalGeo[2:] if g.getExtensionOfType("Sketcher::ExternalGeometryExtension").testFlag("Defining")]
+    if source.GeometryCount + len(frozen) != copy.GeometryCount or source.Placement != copy.Placement:
         return False
-    for index, (left, right) in enumerate(zip(source.Geometry, copy.Geometry)):
-        if left.TypeId != right.TypeId or source.getConstruction(index) != copy.getConstruction(index):
+    for index, (left, right) in enumerate(zip([*source.Geometry, *frozen], copy.Geometry)):
+        if left.TypeId != right.TypeId or (source.getConstruction(index) if index < source.GeometryCount else False) != copy.getConstruction(index):
             return False
         a, b = left.toShape(), right.toShape()
         values_a = [a.Length, *[getattr(a.BoundBox, key) for key in ("XMin", "YMin", "ZMin", "XMax", "YMax", "ZMax")]]
@@ -86,6 +87,7 @@ def same_geometry(source, copy):
 def independent(doc, source, body, name):
     if not source.isDerivedFrom("Sketcher::SketchObject"):
         raise ReferenceError("unsupported_reference", "Independent profile copying requires a native Sketch")
+    frozen = [g for g in source.ExternalGeo[2:] if g.getExtensionOfType("Sketcher::ExternalGeometryExtension").testFlag("Defining")]
     expected = internal_constraints(source)
     entries = ExpressionLinks.entries(source)
     copy = doc.addObject(source.TypeId, name)
@@ -112,6 +114,13 @@ def independent(doc, source, body, name):
     # Individual property restoration does not finalize Sketch persistent maps.
     # Without this native object roundtrip delExternal can erase all constraints.
     copy.restoreContent(copy.dumpContent())
+    # Earlier materializations can leave external identity on internal curves.
+    # Native clones retain their Sketch geometry IDs while removing that identity.
+    if any(geometry.hasExtensionOfType("Sketcher::ExternalGeometryExtension") for geometry in copy.Geometry):
+        internal = [geometry.clone() for geometry in copy.Geometry]
+        for geometry in internal:
+            geometry.deleteExtensionOfType("Sketcher::ExternalGeometryExtension")
+        copy.Geometry = internal
     # Bind after native restore finalization. Restoring an already-bound engine
     # can leave its external dependency edges stale until the next file reopen.
     for entry in entries:
@@ -119,6 +128,16 @@ def independent(doc, source, body, name):
     copy.recompute()
     if copy.solve() != 0:
         raise ReferenceError("invalid_model", "Native copied sketch constraints could not be solved")
+    # Preserve defining profile curves as independent native internal geometry.
+    for geometry in frozen:
+        internal = geometry.copy()
+        internal.deleteExtensionOfType("Sketcher::ExternalGeometryExtension")
+        index = copy.addGeometry(internal, False)
+        # Native addGeometry(False) retains an existing construction flag.
+        copy.setConstruction(index, False)
+        if copy.Geometry[index].hasExtensionOfType("Sketcher::ExternalGeometryExtension"):
+            raise ReferenceError("invalid_model", "Native materialized curve retained an external identity")
+    copy.recompute()
     while len(copy.ExternalGeo) > 2:
         before = len(copy.ExternalGeo)
         copy.delExternal(-3)

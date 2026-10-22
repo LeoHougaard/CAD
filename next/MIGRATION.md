@@ -151,3 +151,12 @@ and stale revisions rejected. Cross-process locking, branching and merging are
 unfinished work. There is no automatic old `.cadpart` migration yet. Originals
 must remain intact until an explicit importer can report which editable features
 it preserves.
+
+
+The circular-dimension command construction, witnesses and snapped-arc endpoint
+mapping are Rust. Native Sketch.getPoint supplies authoritative solver handles;
+FreeCAD still owns solving and the geometry kernel. Independent defining and
+intersection profile copies use the native geometry serialization adapter, with
+bounded circular and legacy-identity acceptance. This extends functional UI
+access; it is not a Rust kernel replacement. See VERIFICATION.md for the matched
+native gates and remaining GUI scope.
