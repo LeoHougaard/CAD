@@ -17,6 +17,12 @@ enum Request {
         #[serde(default)]
         construction: bool,
     },
+    Edit {
+        snapshot: Value,
+        kind: String,
+        selection: Vec<SketchElement>,
+        parameters: Value,
+    },
     Constraint {
         snapshot: Value,
         kind: String,
@@ -35,6 +41,12 @@ fn compile(line: &str) -> Result<Vec<Value>, String> {
             index,
             construction,
         } => draw_edits(&object, tool, &points, index, construction),
+        Request::Edit {
+            snapshot,
+            kind,
+            selection,
+            parameters,
+        } => cad_next::sketch_operation_commands::build(&snapshot, &kind, &selection, &parameters),
         Request::Constraint {
             snapshot,
             kind,
@@ -48,7 +60,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(argument) = std::env::args().nth(1) {
         if argument == "--help" || argument == "-h" {
             println!(
-                "cad-next-sketch\nCompile one local JSON request per stdin line into native sketch edits.\nDraw: {{\"op\":\"draw\",\"object\":\"Sketch\",\"tool\":\"line\",\"points\":[[0,0,0],[10,0,0]],\"index\":0,\"construction\":false}}\nConstraint: {{\"op\":\"constraint\",\"snapshot\":<native sketch object>,\"kind\":\"Distance\",\"selection\":[{{\"index\":0,\"point\":0}}],\"value\":\"10 mm\"}}\nOutput: {{\"ok\":true,\"edits\":[...]}} or {{\"ok\":false,\"error\":{{\"code\":\"invalid_sketch_command\",\"message\":\"...\"}}}}\nNo document is opened or changed. Submit returned edits with a native revision guard."
+                "cad-next-sketch\nCompile one local JSON request per stdin line into native sketch edits.\nDraw: {{\"op\":\"draw\",\"object\":\"Sketch\",\"tool\":\"line\",\"points\":[[0,0,0],[10,0,0]],\"index\":0,\"construction\":false}}\nConstraint: {{\"op\":\"constraint\",\"snapshot\":<native sketch object>,\"kind\":\"Distance\",\"selection\":[{{\"index\":0,\"point\":0}}],\"value\":\"10 mm\"}}\nEdit: {{\"op\":\"edit\",\"snapshot\":<native sketch object>,\"kind\":\"extend\",\"selection\":[{{\"index\":0,\"point\":2}}],\"parameters\":{{\"increment\":\"5 mm\"}}}}\nOutput: {{\"ok\":true,\"edits\":[...]}} or {{\"ok\":false,\"error\":{{\"code\":\"invalid_sketch_command\",\"message\":\"...\"}}}}\nNo document is opened or changed. Submit returned edits with a native revision guard."
             );
             return Ok(());
         }

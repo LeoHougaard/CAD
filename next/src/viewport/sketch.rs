@@ -14,6 +14,7 @@ pub(super) struct DimensionHit {
 impl Viewport {
     pub fn clear_sketch_selection(&mut self) {
         self.sketch_selection.clear();
+        self.sketch_pick_positions.clear();
         self.clear_selection();
     }
 
@@ -190,6 +191,12 @@ impl Viewport {
             .find(|hit| hit.label.contains(pos))
             .map(|hit| hit.index)
             .or_else(|| {
+                // Witness/leader lines may meet a native endpoint or cross a
+                // curve. Keep those entities selectable; labels remain direct
+                // dimension targets, and unobstructed leader lines still hit.
+                if self.sketch_hit(pos).is_some() {
+                    return None;
+                }
                 self.dimension_hits
                     .iter()
                     .filter_map(|hit| {
@@ -203,6 +210,28 @@ impl Viewport {
                     .min_by(|a, b| a.0.total_cmp(&b.0))
                     .map(|(_, index)| index)
             })
+    }
+
+    /// Select at the cursor and remember the actual sketch-local pick, not a curve midpoint.
+    pub fn select_sketch_at(&mut self, pos: Pos2, toggle: bool) -> Option<SketchElement> {
+        let hit = self.sketch_hit(pos);
+        let position = self.sketch_point(pos);
+        self.select_sketch_element(hit, toggle);
+        if let (Some(element), Some(position)) = (hit, position)
+            && self.sketch_selection.contains(&element)
+        {
+            self.sketch_pick_positions.insert(element, position);
+        }
+        hit
+    }
+
+    /// Cursor position from an actual selected pick in the unchanged native sketch snapshot.
+    /// Box selections and selections supplied by other controls have no cursor pick.
+    pub fn sketch_pick_position(&self, element: SketchElement) -> Option<[f64; 3]> {
+        self.sketch_selection
+            .contains(&element)
+            .then(|| self.sketch_pick_positions.get(&element).copied())
+            .flatten()
     }
 
     pub(super) fn select_sketch_element(&mut self, hit: Option<SketchElement>, toggle: bool) {
@@ -223,6 +252,8 @@ impl Viewport {
         } else {
             self.sketch_selection = vec![hit];
         }
+        self.sketch_pick_positions
+            .retain(|element, _| self.sketch_selection.contains(element));
     }
 
     pub(super) fn draw_sketch(&self, painter: &egui::Painter) {
@@ -318,14 +349,12 @@ impl Viewport {
             let glyph = match constraint["type"].as_str().unwrap_or("") {
                 "Horizontal" => "H",
                 "Vertical" => "V",
-                "Parallel" => "ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã¢â‚¬Â¹ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¥",
-                "Perpendicular" => "ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¥",
+                "Parallel" => "\u{2225}",
+                "Perpendicular" => "\u{22a5}",
                 "Equal" => "=",
                 "Tangent" => "T",
-                "Coincident" => "ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â·",
-                "Block" => {
-                    "ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â "
-                }
+                "Coincident" => "\u{00b7}",
+                "Block" => "\u{22a0}",
                 _ => continue,
             };
             let index = constraint["first"].as_i64().unwrap_or(-2000) as i32;
@@ -523,11 +552,7 @@ impl Viewport {
                             direction,
                             format!(
                                 "{}{value:.2} mm",
-                                if kind == "Diameter" {
-                                    "ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â¹Ãƒâ€¦Ã¢â‚¬Å“"
-                                } else {
-                                    "R"
-                                }
+                                if kind == "Diameter" { "\u{2300}" } else { "R" }
                             ),
                         ));
                     }
@@ -596,10 +621,7 @@ impl Viewport {
                         label = Some((
                             position,
                             (position - center).normalized(),
-                            format!(
-                                "{:.1}ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â°",
-                                value.to_degrees()
-                            ),
+                            format!("{:.1}\u{00b0}", value.to_degrees()),
                         ));
                     }
                 }
@@ -696,6 +718,46 @@ mod tests {
         viewport.align_sketch();
         viewport
     }
+    #[test]
+    fn curve_pick_uses_actual_attached_sketch_cursor_and_invalidates_with_native_changes() {
+        let mut viewport = viewport();
+        let mut sketch = snapshot();
+        sketch["global_placement"] = json!({"position":[100,200,300],"rotation":[0,0,1,0]});
+        viewport.set_sketch(Some(sketch.clone()));
+        viewport.align_sketch();
+        let edge = SketchElement { index: 0, point: 0 };
+        let pick = [13., 10.25, 0.]; // Within edge tolerance, far from its midpoint and endpoint handles.
+        assert_eq!(
+            viewport.select_sketch_at(viewport.sketch_screen_point(pick), false),
+            Some(edge)
+        );
+        let captured = viewport.sketch_pick_position(edge).unwrap();
+        assert!(
+            captured
+                .iter()
+                .zip(pick)
+                .all(|(actual, expected)| (actual - expected).abs() < 1e-4)
+        );
+        assert_ne!(Some(captured), viewport.geometry_point(edge));
+        viewport.set_sketch(Some(sketch.clone()));
+        assert_eq!(viewport.sketch_pick_position(edge), Some(captured));
+        let circle = SketchElement { index: 1, point: 0 };
+        viewport.select_sketch_at(viewport.sketch_screen_point([25., 25., 0.]), true);
+        assert!(viewport.sketch_pick_position(circle).is_some());
+        assert_eq!(viewport.sketch_pick_position(edge), Some(captured));
+        viewport.select_sketch_at(viewport.sketch_screen_point(pick), true);
+        assert_eq!(viewport.sketch_pick_position(edge), None);
+        viewport.select_sketch_at(viewport.sketch_screen_point(pick), true);
+        sketch["sketch"]["geometry"][0]["end"] = json!([35, 10, 0]);
+        viewport.set_sketch(Some(sketch));
+        assert!(viewport.sketch_selection.contains(&edge));
+        assert_eq!(viewport.sketch_pick_position(edge), None);
+        assert_eq!(viewport.sketch_pick_position(circle), None);
+        viewport.select_sketch_at(viewport.sketch_screen_point(pick), false);
+        viewport.clear_sketch_selection();
+        assert_eq!(viewport.sketch_pick_position(edge), None);
+    }
+
     #[test]
     fn native_endpoint_center_origin_and_whole_edge_are_distinct() {
         let viewport = viewport();
@@ -893,6 +955,32 @@ mod tests {
         assert_eq!(hit.index, 9);
         assert!(hit.segments[0][0].distance(viewport.sketch_screen_point([20., 10., 0.])) < 1e-5);
         assert!(hit.segments[1][0].distance(viewport.sketch_screen_point([20., 20., 0.])) < 1e-5);
+    }
+    #[test]
+    fn dimension_witness_lines_do_not_steal_native_endpoints_or_curve_picks() {
+        let mut viewport = viewport();
+        let mut sketch = snapshot();
+        sketch["sketch"]["constraints"] = json!([
+            {"index":7,"type":"DistanceX","first":0,"first_pos":1,"second":0,"second_pos":2,"value":20}
+        ]);
+        viewport.set_sketch(Some(sketch));
+        let context = egui::Context::default();
+        let _ = context.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| viewport.draw_dimensions(ui.painter()));
+        });
+        let point = SketchElement { index: 0, point: 2 };
+        let pos = viewport.sketch_screen_point(viewport.geometry_point(point).unwrap());
+        assert!(
+            viewport.dimension_hits[0]
+                .segments
+                .iter()
+                .any(|[a, b]| segment_distance(pos, *a, *b).0 < 1.)
+        );
+        assert_eq!(viewport.dimension_hit(pos), None);
+        assert_eq!(viewport.select_sketch_at(pos, false), Some(point));
+        assert_eq!(viewport.sketch_selection, vec![point]);
+        let label = viewport.dimension_hits[0].label.center();
+        assert_eq!(viewport.dimension_hit(label), Some(7));
     }
     #[test]
     fn drawn_dimension_label_and_line_return_native_constraint_index() {

@@ -338,6 +338,53 @@ captured Body Tip/visibility. Child Originals/BaseFeature links belong to the
 parent operation. Preview, Commit, Cancel and Undo retain one native transaction
 owner; child steps do not form an independent Rust history.
 
+## Native sketch task edits
+
+These edits target one native SketchObject through the existing guarded
+transaction or sketch-session boundary. They do not open their own transactions.
+All curve indices refer to internal geometry and must come from the accepted
+native snapshot. Topology-changing operations can renumber geometry and
+constraints; read the returned snapshot before another action.
+
+| `op` | Fields and native behavior |
+| --- | --- |
+| `fillet_geometry` | `object`, positive `radius` in mm or a compatible unit string; either `index` plus endpoint `point` 1/2, or two distinct `indices` and two sketch-local `positions`. Optional booleans `trim:true`, `preserve_corner:false`, `chamfer:false`. Radius seeds the generated geometry; a separate native Radius constraint drives it afterward. Native chamfer leaves the fillet arc as construction geometry. |
+| `split_geometry` | `object`, `index`, sketch-local `position`. Native Sketcher splits the picked curve. |
+| `extend_geometry` | `object`, `index`, endpoint `point` 1/2, `increment`. Native support is line segments and circular arcs. Numeric increments use mm for lines and radians for arcs; explicit compatible unit strings are accepted. |
+| `carbon_copy` | `object`, another native sketch `source` in the same document, optional `construction:true`. Native Sketcher enforces scope/alignment/dependencies and creates expression links to copied driving dimensions. |
+| `spline_degree` | `object`, spline `index`, nonzero integer `change`; resulting native degree must be 1..25. Native degree reduction approximates/replaces the spline and removes old constraints. |
+| `spline_knot` | `object`, spline `index`; either native `parameter` with optional positive `multiplicity:1`, or one-based `knot` with nonzero integer multiplicity `change`. Native Sketcher validates the curve-specific limits. |
+| `spline_pole` | `object`, spline `index`, zero-based `pole`, sketch-local `position`. Exposes the native pole control and moves its circle center through Sketcher. |
+| `spline_weight` | `object`, spline `index`, zero-based `pole`, positive dimensionless `value`, optional `release_constraints:[]`. Releases only explicitly listed Equal constraints involving that native pole circle, then adds or updates its native Weight constraint. |
+
+Sketch snapshots include `spline_controls` entries with `spline_index`, zero-based
+`pole_index` and actual exposed `control_index`. Reading these entries does not
+expose geometry. Task-generated control/constraint IDs belong to the current
+candidate, not the captured baseline. Preview replacement must compile against
+the same baseline and original selections; never carry candidate IDs into the
+next replacement. The adapter registers the native Geometry property before
+arc extension so native abort/Undo also restores that in-place handle change.
+Persistent native geometry IDs and reference mapping remain authoritative.
+Knot multiplicity reduction/removal can approximate the curve and remove or
+retarget native control constraints. Exact reversal in a fixture that removes a
+just-inserted knot does not establish general shape preservation.
+
+`cad-next-sketch` accepts a shared UI/agent NDJSON compiler request:
+
+```json
+{"op":"edit","snapshot":{"name":"Sketch","sketch":{"geometry":[{"index":0,"kind":"line"}]}},"kind":"extend","selection":[{"index":0,"point":2}],"parameters":{"increment":"2 mm"}}
+```
+
+Use a complete current native sketch object as `snapshot` in actual calls.
+Kinds are `fillet`, `chamfer`, `split`, `extend`, `carbon_copy`, `spline_degree`,
+`spline_knot`, `spline_pole` and `spline_weight`. Responses use the existing
+`{ok,edits}` or `invalid_sketch_command` format. Compilation changes no document;
+submit returned edits with `expected_revision` and the active session token.
+The editor task owns its preview token. Apply accepts one sketch action; Cancel
+restores the task baseline. When redo prevents a native preview, native execution
+is deferred to an ordinary Apply transaction and Cancel preserves redo. All edits
+still need native validation, and Finish still validates downstream features.
+
 ## Geometry exchange
 
 `import_exchange` is an ordinary guarded transaction edit with a `path` ending in

@@ -122,9 +122,12 @@ running. Their executables and original documents were not replaced.
 
 ## Automated checks
 
-Windows x64 and Pixel Linux ARM64 pass the Rust checks and all six real-native
-workflow scripts. CI repeats the Rust checks, including the optional desktop
-target, and native workflows on Windows and Linux x64.
+Windows x64 and Pixel Linux ARM64 have native workflow results recorded below.
+CI repeats the Rust checks, including the optional desktop
+target, and native workflows on Windows and Linux x64. The verified sketch-task
+and browser batch has 110 Rust tests: 108 passed and two ignored. Formatting,
+strict all-target Clippy and Windows desktop/all-binary builds pass. All eleven
+native suites listed below pass on Windows x64 and Pixel Linux ARM64.
 
 - `native_workflows.py`: sketches, construction, dragging, arcs, native units
   and expressions, attachment remapping, transformed Bodies, save/reopen,
@@ -151,6 +154,11 @@ target, and native workflows on Windows and Linux x64.
   preview replacement/cancel, failures, Undo/Redo, parent edits and reopening.
   Raw Group placement and multiple-tool results are compared against a separate
   pinned FreeCAD reference rather than normalized to a different behavior.
+- `sketch_operations_workflows.py`: shared Rust task compiler, native corner
+  fillet/chamfer, two-curve fillet, split/extension, Carbon Copy expressions and
+  spline degree/knots/poles/weights. Checks include analytical solid volumes,
+  typed units, failed-batch rollback, preview replacement/Cancel, action and
+  document Undo/Redo, persistent references and continued editing after reopen.
 - Rust tests cover transport failure, actor document preservation after failed
   Open, committed edits followed by display failure, depth-aware picking,
   selection invalidation, sketch coordinates and transformed normals. Sketch
@@ -262,7 +270,19 @@ This verifies those operations; it does not establish complete Sketcher parity.
 commands to native MultiTransform. It checks all four child types, repeated and
 failed preview replacement, adding/removing/reordering stable native children,
 Commit/Cancel, one native Undo/Redo, downstream Tip/visibility preservation and
-save/reopen/edit. `exchange_workflows.py` checks native STEP hierarchy and placed
+save/reopen/edit.
+
+Actual Pixel GUI interaction created a MultiTransform with a Linear step, canceled
+back to the original 816 cubic millimeters, then applied 832. Native Undo/Redo
+restored 816/832. Adding a Mirror about XZ was canceled at 832, then applied at
+864. Reordering Mirror before Linear retained 864; removing Mirror produced 832,
+and Undo/Redo restored the exact child order and deletion. After real Open, editing
+the saved Linear step from two to three occurrences produced 848. Independent
+native workers checked eleven saved private copies, including ordered
+Transformations, child ownership, Originals, Body Tip and visibility. This covers
+those GUI paths; other transform combinations retain their own acceptance gates.
+
+`exchange_workflows.py` checks native STEP hierarchy and placed
 root round trips, nine IGES faces as surfaces, subsequent native cuts with
 volumes 120 -> 105 -> 90, atomic failed imports, Undo/Redo, revision/lease guards,
 original file hashes and deliberate export replacement. These suites complement
@@ -272,6 +292,7 @@ Run the added suites with the same pinned runtime:
 
 ```sh
 python next/tests/sketch_curves_workflows.py --host next/target/debug/cad-next --compiler next/target/debug/cad-next-sketch --runtime next/target/runtime.json --output next/target/sketch-curve-documents
+python next/tests/sketch_operations_workflows.py --host next/target/debug/cad-next --compiler next/target/debug/cad-next-sketch --runtime next/target/runtime.json --output next/target/sketch-operation-documents
 python next/tests/transform_workflows.py --host next/target/debug/cad-next --compiler next/target/debug/cad-next-packages --runtime next/target/runtime.json --output next/target/transform-documents
 python next/tests/exchange_workflows.py --host next/target/debug/cad-next --runtime next/target/runtime.json --output next/target/exchange-documents
 ```
@@ -288,4 +309,91 @@ separately saved/reopened native sketch snapshot exactly matched the accepted
 baseline. Visible binders are rendered separately from the solid Tip so their
 native faces/edges can be selected. Direct external geometry outside a Body's
 native scope is still rejected; the tested path creates a binder explicitly.
-The automatic native outside-Body choice dialog remains a coverage gap.
+Pinned native Sketcher rejects external sources outside its allowed Body scope;
+it has no automatic outside-Body choice dialog. PartDesign feature-reference
+picking has separate independent/dependent/cross-reference choices. Broader
+Binder/projection variants and those PartDesign property-row choices remain
+coverage gaps.
+
+
+## Native sketch tasks and file browser
+
+The native sketch-operation suite passes on Windows x64 and Pixel Linux ARM64
+through the production `cad-next-sketch` compiler. Rounded and chamfered
+profiles become editable native Pads with analytical volumes; dimensions remain
+editable after reopen. Carbon Copy source dimensions drive the copied profile
+and its solid. Spline pole and rational weight edits change the resulting solid,
+while degree and knot edits retain native history. Arc extension keeps persistent
+external references and restores its baseline after failed batches, preview
+cancellation and sketch-session cancellation.
+
+The adapter registers native Geometry assignment before extending an arc because
+the pinned method otherwise mutates its handle without registering native undo.
+It does not replace Sketcher geometry or transaction ownership. Native degree
+reduction can replace a spline and delete its constraints. Knot reduction/removal
+can approximate geometry and retarget controls; the fixture checks reversal of a
+just-inserted knot. Weight edits release
+only explicitly chosen Equal constraints on the selected native pole control.
+These are functional limits callers must handle, not a claim of full Sketcher
+parity.
+
+Actual Pixel GUI task checks were saved to disposable FCStd copies and reopened
+by a separate production native worker without edits or saves:
+
+- A 2 mm fillet accepted a native endpoint selection. Cancel restored the baseline;
+  Apply, Undo/Redo, Finish and Save as retained a valid Pad of
+  495.707963267949 cubic millimeters. A separate Preserve construction corner
+  case retained four lines, the arc and one native construction point, with two
+  Tangent and two PointOnObject constraints. The radius field seeds the native
+  arc; it does not automatically add a Radius constraint.
+- A 2 mm sketch chamfer produced a valid Pad of 490 cubic millimeters. Split
+  added a fifth profile curve while preserving the 500 cubic millimeter Pad.
+- Line and arc extension produced a 30 mm line and a 120 degree arc.
+- Moving spline pole 2 to [2, 4, 0] produced a 63 cubic millimeter Pad. Weight 0
+  was rejected with Apply disabled. Changing the weight to 2 and explicitly
+  releasing Equal 5 recovered a valid preview and produced
+  69.1594553908154 cubic millimeters. After Undo, opening and canceling a deferred
+  task preserved Redo; Redo, Finish and Save as retained the accepted weight.
+- Canceling a weight task after exposing controls, switching poles and toggling
+  an Equal release restored the exact native baseline sketch and expressions:
+  two geometries, no exposed controls and Pad volume 54 cubic millimeters.
+- Degree elevation to 4 and insertion of knot 0.5 preserved the native Pad volume
+  of 54 cubic millimeters. Carbon Copy retained four copied curves and native
+  dimension expressions after reopen. Source-dimension propagation also has
+  native suite coverage; this GUI case checked copying and persistence.
+
+Fresh forms default Preserve construction corner to checked, matching the pinned
+native Fillet and Chamfer tools. Applying their 1 mm defaults produced valid
+Pads of 498.926990816987 and 497.5 cubic millimeters, respectively, retaining
+native construction corners. After document Undo and sketch reentry, the chamfer
+task deferred recomputation. Canceling the task and sketch preserved document
+Redo, which restored the exact saved fillet sketch and expressions. Repeating
+the sequence and applying the chamfer correctly branched history and survived
+Finish, Save as and independent native reopen.
+
+These checks cover the listed inputs and controls. Degree reduction, knot
+reduction/removal, additional curve/corner selections and broader task
+combinations retain their own GUI gates.
+
+Open/Save as and STEP/IGES Import/Export share a filtered modal file browser.
+Fourteen real Pixel GUI checks cover native format filtering, search/list picking,
+directory Up/Back navigation, new native filenames with retained FCStd extension,
+existing-destination confirmation, cancellation, unsaved-change protection and
+native reopen. Canceling an existing native overwrite left its SHA256 unchanged;
+explicit confirmation saved it without a second application prompt.
+
+A filtered IGES import merged native geometry into the existing document.
+Export Browse switched the destination format to STEP while retaining both
+selected native objects. Independent native reopening checked the saved one-box
+and merged two-object documents; independent STEP import checked one solid and
+nine surface faces, fifteen faces total. Browser overwrite confirmation did not
+automatically enable the application's explicit export replacement checkbox.
+Cancel left the existing output hash unchanged. The library returns a path and
+no overwrite-authorization flag, so export keeps this separate explicit choice.
+Earlier GUI exchange checks above used the previous path dialog.
+
+After browser interaction, the maximized debug editor with a saved 150 cubic
+millimeter box used 96348 KiB RSS, the Rust host 2708 KiB and the native worker
+99388 KiB. All three measured zero CPU during five idle seconds with the browser
+closed and no swap. This is another small-part observation, not a moderate-part
+resource gate or a comparison against a different document/client size.

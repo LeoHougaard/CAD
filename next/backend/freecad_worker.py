@@ -18,6 +18,7 @@ import Part
 import Sketcher
 import PartDesign  # Register the native feature classes in headless mode.
 import sketch_geometry as SketchGeometry
+import sketch_operations as SketchOperations
 import exchange as Exchange
 
 
@@ -29,6 +30,7 @@ EDIT_OPERATIONS = ["add_object", "set", "expression", "geometry", "constraint",
                    "datum", "move_geometry", "construction", "delete_geometry", "delete_constraint",
                    "constraint_state", "trim_geometry", "remove_object", "binder_support",
                    "expose_internal", "external_geometry", "external_state", "delete_external", "import_exchange"]
+EDIT_OPERATIONS += list(SketchOperations.OPERATIONS)
 OBJECT_TYPES = {
     "App::Part", "Part::Feature", "PartDesign::Body", "Sketcher::SketchObject",
     "PartDesign::Pad", "PartDesign::Pocket", "PartDesign::Fillet",
@@ -442,6 +444,7 @@ def snapshot(doc, revision=None):
                                "conflicting_constraints": list(obj.ConflictingConstraints),
                                "redundant_constraints": list(obj.RedundantConstraints),
                                "geometry": sketch_geometry(obj),
+                               "spline_controls": SketchOperations.spline_controls(obj),
                                "externals": SketchGeometry.externals(obj),
                                "constraints": [{"index": i, "type": c.Type, "first": c.First,
                                                 "first_pos": c.FirstPos, "second": c.Second,
@@ -515,6 +518,11 @@ def set_boolean_tools(feature, tools):
 
 def apply_edit(doc, edit):
     op = edit.get("op", edit.get("kind"))
+    if op in SketchOperations.OPERATIONS:
+        try:
+            return SketchOperations.apply(object_in(doc, edit["object"]), edit)
+        except SketchOperations.OperationError as error:
+            fail(error.code, str(error))
     if op == "import_exchange":
         try:
             return Exchange.import_into(doc, edit)
@@ -726,6 +734,7 @@ def sketch_edits(session, edits):
             "set", "expression", "geometry", "constraint", "datum", "move_geometry", "construction",
             "delete_geometry", "delete_constraint", "constraint_state", "trim_geometry", "expose_internal",
             "external_geometry", "external_state", "delete_external",
+            *SketchOperations.OPERATIONS,
         }:
             fail("sketch_active", "Only edits to the active sketch are allowed during sketch editing")
 

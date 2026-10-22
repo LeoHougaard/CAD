@@ -4,8 +4,10 @@ mod bodies;
 mod constraints;
 mod drawing;
 mod exchange;
+mod file_browser;
 mod properties;
 mod sketch;
+mod sketch_tools;
 #[cfg(test)]
 mod tests;
 mod transforms;
@@ -266,6 +268,7 @@ pub struct Editor {
     path: String,
     file_input: String,
     file_dialog: Option<bool>,
+    file_browser: file_browser::FileBrowser,
     overwrite: bool,
     dirty: bool,
     pending_file: Option<FileAction>,
@@ -319,6 +322,7 @@ impl Editor {
                 .unwrap_or_default(),
             file_input: String::new(),
             file_dialog: None,
+            file_browser: file_browser::FileBrowser::default(),
             overwrite: false,
             dirty: false,
             pending_file: None,
@@ -641,6 +645,15 @@ impl Editor {
     fn file_dialog(&mut self, save: bool) {
         self.file_input = self.path.clone();
         self.file_dialog = Some(save);
+        let path = self.path.clone();
+        self.browse_file(
+            if save {
+                file_browser::Purpose::Save
+            } else {
+                file_browser::Purpose::Open
+            },
+            &path,
+        );
     }
     fn save(&mut self) {
         if self.path.is_empty() {
@@ -718,7 +731,8 @@ impl Editor {
                         .color(Color32::from_rgb(110, 182, 177)),
                 );
                 ui.separator();
-                let idle = self.sketch_ui.drag.is_none()
+                let idle = self.sketch_ui.task.is_none()
+                    && self.sketch_ui.drag.is_none()
                     && self.sketch_ui.dimension.is_none()
                     && !self.busy
                     && self.draft.is_none()
@@ -775,6 +789,7 @@ impl Editor {
                     !self.busy
                         && self.sketch_ui.drag.is_none()
                         && self.sketch_ui.dimension.is_none()
+                        && self.sketch_ui.task.is_none()
                         && self.draft.is_none()
                         && self.pending_file.is_none()
                         && self.file_dialog.is_none()
@@ -976,60 +991,6 @@ impl Editor {
                 self.finish_preview(false);
             }
         }
-        if let Some(save) = self.file_dialog {
-            let mut done = false;
-            egui::Modal::new(egui::Id::new("file_dialog")).show(ctx, |ui| {
-                ui.heading(if save {
-                    "Save native document"
-                } else {
-                    "Open native document"
-                });
-                ui.label("FCStd path");
-                ui.add(egui::TextEdit::singleline(&mut self.file_input).desired_width(380.));
-                ui.horizontal(|ui| {
-                    if ui
-                        .add_enabled(
-                            !self.busy && !self.file_input.is_empty(),
-                            egui::Button::new(if save { "Save" } else { "Open" }),
-                        )
-                        .clicked()
-                    {
-                        let different = std::fs::canonicalize(&self.file_input).ok()
-                            != std::fs::canonicalize(&self.path).ok();
-                        if save && different && PathBuf::from(&self.file_input).is_file() {
-                            self.overwrite = true;
-                        } else {
-                            self.send(
-                                if save { "save" } else { "open" },
-                                json!({"path":self.file_input}),
-                            );
-                        }
-                        done = true;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        done = true;
-                    }
-                });
-            });
-            if done {
-                self.file_dialog = None;
-            }
-        }
-        if self.overwrite {
-            egui::Modal::new(egui::Id::new("overwrite")).show(ctx, |ui| {
-                ui.heading("Replace existing document?");
-                ui.label(&self.file_input);
-                ui.horizontal(|ui| {
-                    if ui.button("Replace").clicked() {
-                        self.overwrite = false;
-                        self.send("save", json!({"path":self.file_input}));
-                    }
-                    if ui.button("Cancel").clicked() {
-                        self.overwrite = false;
-                    }
-                });
-            });
-        }
         if let Some(action) = self.pending_file {
             egui::Modal::new(egui::Id::new("unsaved")).show(ctx, |ui| {
                 ui.label("Discard unsaved changes to this document?");
@@ -1057,7 +1018,9 @@ impl Editor {
         self.viewport.sketch_select_enabled = !self.sketch_ui.external
             && self.sketch_ui.tool == Draw::Select
             && self.sketch_ui.drag.is_none()
-            && !self.sketch_ui.trim;
+            && !self.sketch_ui.trim
+            && !self.sketch_ui.split
+            && self.sketch_ui.task.is_none();
         let before = self.viewport.selected.clone();
         self.viewport.ui(ui);
         if self.viewport.selected != before
@@ -1081,9 +1044,10 @@ impl eframe::App for Editor {
                 || self.draft.is_some()
                 || self.sketch_ui.session.is_some()
                 || self.exchange_ui.active()
+                || self.file_browser.active()
             {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                self.error = Some("Finish or cancel the active feature before closing".into());
+                self.error = Some("Finish or cancel the active operation before closing".into());
             } else if self.dirty {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 self.pending_file = Some(FileAction::Close);
@@ -1093,7 +1057,9 @@ impl eframe::App for Editor {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
         if ctx.input(|i| i.key_pressed(Key::Escape)) {
-            if self.exchange_ui.active() {
+            if self.file_browser.active() {
+                self.cancel_file_browser();
+            } else if self.exchange_ui.active() {
                 self.exchange_ui.cancel();
             } else if self.file_dialog.is_some() {
                 self.file_dialog = None;
@@ -1135,10 +1101,11 @@ impl eframe::App for Editor {
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(Color32::from_rgb(5, 7, 9)))
             .show(ctx, |ui| self.canvas(ui));
-        if !self.exchange_ui.active() {
+        if !self.exchange_ui.active() && !self.file_browser.active() {
             self.panels(ctx);
         }
         self.exchange_dialog(ctx);
+        self.file_browser_ui(ctx);
         self.sketch_pump(ctx);
         // Text editors consume their own Undo first. Button focus must not
         // disable application shortcuts, and modals must block document writes.
@@ -1148,8 +1115,10 @@ impl eframe::App for Editor {
             && self.file_dialog.is_none()
             && !self.overwrite
             && !self.exchange_ui.active()
+            && !self.file_browser.active()
             && self.sketch_ui.drag.is_none()
             && self.sketch_ui.dimension.is_none()
+            && self.sketch_ui.task.is_none()
         {
             let command = egui::Modifiers::COMMAND;
             let shifted = egui::Modifiers {

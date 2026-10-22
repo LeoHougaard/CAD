@@ -2,7 +2,10 @@
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Shape, Stroke, Vec2};
 use glam::{Quat, Vec3};
 use serde_json::Value;
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+};
 mod gl_renderer;
 mod navigation;
 mod references;
@@ -69,6 +72,7 @@ pub struct Viewport {
     pub selected: Option<Selection>,
     pub selections: Vec<Selection>,
     pub sketch_selection: Vec<SketchElement>,
+    sketch_pick_positions: HashMap<SketchElement, [f64; 3]>,
     pub sketch_select_enabled: bool,
     /// Pick native solid subelements during the external-reference tool.
     pub solid_select_in_sketch: bool,
@@ -100,6 +104,7 @@ impl Default for Viewport {
             selected: None,
             selections: vec![],
             sketch_selection: vec![],
+            sketch_pick_positions: HashMap::new(),
             sketch_select_enabled: true,
             solid_select_in_sketch: false,
             dimension_hits: vec![],
@@ -338,6 +343,9 @@ impl Viewport {
     }
 
     pub fn set_sketch(&mut self, sketch: Option<Value>) {
+        if self.sketch != sketch {
+            self.sketch_pick_positions.clear();
+        }
         if self.sketch.as_ref().and_then(|s| s["name"].as_str())
             != sketch.as_ref().and_then(|s| s["name"].as_str())
         {
@@ -406,6 +414,8 @@ impl Viewport {
                     || curve.handles.iter().any(|(id, _)| *id == *element)
             })
         });
+        self.sketch_pick_positions
+            .retain(|element, _| self.sketch_selection.contains(element));
     }
 
     pub fn align_sketch(&mut self) {
@@ -757,10 +767,9 @@ impl Viewport {
         {
             if self.sketch.is_some() && !self.solid_select_in_sketch {
                 if self.sketch_select_enabled && self.dimension_hit(pos).is_none() {
-                    let hit = self.sketch_hit(pos);
                     let toggle =
                         ui.input(|i| i.modifiers.ctrl || i.modifiers.shift || i.modifiers.command);
-                    self.select_sketch_element(hit, toggle);
+                    let hit = self.select_sketch_at(pos, toggle);
                     selection = hit.map(|element| Selection {
                         object: self
                             .sketch

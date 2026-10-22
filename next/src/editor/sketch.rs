@@ -17,6 +17,8 @@ pub(super) struct SketchUi {
     pub(super) drag: Option<Drag>,
     pub(super) trim: bool,
     pub(super) external: bool,
+    pub(super) split: bool,
+    pub(super) task: Option<super::sketch_tools::SketchTask>,
     external_defining: bool,
     external_intersection: bool,
     pending_begin: bool,
@@ -26,7 +28,7 @@ pub(super) struct SketchUi {
     after_finish: Option<String>,
     continuation: Option<usize>,
     box_start: Option<egui::Pos2>,
-    branch_pending: bool,
+    pub(super) branch_pending: bool,
 }
 impl Default for SketchUi {
     fn default() -> Self {
@@ -42,6 +44,8 @@ impl Default for SketchUi {
             drag: None,
             trim: false,
             external: false,
+            split: false,
+            task: None,
             external_defining: false,
             external_intersection: false,
             pending_begin: false,
@@ -57,6 +61,9 @@ impl Default for SketchUi {
 }
 impl SketchUi {
     pub(super) fn hint(&self) -> Option<&'static str> {
+        if self.split {
+            return Some("Pick a curve to split; Esc ends splitting");
+        }
         if self.external {
             return Some("Select an edge or vertex to project; Esc ends projection");
         }
@@ -169,6 +176,10 @@ impl Editor {
         self.begin_sketch();
     }
     pub(super) fn sketch_reply(&mut self, op: &str, success: bool) {
+        if op == "preview_commit" && success && self.sketch_ui.task.is_some() {
+            self.sketch_ui.branch_pending = false;
+        }
+        self.sketch_task_reply(op, success);
         if op == "transaction" && self.sketch_ui.pending_begin {
             if success {
                 self.begin_sketch();
@@ -256,7 +267,10 @@ impl Editor {
         }
     }
     pub(super) fn feature_from_sketch(&mut self, id: &str) {
-        if self.sketch_ui.dimension.is_some() || self.sketch_ui.drag.is_some() {
+        if self.sketch_ui.dimension.is_some()
+            || self.sketch_ui.drag.is_some()
+            || self.sketch_ui.task.is_some()
+        {
             return;
         }
         if self.sketch_ui.session.is_some() {
@@ -267,7 +281,11 @@ impl Editor {
         }
     }
     fn finish_sketch(&mut self, commit: bool) {
-        if self.busy || self.sketch_ui.drag.is_some() || self.sketch_ui.dimension.is_some() {
+        if self.busy
+            || self.sketch_ui.drag.is_some()
+            || self.sketch_ui.dimension.is_some()
+            || self.sketch_ui.task.is_some()
+        {
             return;
         }
         if let Some(token) = self.sketch_ui.session.clone() {
@@ -284,7 +302,8 @@ impl Editor {
     pub(super) fn sketch_toolbar(&mut self, ui: &mut egui::Ui) {
         let ready = self.sketch_ui.session.is_some()
             && self.sketch_ui.drag.is_none()
-            && self.sketch_ui.dimension.is_none();
+            && self.sketch_ui.dimension.is_none()
+            && self.sketch_ui.task.is_none();
         ui.add_enabled_ui(ready, |ui| {
             for (label, tool) in [
                 ("Select", Tool::Select),
@@ -309,6 +328,7 @@ impl Editor {
                         self.sketch_ui.selected_constraint = None;
                     }
                     self.sketch_ui.external = false;
+                    self.sketch_ui.split = false;
                     self.sketch_ui.tool = tool;
                     self.sketch_ui.trim = false;
                     self.sketch_ui.clear_points();
@@ -330,6 +350,7 @@ impl Editor {
                         self.viewport.clear_sketch_selection();
                         self.sketch_ui.selected_constraint = None;
                         self.sketch_ui.external = false;
+                        self.sketch_ui.split = false;
                         self.sketch_ui.trim = false;
                         self.sketch_ui.tool = tool;
                         self.sketch_ui.clear_points();
@@ -369,6 +390,7 @@ impl Editor {
                         .selectable_label(self.sketch_ui.external, "Project edge or vertex")
                         .clicked()
                     {
+                        self.sketch_ui.split = false;
                         self.sketch_ui.external = !self.sketch_ui.external;
                         self.sketch_ui.tool = Tool::Select;
                         self.sketch_ui.trim = false;
@@ -393,6 +415,7 @@ impl Editor {
             );
             if ui.selectable_label(self.sketch_ui.trim, "Trim").clicked() {
                 self.sketch_ui.external = false;
+                self.sketch_ui.split = false;
                 self.sketch_ui.trim = !self.sketch_ui.trim;
                 self.sketch_ui.tool = Tool::Select;
                 self.sketch_ui.clear_points();
@@ -403,6 +426,7 @@ impl Editor {
             {
                 self.toggle_construction();
             }
+            self.sketch_task_toolbar(ui);
             self.constraint_toolbar(ui);
             if ui.button("Finish").clicked() {
                 self.finish_sketch(true);
@@ -636,6 +660,20 @@ impl Editor {
         };
         let pos = ui.input(|i| i.pointer.interact_pos());
         let alt = ui.input(|i| i.modifiers.alt);
+        if self.sketch_ui.task.is_some() {
+            return;
+        }
+        if self.sketch_ui.split {
+            if response.clicked()
+                && !self.busy
+                && let Some(pos) = pos
+                && let Some(hit) = self.viewport.sketch_hit(pos).filter(|h| h.index >= 0)
+                && let Some(point) = self.viewport.sketch_point(pos)
+            {
+                self.split_sketch_curve(hit, point);
+            }
+            return;
+        }
         if self.sketch_ui.external {
             if response.clicked() && !self.busy {
                 self.project_external_selection();
@@ -773,6 +811,10 @@ impl Editor {
         }
     }
     pub(super) fn sketch_escape(&mut self) {
+        if self.sketch_ui.task.is_some() {
+            self.finish_sketch_task(false);
+            return;
+        }
         if self.sketch_ui.dimension.is_some() {
             return;
         }
@@ -783,10 +825,15 @@ impl Editor {
         self.sketch_ui.clear_points();
         self.sketch_ui.tool = Tool::Select;
         self.sketch_ui.external = false;
+        self.sketch_ui.split = false;
         self.sketch_ui.trim = false;
         self.sketch_ui.box_start = None;
     }
     pub(super) fn sketch_pump(&mut self, ctx: &egui::Context) {
+        self.sketch_task_pump(ctx);
+        if self.sketch_ui.task.is_some() {
+            return;
+        }
         if !self.busy
             && let Some(drag) = &self.sketch_ui.drag
         {
@@ -885,6 +932,7 @@ impl Editor {
                         self.sketch_ui.selected_constraint = None;
                     }
                     self.sketch_ui.external = false;
+                    self.sketch_ui.split = false;
                     self.sketch_ui.tool = tool;
                     self.sketch_ui.trim = false;
                 }

@@ -22,6 +22,7 @@ fn dimensional(kind: &str) -> bool {
         "Radius",
         "Diameter",
         "Angle",
+        "Weight",
     ]
     .contains(&kind)
 }
@@ -37,6 +38,9 @@ fn number(value: f64) -> String {
 }
 
 fn dimension_value(kind: &str, value: f64) -> String {
+    if kind == "Weight" {
+        return number(value);
+    }
     if kind == "Angle" {
         format!("{} deg", number(value.to_degrees()))
     } else {
@@ -45,6 +49,9 @@ fn dimension_value(kind: &str, value: f64) -> String {
 }
 
 fn dimension_input(kind: &str, value: f64) -> String {
+    if kind == "Weight" {
+        return value.to_string();
+    }
     if kind == "Angle" {
         format!("{} deg", value.to_degrees())
     } else {
@@ -54,6 +61,9 @@ fn dimension_input(kind: &str, value: f64) -> String {
 
 fn dimension_datum(kind: &str, value: &str) -> String {
     let value = value.trim();
+    if kind == "Weight" {
+        return value.into();
+    }
     if value.parse::<f64>().is_ok_and(f64::is_finite) {
         format!("{value} {}", if kind == "Angle" { "deg" } else { "mm" })
     } else {
@@ -145,6 +155,7 @@ impl Editor {
             && self.sketch.is_some()
             && self.sketch_ui.session.is_some()
             && self.sketch_ui.drag.is_none()
+            && self.sketch_ui.task.is_none()
     }
 
     fn prepare_constraint_tool(&mut self) {
@@ -192,6 +203,13 @@ impl Editor {
                 .unwrap_or_default()
         };
         let mut selection = self.viewport.sketch_selection.clone();
+        if selection.len() == 1
+            && selection[0].point == 0
+            && self.begin_pole_weight(selection[0].index)
+        {
+            return;
+        }
+
         let kind = if selection.len() == 1
             && selection[0].point == 0
             && ["circle", "arc"].contains(&geometry_kind(selection[0]))
@@ -215,6 +233,12 @@ impl Editor {
     }
 
     pub(super) fn new_dimension(&mut self, kind: &str) {
+        if matches!(kind, "Radius" | "Diameter")
+            && self.viewport.sketch_selection.len() == 1
+            && self.begin_pole_weight(self.viewport.sketch_selection[0].index)
+        {
+            return;
+        }
         self.begin_dimension(kind, self.viewport.sketch_selection.clone());
     }
 
@@ -364,6 +388,10 @@ impl Editor {
     }
 
     pub(super) fn sketch_panel(&mut self, ctx: &egui::Context) {
+        if self.sketch_ui.task.is_some() {
+            self.sketch_task_panel(ctx);
+            return;
+        }
         let Some(snapshot) = self.sketch_snapshot() else {
             return;
         };
@@ -628,6 +656,10 @@ mod tests {
         assert_eq!(dimension_datum("Distance", "12"), "12 mm");
         assert_eq!(dimension_datum("Angle", "45"), "45 deg");
         assert_eq!(dimension_datum("Distance", "0.5 in"), "0.5 in");
+        assert!(dimensional("Weight"));
+        assert_eq!(dimension_value("Weight", 0.75), "0.75");
+        assert_eq!(dimension_input("Weight", 0.123456789), "0.123456789");
+        assert_eq!(dimension_datum("Weight", " 2.5 "), "2.5");
     }
 
     #[test]

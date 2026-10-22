@@ -1,5 +1,5 @@
 //! Native geometry exchange uses the same guarded worker and authoritative document.
-use super::{Editor, objects};
+use super::{Editor, file_browser::Purpose, objects};
 use eframe::egui;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -120,12 +120,38 @@ impl Editor {
                     .to_string_lossy()
                     .into_owned();
             }
+        } else {
+            let path = if self.exchange_ui.path.is_empty() {
+                self.path.clone()
+            } else {
+                self.exchange_ui.path.clone()
+            };
+            self.browse_file(Purpose::Import, &path);
+        }
+    }
+    pub(super) fn exchange_browser_result(&mut self, purpose: Purpose, path: Option<PathBuf>) {
+        if purpose == Purpose::Import {
+            if let Some(path) = path {
+                self.exchange_ui.path = path.to_string_lossy().into_owned();
+                self.submit_exchange();
+            } else {
+                self.exchange_ui.cancel();
+            }
+        } else if purpose == Purpose::Export
+            && let Some(path) = path
+        {
+            self.exchange_ui.path = path.to_string_lossy().into_owned();
+            // The picker result grants a path, not native export replacement.
+            self.exchange_ui.overwrite = false;
         }
     }
     pub(super) fn exchange_dialog(&mut self, ctx: &egui::Context) {
         let Some(mode) = self.exchange_ui.mode else {
             return;
         };
+        if self.file_browser.active() || mode == Mode::Import {
+            return;
+        }
         let exporting = mode == Mode::Export;
         let choices: Vec<_> = objects(&self.state)
             .iter()
@@ -139,12 +165,16 @@ impl Editor {
             .collect();
         let mut execute = false;
         let mut cancel = false;
+        let mut browse = false;
         egui::Modal::new(egui::Id::new("exchange_dialog")).show(ctx,|ui| {
             ui.heading(if exporting {"Export geometry"} else {"Import geometry"});
             ui.label("STEP / IGES path");
-            if ui.add(egui::TextEdit::singleline(&mut self.exchange_ui.path).desired_width(420.)).changed() {
-                self.exchange_ui.overwrite=false;
-            }
+            ui.horizontal(|ui| {
+                if ui.add(egui::TextEdit::singleline(&mut self.exchange_ui.path).desired_width(360.)).changed() {
+                    self.exchange_ui.overwrite=false;
+                }
+                browse=ui.button("Browse...").clicked();
+            });
             if exporting {
                 ui.label("Native objects").on_hover_text("Selected root objects retain native local placement. Select an enclosing Part to retain its assembly hierarchy and placement.");
                 egui::ScrollArea::vertical().max_height(200.).show(ui,|ui| {
@@ -158,7 +188,8 @@ impl Editor {
                     }
                 });
                 if Path::new(&self.exchange_ui.path).exists() {
-                    ui.checkbox(&mut self.exchange_ui.overwrite,"Replace existing file");
+                    ui.checkbox(&mut self.exchange_ui.overwrite,"Replace existing file when exporting")
+                        .on_hover_text("Browsing chooses a destination. This option permits the native export to replace it.");
                 }
             }
             let ready=!self.busy && supported_path(&self.exchange_ui.path) && (!exporting ||
@@ -171,21 +202,30 @@ impl Editor {
         if cancel {
             self.exchange_ui.mode = None;
         }
+        if browse {
+            let path = self.exchange_ui.path.clone();
+            self.browse_file(Purpose::Export, &path);
+        }
         if execute {
-            self.exchange_ui.mode = None;
-            self.exchange_ui.pending = Some(mode);
-            if exporting {
-                self.send("export_exchange",json!({"path":self.exchange_ui.path,"objects":self.exchange_ui.selected,"overwrite":self.exchange_ui.overwrite}));
-            } else {
-                self.transaction(
-                    "Import STEP/IGES",
-                    vec![json!({"op":"import_exchange","path":self.exchange_ui.path})],
-                );
-            }
-            if !self.busy {
-                self.exchange_ui.pending = None;
-                self.exchange_ui.mode = Some(mode);
-            }
+            self.submit_exchange();
+        }
+    }
+    fn submit_exchange(&mut self) {
+        let Some(mode) = self.exchange_ui.mode.take() else {
+            return;
+        };
+        self.exchange_ui.pending = Some(mode);
+        if mode == Mode::Export {
+            self.send("export_exchange",json!({"path":self.exchange_ui.path,"objects":self.exchange_ui.selected,"overwrite":self.exchange_ui.overwrite}));
+        } else {
+            self.transaction(
+                "Import STEP/IGES",
+                vec![json!({"op":"import_exchange","path":self.exchange_ui.path})],
+            );
+        }
+        if !self.busy {
+            self.exchange_ui.pending = None;
+            self.exchange_ui.mode = Some(mode);
         }
     }
     pub(super) fn exchange_reply(&mut self, op: &str, accepted: bool) {

@@ -57,7 +57,18 @@ Shift-click adds or removes selections. Drag a blank area for a selection box;
 a right-to-left box also selects crossing curves. Shift adds a box to the current
 selection. Drag endpoints, centers or curve handles to edit through native
 Sketcher. Delete removes selected geometry; Trim uses the native picked-segment
-operation. Ctrl+Z and Ctrl+Shift+Z walk accepted actions within a sketch. Finish
+operation. Edit tools adds native sketch fillet/chamfer, split, line/arc extension,
+Carbon Copy and B-spline degree, knot, pole and weight tasks. Select an internal
+curve or corner first; Split curve uses the picked position. Task Apply accepts
+one sketch action and Cancel restores its baseline. Carbon Copy keeps native
+dimension expressions linked to its source sketch. Spline weight changes require
+explicitly releasing any conflicting Equal constraints on the native pole circle.
+Degree reduction can replace geometry and remove its old constraints; inspect the
+new solved snapshot afterward. Pixel GUI checks and independent native reopen
+checks cover fillet/chamfer, split/extension, Carbon Copy and spline degree, knot,
+pole and weight tasks, including invalid-weight recovery and Cancel/Redo. These
+cases do not establish every operation or selection combination.
+Ctrl+Z and Ctrl+Shift+Z walk accepted actions within a sketch. Finish
 recomputes the whole model and commits one document undo step; Cancel restores
 the sketch session baseline. An invalid consumed profile remains in edit after
 Finish fails, so it can be repaired, undone or canceled.
@@ -85,7 +96,15 @@ View provides seven standard directions, shaded/edge/wireframe display, native
 face/edge/vertex filters and Show/Hide. The tree includes references and guarded
 leaf deletion. Native planes and axes use bounded presentation graphics, preserving
 their actual native identities for attachment and selection.
-Ctrl+S saves the document; Ctrl+Shift+S opens the FCStd Save as dialog.
+Open, Save as, Import and Export use a modal file browser with folder navigation,
+format filters and destination replacement confirmation. Native documents use
+FCStd; geometry exchange uses STEP/IGES. Canceling the browser starts no native
+operation. Pixel GUI checks cover filtered picking, folder navigation, native
+Save as, cancellation, unsaved-change protection and STEP/IGES exchange browsing.
+Native Save as uses the browser's replacement confirmation. Export retains a
+separate explicit replacement checkbox because the browser returns a path without
+an overwrite-authorization flag.
+Ctrl+S saves the document; Ctrl+Shift+S opens the FCStd Save as browser.
 Ctrl+Z and Ctrl+Shift+Z use native Undo/Redo.
 The editor asks before discarding unsaved changes. Native calls and display
 extraction run on a model thread; camera/input do not wait for recomputation.
@@ -108,10 +127,10 @@ use selected native profiles, subelements and Body origin references.
 
 These forms extend functional access; they do not establish complete native task
 dialog or feature coverage. [UI-COVERAGE.md](UI-COVERAGE.md) records the missing
-workflows, including remaining sketch tools, external geometry, history editing,
-assemblies, exchange and executable extensions. Multi-Body and advanced feature
-GUI acceptance remain separate from native workflow fixtures. General documents
-and moderate-part resource behavior need broader gates.
+workflows, including remaining sketch tools and external-reference workflows,
+history editing, assemblies, broader exchange and executable extensions. Each
+advanced feature's GUI acceptance remains separate from native workflow fixtures.
+General documents and moderate-part resource behavior need broader gates.
 The [verification record](VERIFICATION.md) separates real GUI checks, independent
 native saved-file checks and remaining work.
 
@@ -237,6 +256,8 @@ spline poles, select the curve and use Curves > Expose internal geometry, then
 edit the native construction lines or circle centers. Spline clicks collect
 poles; Enter creates the curve. External projects native edges/vertices and can
 mark them defining or intersecting. MultiTransform edits its native ordered
-child steps in the parent task. Import/Export supports native STEP/IGES; selected
-root export uses native local placement. These additions are under workflow
+child steps in the parent task. Pixel GUI checks cover creation, cancellation,
+child edits, reordering/removal, Undo/Redo and editing after reopen, with independent
+native checks of saved geometry and links. Import/Export supports native STEP/IGES;
+selected root export uses native local placement. These additions are under workflow
 verification; [UI-COVERAGE.md](UI-COVERAGE.md) records remaining functionality.
