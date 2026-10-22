@@ -12,6 +12,17 @@ pub(super) struct BodyUi {
     pending: Option<String>,
 }
 
+impl BodyUi {
+    fn activate_tree_body(&mut self, state: &Value, name: &str) {
+        if objects(state)
+            .iter()
+            .any(|object| object["name"] == name && object["type"] == "PartDesign::Body")
+        {
+            self.active = Some(name.to_owned());
+        }
+    }
+}
+
 fn bodies(state: &Value) -> Vec<Value> {
     objects(state)
         .iter()
@@ -426,6 +437,7 @@ impl Editor {
     }
     fn tree_selectable(&self) -> bool {
         !self.busy
+            && self.sketch_creation.is_none()
             && self.sketch_ui.session.is_none()
             && self.sketch_ui.drag.is_none()
             && self.sketch_ui.dimension.is_none()
@@ -444,11 +456,7 @@ impl Editor {
             self.sketch = None;
             self.viewport.set_sketch(None);
             self.sketch_ui.clear_points();
-            if let Some(selected) = &self.selected_object
-                && let Some(body) = body_of(&self.state, selected)
-            {
-                self.body_ui.active = Some(body);
-            }
+            self.body_ui.activate_tree_body(&self.state, name);
         }
     }
     pub(super) fn body_tree(&mut self, ctx: &egui::Context) {
@@ -659,6 +667,26 @@ impl Editor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn foreign_profile_selection_keeps_target_until_a_body_is_explicitly_selected() {
+        let state = json!({"objects":[
+            {"name":"Target", "type":"PartDesign::Body"},
+            {"name":"Source", "type":"PartDesign::Body"},
+            {"name":"ForeignSketch", "type":"Sketcher::SketchObject", "body":"Source"}
+        ]});
+        let mut model = BodyUi {
+            active: Some("Target".into()),
+            ..BodyUi::default()
+        };
+        select_tree_name(&mut model.selected, "ForeignSketch", false);
+        model.activate_tree_body(&state, "ForeignSketch");
+        assert_eq!(model.active.as_deref(), Some("Target"));
+        select_tree_name(&mut model.selected, "Source", true);
+        model.activate_tree_body(&state, "Source");
+        assert_eq!(model.active.as_deref(), Some("Source"));
+        assert_eq!(model.selected, ["ForeignSketch", "Source"]);
+    }
 
     #[test]
     fn native_tree_selection_preserves_click_order_and_toggles_independent_objects() {

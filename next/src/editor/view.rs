@@ -13,6 +13,7 @@ impl Editor {
         let mut visibility = None;
         let mutable = !self.busy
             && self.draft.is_none()
+            && self.sketch_creation.is_none()
             && self.sketch_ui.session.is_none()
             && self.sketch_ui.drag.is_none()
             && self.sketch_ui.dimension.is_none()

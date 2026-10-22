@@ -55,6 +55,33 @@ pub fn writable(schema: &Value, property: &str) -> bool {
 /// Only changed values are written. Native computed/default properties never
 /// round-trip through the UI, and clearing an expression precedes its new value.
 pub fn build(parameters: &Value) -> Result<Vec<Value>, String> {
+    if let Some(choice) = parameters.get("reference_choice") {
+        let request = &choice["request"];
+        let source = request["source"]
+            .as_str()
+            .ok_or("Choose a source profile")?;
+        if parameters["properties"]["Profile"]["link"] != source
+            || parameters["body"] != request["body"]
+            || !parameters["type"]
+                .as_str()
+                .and_then(crate::feature_commands::get)
+                .is_some_and(|definition| definition.preferred_properties.contains(&"Profile"))
+        {
+            return Err("Profile reference choice does not match this native feature task".into());
+        }
+        let mut edits = crate::profile_reference_commands::build(&choice["state"], request)?;
+        let profile = crate::profile_reference_commands::result_profile(request)?;
+        // Keep the task's original source stable across replacement previews.
+        // Substitute only in this compiled candidate, never in the UI baseline.
+        let mut candidate = parameters.clone();
+        candidate
+            .as_object_mut()
+            .unwrap()
+            .remove("reference_choice");
+        candidate["properties"]["Profile"] = profile;
+        edits.extend(build(&candidate)?);
+        return Ok(edits);
+    }
     if parameters["transformations"].is_array() {
         return crate::transform_commands::build(parameters);
     }
@@ -216,6 +243,42 @@ pub fn selected_links(selections: &[(String, String)], subelements: bool) -> Val
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reference_choices_compose_before_profile_assignment_and_preserve_task_source_and_tip() {
+        let state = json!({"objects":[
+            {"name":"Target","type":"PartDesign::Body","body_state":{"tip":"Later"}},
+            {"name":"Source","type":"Sketcher::SketchObject","body":"Other","valid":true,"sketch":{},"shape":{"null":false}}
+        ]});
+        for mode in ["independent", "dependent", "cross_reference"] {
+            let parameters = json!({"name":"Pad","type":"PartDesign::Pad","body":"Target",
+                "create":false,"tip":"Later","tip_visibility":false,
+                "properties":{"Profile":{"link":"Source"},"Length":"4 mm"},
+                "reference_choice":{"state":state,"request":{
+                    "source":"Source","body":"Target","name":"Copy","mode":mode}}});
+            let edits = build(&parameters).unwrap();
+            let profile = if mode == "cross_reference" {
+                "Source"
+            } else {
+                "Copy"
+            };
+            if mode != "cross_reference" {
+                assert_eq!(edits[0]["op"], "reference_copy");
+                assert_eq!(edits[0]["mode"], mode);
+            }
+            assert!(
+                edits.iter().any(|edit| edit["property"] == "Profile"
+                    && edit["value"] == json!({"link":profile}))
+            );
+            assert_eq!(edits[edits.len() - 2]["value"], json!({"link":"Later"}));
+            assert_eq!(edits.last().unwrap()["value"], false);
+            assert_eq!(parameters["properties"]["Profile"]["link"], "Source");
+            for field in ["body", "source"] {
+                let mut invalid = parameters.clone();
+                invalid["reference_choice"]["request"][field] = json!("Mismatch");
+                assert!(build(&invalid).is_err());
+            }
+        }
+    }
     #[test]
     fn expression_clear_precedes_value_and_links_precede_expression() {
         let edits = build(&json!({"name":"Pad","create":false,"properties":{

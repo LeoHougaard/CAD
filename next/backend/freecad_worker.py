@@ -23,6 +23,8 @@ import PartDesign  # Register the native feature classes in headless mode.
 import sketch_geometry as SketchGeometry
 import sketch_operations as SketchOperations
 import feature_history as FeatureHistory
+import profile_references as ProfileReferences
+import expression_links as ExpressionLinks
 import exchange as Exchange
 
 
@@ -36,6 +38,7 @@ EDIT_OPERATIONS = ["add_object", "set", "expression", "geometry", "constraint",
                    "expose_internal", "external_geometry", "external_state", "delete_external", "import_exchange"]
 EDIT_OPERATIONS += list(SketchOperations.OPERATIONS)
 EDIT_OPERATIONS += list(FeatureHistory.OPERATIONS)
+EDIT_OPERATIONS += list(ProfileReferences.OPERATIONS)
 OBJECT_TYPES = {
     "App::Part", "Part::Feature", "PartDesign::Body", "Sketcher::SketchObject",
     "PartDesign::Pad", "PartDesign::Pocket", "PartDesign::Fillet",
@@ -524,6 +527,11 @@ def set_boolean_tools(feature, tools):
 
 def apply_edit(doc, edit):
     op = edit.get("op", edit.get("kind"))
+    if op in ProfileReferences.OPERATIONS:
+        try:
+            return ProfileReferences.apply(doc, edit)
+        except ProfileReferences.ReferenceError as error:
+            fail(error.code, str(error))
     if op in FeatureHistory.OPERATIONS:
         if doc.Name in _sketch_sessions or doc.Name in _previews:
             fail("history_busy", "Body history edits require a committed transaction outside sketch editing and previews")
@@ -543,6 +551,9 @@ def apply_edit(doc, edit):
             fail(error.code, str(error))
     if op == "add_object":
         type_id, key = edit["type"], name(edit["name"])
+        if "origin_plane" in edit and (type_id != "Sketcher::SketchObject" or not edit.get("body")
+                or edit["origin_plane"] not in ("XY_Plane", "XZ_Plane", "YZ_Plane")):
+            fail("invalid_request", "Origin-plane attachment requires a Body-owned sketch and native plane role")
         if type_id not in OBJECT_TYPES:
             fail("unsupported_object_type", "Unsupported native object type: " + str(type_id))
         if doc.getObject(key):
@@ -561,6 +572,13 @@ def apply_edit(doc, edit):
             obj = doc.addObject(type_id, key)
         if obj.Name != key:
             fail("invalid_request", "FreeCAD changed the requested object name")
+        if "origin_plane" in edit:
+            planes = [feature for feature in body.Origin.OriginFeatures if feature is not None
+                      and feature.isDerivedFrom("App::Plane") and feature.Role == edit["origin_plane"]]
+            if len(planes) != 1:
+                fail("invalid_request", "Body origin must contain exactly one plane with the requested native role")
+            obj.AttachmentSupport = [(planes[0], [""])]
+            obj.MapMode = "FlatFace"
         return {"object": obj.Name}
     obj = object_in(doc, edit["object"])
     if op == "binder_support":
@@ -1100,14 +1118,18 @@ def dispatch(request):
             return sketch_history(doc, op)
         if getattr(doc, "UndoCount" if op == "undo" else "RedoCount") == 0:
             fail("nothing_to_" + op, "No native transaction to " + op)
+        names_before = {obj.Name for obj in doc.Objects}
         getattr(doc, op)()
         try:
+            ExpressionLinks.repair_new(doc, names_before)
             doc.recompute()
             validate(doc)
             state = prepare_state(doc)
         except Exception:
             try:
+                names_before = {obj.Name for obj in doc.Objects}
                 getattr(doc, "redo" if op == "undo" else "undo")()
+                ExpressionLinks.repair_new(doc, names_before)
                 doc.recompute()
                 validate(doc)
             except Exception:

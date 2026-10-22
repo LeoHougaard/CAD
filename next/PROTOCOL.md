@@ -442,3 +442,66 @@ atomically published. Existing output requires explicit replacement; an output
 created by another writer also blocks publication. Export does not mutate the
 native document or mark it dirty. Original FCStd and imported files remain
 unchanged unless that exact destination is explicitly selected for replacement.
+
+
+## Native sketch creation supports
+
+`cad-next-packages --native-sketch-create JSON` (or `-` for stdin) compiles
+`{state,request}` using the editor's same Rust builder. Request fields are
+`name`, `body`, `create_body` and `support`. An origin support is
+`{"kind":"origin","role":"XY_Plane"}`; XZ_Plane and YZ_Plane are also valid.
+Reference support supplies `kind:"reference"`, `object`, one `subelements` entry
+and `mode:"FlatFace"` for a native plane/face or `mode:"ObjectXY"` for a whole
+Sketch frame. Whole native supports use the empty subname. Supports must belong
+to the target Body. A Body face reference resolves to its current native Tip to
+avoid a dependency on the whole Body being extended. Native FlatFace attachment
+owns planarity rejection and the complete transaction rolls back on failure.
+
+The optional `origin_plane` field on `add_object` is limited to Body-owned
+Sketcher::SketchObject creation. After native Body creation it resolves the
+actual `Body.Origin.OriginFeatures` plane by Role and assigns AttachmentSupport
+plus FlatFace. This allows a new Body, its origin and Sketch to share one native
+transaction without guessing generated names. Submit compiled edits with the
+current expected_revision. Compilation and chooser cancellation do not mutate
+the document. Attached MapReversed and AttachmentOffset remain ordinary native
+properties, with native expression units and frame semantics.
+
+
+## Native profile reference choices
+
+`cad-next-packages --native-reference JSON` (or `-` for stdin) compiles
+`{state,request}` against the same captured native state as the editor. Request
+fields are `source`, target `body`, optional copy `name`, and `mode`:
+`independent`, `dependent` or `cross_reference`. Independent/dependent modes
+return a `reference_copy` edit; a cross-reference needs no copy and the feature
+links its original source. Compilation changes no native document.
+
+`reference_copy` fields are `source`, `name`, `body` and `mode`, limited to
+`independent` or `dependent`. It is an ordinary guarded edit, sharing the caller's
+transaction or preview lease. Independent requires a native Sketch and copies
+eligible native properties through native serialization, retaining internal
+constraints, construction/control metadata, expressions and their comments.
+It removes external geometry and its persistent cache from the copy only,
+leaves attachment deactivated, and verifies the solved profile is unchanged.
+Explicit expression links to other document objects are retained. Unsupported
+properties or a changed solved profile reject the complete batch atomically.
+Defining/intersection materialization is not yet supported by this operation.
+Dependent creates a native ShapeBinder with whole-object Support and native
+TraceSupport defaults. Copy placement follows pinned native local-frame behavior;
+there is no client world-placement compensation.
+
+The native property compiler accepts optional
+`reference_choice:{state,request}` alongside feature parameters. It verifies the
+source and target match Profile/body, prefixes copy edits, substitutes only the
+compiled candidate's Profile and preserves the original task source. All preview
+replacements compile against that captured baseline, never a temporary candidate
+copy. Existing direct foreign links remain unchanged unless explicitly edited.
+The compiler retains the normal final Body Tip and visibility behavior.
+
+Pinned native Undo/Redo can restore an object's expression values without their
+live dependency edges. After ordinary document Undo/Redo, the adapter rebinds
+expressions only on newly restored object names through native setters, including
+native comments. Existing objects are not rewritten and no extra transaction is
+created. The compensating history path uses the same repair before recomputation.
+This fixes the verified restoration cases; it does not replace native history or
+claim a general Rust expression engine.

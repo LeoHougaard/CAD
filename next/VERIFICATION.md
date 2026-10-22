@@ -399,7 +399,7 @@ no overwrite-authorization flag, so export keeps this separate explicit choice.
 Earlier GUI exchange checks above used the previous path dialog.
 
 After browser interaction, the maximized debug editor with a saved 150 cubic
-millimeter box used 96348 KiB RSS, the Rust host 2708 KiB and the native worker
+millimeter box used 96348 KiB RSS, the runtime launcher 2708 KiB and the native worker
 99388 KiB. All three measured zero CPU during five idle seconds with the browser
 closed and no swap. This is another small-part observation, not a moderate-part
 resource gate or a comparison against a different document/client size.
@@ -457,8 +457,113 @@ preserved. These cases complement the matched Body/Tip alias checks above;
 they do not establish every history or edge-selection combination.
 
 With the history task and browser closed, the saved two-box/Part Chamfer GUI
-case used 97136 KiB RSS for the debug Rust editor, 2700 KiB for its Rust host
+case used 97136 KiB RSS for the debug Rust editor, 2700 KiB for its runtime launcher
 and 121108 KiB for the native worker. All measured zero CPU and swap during
 five idle seconds. This small-part observation uses a different model from the
 earlier browser baseline and does not establish a performance comparison.
 The final Pixel native rerun also passed the canonical expression-path cases.
+
+
+## Native sketch supports and foreign profiles
+
+`sketch_creation_workflows.py` uses the same Rust sketch-creation compiler as the
+editor. Windows and Pixel Linux checks pass for all three origin roles despite colliding object
+names, atomic new Body creation, Undo/Redo, moved Bodies, same-Body datum planes,
+existing sketch frames and native planar-face attachment. Saved solids reopen
+and remain editable; linked parent changes update attached sketches and Pads.
+Foreign supports, axes, malformed origin payloads and curved faces reject without
+silently creating an unbound XY sketch. A failed new-Body batch restores the
+previous native document.
+
+`profile_reference_workflows.py` uses the production native property compiler and
+preview lease. Fourteen workflows on Windows and Pixel Linux cover Independent/Dependent copies and
+Cross-reference, both creating a Pad and editing a consumed profile before a
+later feature. Independent fixtures include local and explicit cross-object
+expressions, attachment, external geometry, shifted constraint indices, nondefault
+native properties, an exposed rational spline and moved Bodies. Checks cover
+preview replacement, Cancel, Apply, atomic failure, Undo/Redo, parent/copy edits,
+final Tip/visibility and native save/reopen. Separate native inspection verifies
+expression comments, constraints, spline metadata and external-cache cleanup.
+Source snapshots and original fixture hashes remain unchanged.
+
+Six additional expression-history cases cover a native Sketch, a native Part Box
+and an independent copy, each restored by Redo creation or Undo deletion. After
+native expression rebinding, parent edits propagate without a file reopen.
+Comments and native history counts are preserved, including a second pending
+Redo. Seven malformed reference requests, stale revisions, failed copy batches
+and preview ownership guards also pass. These are bounded restoration checks;
+native history and the expression engine remain native components.
+
+The independent-copy adapter deliberately avoids three pinned task-copy defects:
+source external-constraint pruning, copied external-cache resurrection and stale
+copied expression dependencies. It uses native serialization/setters and checks
+the resulting solved geometry. Unsupported independent defining/intersection
+materialization and custom dynamic properties reject atomically. Their broader
+coverage remains open. Native fixtures complement the separate real GUI gates;
+they do not establish complete reference-task or FreeCAD parity.
+
+
+Real Pixel interaction verifies chooser Cancel preserves an existing Redo branch,
+then creates, draws and extrudes native XZ and YZ sketches. Independent native
+reopening checks actual origin supports, solved constraints and analytical Pad
+volumes, with saved-file hashes unchanged. A sketch on a datum in a moved and
+rotated Body follows a parent height edit from 10 to 14 mm; its native global
+position is [96, 203, 314] and its solid matches the analytical volume. A GUI
+regression found stale support selection after creation. The corrected build
+selects the new Sketch across tree/object/viewport selection state; Datum to
+Rectangle to Finish to Extrude now seeds the new Profile without manual
+reselection and produces a valid preview and committed solid.
+
+
+The full attachment GUI set contains seven saved outcomes. Existing Sketch
+ObjectXY support retains its local 30-degree rotation combined with its Body's
+90-degree rotation. A moved Body's Base.Face6 supplies native planar support.
+Selecting a cylindrical face reports the native planarity error and retains the
+chooser; explicitly choosing XY recovers, and sketch Cancel leaves only the
+original cylinder with volume 785.3981633974483 cubic millimeters. All four
+immutable fixture hashes remain unchanged.
+
+These GUI checks exposed a browser layout regression with the compact app
+spacing: Save As grew 2 logical pixels per frame, moving its action buttons.
+The browser now uses at least 8 pixels of horizontal spacing only during its own
+render and restores the original application style afterward. The pinned dialog
+subtracts that spacing from the filename field before adding an 8-pixel margin.
+A headless rendering regression covers Open/Save/Import/Export across repeated
+frames and three changing viewport sizes, including stable bounds, viewport
+limits and exact app-spacing restoration. The dialog remains resizable.
+
+All fourteen native workflow suites pass on Windows x64 and Pixel Linux ARM64
+for this batch. The Pixel build verifies every source-manifest hash before
+building. A real Save As interaction confirms stable dialog bounds and action
+buttons across three screenshots after entering a full filename; the Save
+button succeeds by mouse click.
+
+The desktop editor embeds the Rust WorkerSession directly. Its small Linux
+launcher child is part of the native runtime launch chain, not a separate Rust
+CLI host. The earlier browser/history memory labels above have been corrected;
+the separate headless Rust CLI measurements describe a different process setup.
+
+
+Twenty-six saved profile-reference GUI cases pass independent native inspection.
+Real interaction covers all three modes, repeated preview replacement, candidate
+selection rejection, Cancel preserving an existing Redo branch and opening an
+existing foreign Profile without silently copying it. Editing a consumed profile
+preserves the downstream Finish Tip. Switching back to a local Profile removes
+the generated candidate and reference choices, and Cancel restores the baseline.
+
+After creation Undo/Redo, editing an independent copy's width from 10 to 12 mm
+updates its local expression to height 6 mm and Pad volume 360 cubic millimeters;
+the original remains 10 by 5 mm. An explicitly cross-object Master.Length
+expression remains linked: a parent edit produces copied Pad volume 480, parent
+Undo restores 400 and Redo returns 480. Dependent profile edits likewise update
+the downstream solid after history operations. Native expression comments,
+external caches and original fixture hashes remain intact. These checks cover
+bounded workflows, not complete FreeCAD UI parity.
+
+For the saved small two-Body case with forms and browser closed, five idle seconds
+measured 124136 KiB RSS for the debug Rust editor with embedded WorkerSession,
+2968 KiB for the runtime launcher and 115748 KiB for the FreeCAD Python worker.
+Executable paths and command lines establish those process roles. All measured
+zero CPU and swap. This is a small-part observation, not a moderate-complexity
+performance gate or a release-build speed comparison. The owned Pixel test app
+was closed cleanly; other running apps and original documents were preserved.

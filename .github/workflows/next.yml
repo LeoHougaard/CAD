@@ -67,6 +67,8 @@ jobs:
           python next/tests/sketch_editor_workflows.py --host "$host" --runtime next/target/runtime.json --output next/target/sketch-editor-documents
           python next/tests/body_workflows.py --host "$host" --compiler "$compiler" --runtime next/target/runtime.json --output next/target/body-documents
           python next/tests/history_workflows.py --host "$host" --compiler "$compiler" --runtime next/target/runtime.json --output next/target/history-documents
+          python next/tests/sketch_creation_workflows.py --host "$host" --compiler "$compiler" --runtime next/target/runtime.json --output next/target/sketch-creation-documents
+          python next/tests/profile_reference_workflows.py --host "$host" --compiler "$compiler" --runtime next/target/runtime.json --output next/target/profile-reference-documents
           python next/tests/feature_workflows.py --host "$host" --compiler "$compiler" --runtime next/target/runtime.json --output next/target/feature-documents
           python next/tests/sketch_curves_workflows.py --host "$host" --compiler "$sketch_compiler" --runtime next/target/runtime.json --output next/target/sketch-curve-documents
           python next/tests/sketch_operations_workflows.py --host "$host" --compiler "$sketch_compiler" --runtime next/target/runtime.json --output next/target/sketch-operation-documents

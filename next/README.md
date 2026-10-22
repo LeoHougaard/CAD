@@ -38,9 +38,15 @@ next/target/debug/cad-next-editor --runtime next/target/runtime.json
 Use `.exe` on Windows. `--open part.FCStd` opens an existing native document.
 Run this as a separate application; it does not replace `dist/CAD.exe`.
 
-Create a sketch on the base plane or select a planar solid face before Sketch
-for native face support. Point, Line, Polyline, Rectangle, Circle and three-point
-Arc draw native geometry. Drawing leaves position and size free for dimensions
+Choose Sketch, then XY, XZ or YZ for native Body-origin attachment. Canceling
+the chooser makes no document writes and preserves Redo. A selected same-Body
+datum plane, existing sketch frame or planar solid face supplies native support
+directly. Origin roles are resolved by the native Body; generated plane names
+are never guessed. Attached reverse/offset values remain available through native
+properties. The standalone Sketcher orientation dialog and broader attachment
+choices remain open coverage.
+
+Point, Line, Polyline, Rectangle, Circle and three-point Arc draw native geometry. Drawing leaves position and size free for dimensions
 and constraints. Endpoints, centers, the origin and curves provide snapping;
 lines infer horizontal/vertical constraints. Hold Alt to disable snapping and
 inference. Construction or G toggles construction geometry.
@@ -81,6 +87,17 @@ Apply commits one undo step; Cancel or Escape restores the baseline. An invalid
 value cannot be applied. When native redo history exists, feature recomputation
 is deferred until Apply so Cancel preserves redo. See
 [preview ownership and native limits](PROTOCOL.md).
+
+Selecting a Body makes it the active modeling target; selecting a feature keeps
+that target. A profile sketch outside the target Body offers Independent copy,
+Dependent copy and Cross-reference. Independent creates a native sketch with its
+internal constraints and expressions, removes external geometry and attachment,
+and leaves the source unchanged. Intentional expression links to other objects
+remain live. Dependent creates a native ShapeBinder; Cross-reference links the
+original sketch directly. All three choices share the feature preview and one
+Apply transaction. Cancel restores the baseline. Unsupported independent copies
+fail atomically; defining/intersection geometry and custom dynamic properties
+still need broader support. Choose Dependent or Cross-reference when appropriate.
 
 The multi-Body code now provides New body, active Body selection, all visible
 unconsumed native Body tips, face/edge multiselection and history grouped by Body.

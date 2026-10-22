@@ -98,6 +98,14 @@ redo. Native dependency failures abort atomically. Native suppression has a
 separate unresolved placement persistence defect and is not promoted as a
 complete workflow.
 
+Sketch creation now resolves native Body-origin roles and same-Body datum,
+sketch-frame or face supports through the shared Rust compiler. Foreign Sketch
+profiles offer native Independent/Dependent copy and direct Cross-reference in
+the feature preview transaction. Their tested cases retain source documents,
+constraints, expressions, history and downstream Tip ownership; complete reference
+and attachment coverage remains open. Native Undo/Redo expression rebinding is
+limited to newly restored objects and retains native transaction ownership.
+
 See [tested workflows and remaining gates](VERIFICATION.md). Full FreeCAD
 functionality is not yet exposed by the Rust UI. The Rust feature catalog now
 exposes typed native forms for revolutions, lofts, sweeps, holes, dress-ups,

@@ -44,6 +44,8 @@ enum Mode {
     Seed(Value),
     Properties(Value),
     History(Value),
+    Reference(Value),
+    SketchCreate(Value),
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -69,7 +71,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 package_options = true;
                 parameters = serde_json::from_str(&args.next().ok_or("Missing parameters")?)?
             }
-            "--feature-catalog" | "--feature-seed" | "--native-properties" | "--native-history" => {
+            "--feature-catalog"
+            | "--feature-seed"
+            | "--native-properties"
+            | "--native-history"
+            | "--native-reference"
+            | "--native-sketch-create" => {
                 if mode.is_some() {
                     return Err("Choose one feature compiler mode".into());
                 }
@@ -83,6 +90,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         args.next()
                             .ok_or("--native-history requires JSON or - for stdin")?,
                     )?),
+                    "--native-reference" => Mode::Reference(read_json(
+                        args.next()
+                            .ok_or("--native-reference requires JSON or - for stdin")?,
+                    )?),
+                    "--native-sketch-create" => Mode::SketchCreate(read_json(
+                        args.next()
+                            .ok_or("--native-sketch-create requires JSON or - for stdin")?,
+                    )?),
                     _ => Mode::Properties(read_json(
                         args.next()
                             .ok_or("--native-properties requires JSON or - for stdin")?,
@@ -91,7 +106,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             "--help" | "-h" => {
                 println!(
-                    "cad-next-packages [--package-dir DIR] [--id ID --parameters JSON]\nLists local packages, or builds native edits for the chosen package.\n--feature-catalog lists native feature definitions.\n--feature-seed JSON suggests native properties from {{type,state,name,body?,selected_object?,selections?}}.\n--native-properties JSON builds the same native property edits as the editor.\n--native-history JSON builds Body Tip/reorder edits from {{state,request}}.\nUse - instead of JSON to read a request from stdin. These commands do not mutate documents."
+                    "cad-next-packages [--package-dir DIR] [--id ID --parameters JSON]\nLists local packages, or builds native edits for the chosen package.\n--feature-catalog lists native feature definitions.\n--feature-seed JSON suggests native properties from {{type,state,name,body?,selected_object?,selections?}}.\n--native-properties JSON builds the same native property edits as the editor.\n--native-history JSON builds Body Tip/reorder edits from {{state,request}}.\n--native-reference JSON builds profile reference edits from {{state,request}}.\n--native-sketch-create JSON builds native sketch attachment edits from {{state,request}}.\nUse - instead of JSON to read a request from stdin. These commands do not mutate documents."
                 );
                 return Ok(());
             }
@@ -106,6 +121,20 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             Mode::History(request) => {
                 let request: HistoryRequest = serde_json::from_value(request)?;
                 serde_json::to_value(cad_next::history_commands::build(
+                    &request.state,
+                    &request.request,
+                )?)?
+            }
+            Mode::Reference(request) => {
+                let request: HistoryRequest = serde_json::from_value(request)?;
+                serde_json::to_value(cad_next::profile_reference_commands::build(
+                    &request.state,
+                    &request.request,
+                )?)?
+            }
+            Mode::SketchCreate(request) => {
+                let request: HistoryRequest = serde_json::from_value(request)?;
+                serde_json::to_value(cad_next::sketch_creation_commands::build(
                     &request.state,
                     &request.request,
                 )?)?

@@ -15,6 +15,7 @@ pub(super) struct PropertyUi {
     filter: String,
     advanced: bool,
     buffers: BTreeMap<String, String>,
+    reference: super::profile_references::ProfileReferenceUi,
 }
 
 impl Editor {
@@ -40,12 +41,16 @@ impl Editor {
                 .iter()
                 .find(|o| o["name"] == draft.parameters["name"])
         {
+            let reference_profile = draft.parameters.get("reference_choice").is_some();
             if let Some(changes) = draft.parameters["properties"].as_object_mut() {
                 // Native options can lock dependent fields or normalize their
                 // values. Replay the accepted state, not stale form inputs.
                 changes.retain(|property, value| {
                     if !property_commands::writable(object, property) {
                         return false;
+                    }
+                    if reference_profile && property == "Profile" {
+                        return true;
                     }
                     if let Some(native) = object["properties"].get(property) {
                         *value = native.clone();
@@ -113,15 +118,11 @@ impl Editor {
             .cloned()
             .or(self.sketch.clone())
             .or(self.selected_object.clone());
-        let mut body = selections
-            .first()
-            .and_then(|(n, _)| crate::body_commands::body_of(&self.state, n))
-            .or_else(|| {
-                selected
-                    .as_deref()
-                    .and_then(|n| crate::body_commands::body_of(&self.state, n))
-            })
-            .or_else(|| self.body());
+        let mut body = self.body().or_else(|| {
+            selections
+                .first()
+                .and_then(|(n, _)| crate::body_commands::body_of(&self.state, n))
+        });
         if !definition.type_id.starts_with("PartDesign::") {
             body = None;
         }
@@ -138,14 +139,28 @@ impl Editor {
             selected_object: selected.as_deref(),
             selections: &selections,
         };
-        let properties = match feature_commands::defaults(definition, &self.state, &context) {
+        let mut properties = match feature_commands::defaults(definition, &self.state, &context) {
             Ok(p) => p,
             Err(error) => {
                 self.error = Some(error);
                 return;
             }
         };
+        if definition.preferred_properties.contains(&"Profile")
+            && let Some(source) = selected.as_deref().and_then(|name| {
+                objects(&self.state).iter().find(|object| {
+                    object["name"] == name && object["type"] == "Sketcher::SketchObject"
+                })
+            })
+        {
+            properties.insert("Profile".into(), json!({"link":source["name"]}));
+        }
+        let reference_name = self.unique("Reference");
         self.property_ui = PropertyUi {
+            reference: super::profile_references::ProfileReferenceUi::new(
+                &self.state,
+                reference_name,
+            ),
             loading: true,
             ..PropertyUi::default()
         };
@@ -161,6 +176,12 @@ impl Editor {
             deferred: self.state["redo_count"].as_u64().unwrap_or(0) > 0,
             committing: false,
         });
+        if let Some(draft) = &mut self.draft {
+            let profile = draft.parameters["properties"]["Profile"].clone();
+            self.property_ui
+                .reference
+                .prepare(&mut draft.parameters, &profile);
+        }
         self.sketch = None;
         self.viewport.set_sketch(None);
         self.transform_ui = super::transforms::TransformUi::default();
@@ -202,7 +223,12 @@ impl Editor {
             .and_then(|tip| objects(&self.state).iter().find(|o| o["name"] == tip))
             .map(|o| o["properties"]["Visibility"].clone())
             .unwrap_or(Value::Null);
+        let reference_name = self.unique("Reference");
         self.property_ui = PropertyUi {
+            reference: super::profile_references::ProfileReferenceUi::new(
+                &self.state,
+                reference_name,
+            ),
             schema: object.clone(),
             ..PropertyUi::default()
         };
@@ -353,6 +379,21 @@ impl Editor {
                                         );
                                         value_changed = value != before;
                                     } else {
+                                        let link_objects = if property == "Profile" {
+                                            self.property_ui.reference.objects()
+                                        } else {
+                                            native_objects
+                                        };
+                                        let profile_selection;
+                                        let link_selection = if property == "Profile" {
+                                            profile_selection = self
+                                                .property_ui
+                                                .reference
+                                                .selections(&object_name, &selected);
+                                            &profile_selection
+                                        } else {
+                                            &selected
+                                        };
                                         value_changed = property_widget(
                                             ui,
                                             &property,
@@ -360,9 +401,9 @@ impl Editor {
                                             metadata,
                                             &mut value,
                                             &mut self.property_ui.buffers,
-                                            native_objects,
+                                            link_objects,
                                             &object_name,
-                                            &selected,
+                                            link_selection,
                                         );
                                     }
                                 });
@@ -395,6 +436,18 @@ impl Editor {
                                     expression = json!(text);
                                     expression_changed = true;
                                 }
+                            }
+                            if property == "Profile"
+                                && definition.is_some_and(|definition| {
+                                    definition.preferred_properties.contains(&"Profile")
+                                })
+                            {
+                                changed |= self.property_ui.reference.show(
+                                    ui,
+                                    &mut draft.parameters,
+                                    &value,
+                                    value_changed,
+                                );
                             }
                             ui.separator();
                         });

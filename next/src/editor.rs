@@ -6,8 +6,10 @@ mod drawing;
 mod exchange;
 mod file_browser;
 mod history;
+mod profile_references;
 mod properties;
 mod sketch;
+mod sketch_creation;
 mod sketch_tools;
 #[cfg(test)]
 mod tests;
@@ -260,6 +262,7 @@ pub struct Editor {
     sketch: Option<String>,
     selected_object: Option<String>,
     sketch_ui: SketchUi,
+    sketch_creation: Option<sketch_creation::SketchCreation>,
     body_ui: BodyUi,
     property_ui: properties::PropertyUi,
     transform_ui: transforms::TransformUi,
@@ -311,6 +314,7 @@ impl Editor {
             sketch: None,
             selected_object: None,
             sketch_ui: SketchUi::default(),
+            sketch_creation: None,
             body_ui: BodyUi::default(),
             property_ui: properties::PropertyUi::default(),
             transform_ui: transforms::TransformUi::default(),
@@ -499,6 +503,7 @@ impl Editor {
             self.exchange_reply(&reply.op, success);
             self.sync_bodies(&reply.op, success);
             self.sync_sketch();
+            self.sketch_creation_reply(&reply.op, success);
             self.sketch_reply(&reply.op, success);
             if matches!(reply.op.as_str(), "undo" | "redo" | "new" | "open") {
                 self.sketch_ui.clear_points();
@@ -513,30 +518,6 @@ impl Editor {
                 self.viewport.fit();
             }
         }
-    }
-    fn new_sketch(&mut self) {
-        let name = self.unique("Sketch");
-        let mut edits = Vec::new();
-        let body = self.body().unwrap_or_else(|| {
-            edits.push(json!({"op":"add_object","type":"PartDesign::Body","name":"Body"}));
-            self.body_ui.active = Some("Body".into());
-            "Body".into()
-        });
-        edits.push(
-            json!({"op":"add_object","type":"Sketcher::SketchObject","name":name,"body":body}),
-        );
-        if let Some(selection) = &self.viewport.selected
-            && selection.subelement.starts_with("Face")
-        {
-            edits.push(json!({"op":"set","object":name,"property":"AttachmentSupport","value":{"link":selection.object,"subelements":[selection.subelement]}}));
-            edits.push(json!({"op":"set","object":name,"property":"MapMode","value":"FlatFace"}));
-        }
-        self.prepare_new_sketch();
-        self.selected_object = Some(name.clone());
-        self.sketch = Some(name);
-        self.sketch_ui.tool = Draw::Select;
-        self.sketch_ui.clear_points();
-        self.transaction("Create sketch", edits);
     }
     fn start_feature(&mut self, id: &str) {
         self.start_native_feature(match id {
@@ -743,6 +724,7 @@ impl Editor {
                     && self.sketch_ui.dimension.is_none()
                     && !self.busy
                     && self.draft.is_none()
+                    && self.sketch_creation.is_none()
                     && self.pending_file.is_none()
                     && self.file_dialog.is_none()
                     && !self.overwrite
@@ -799,6 +781,7 @@ impl Editor {
                         && self.sketch_ui.dimension.is_none()
                         && self.sketch_ui.task.is_none()
                         && self.draft.is_none()
+                        && self.sketch_creation.is_none()
                         && self.pending_file.is_none()
                         && self.file_dialog.is_none()
                         && !self.exchange_ui.active()
@@ -1058,6 +1041,7 @@ impl eframe::App for Editor {
         if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close {
             if self.busy
                 || self.draft.is_some()
+                || self.sketch_creation.is_some()
                 || self.sketch_ui.session.is_some()
                 || self.exchange_ui.active()
                 || self.file_browser.active()
@@ -1083,6 +1067,8 @@ impl eframe::App for Editor {
                 self.overwrite = false;
             } else if self.pending_file.is_some() {
                 self.pending_file = None;
+            } else if self.sketch_creation.is_some() && !self.busy {
+                self.sketch_creation = None;
             } else if self.draft.is_some() && !self.busy {
                 self.finish_preview(false);
             } else {
@@ -1120,6 +1106,7 @@ impl eframe::App for Editor {
         if !self.exchange_ui.active() && !self.file_browser.active() {
             self.panels(ctx);
         }
+        self.sketch_creation_dialog(ctx);
         self.exchange_dialog(ctx);
         self.file_browser_ui(ctx);
         self.sketch_pump(ctx);
@@ -1127,6 +1114,7 @@ impl eframe::App for Editor {
         // disable application shortcuts, and modals must block document writes.
         if !self.busy
             && self.draft.is_none()
+            && self.sketch_creation.is_none()
             && self.pending_file.is_none()
             && self.file_dialog.is_none()
             && !self.overwrite

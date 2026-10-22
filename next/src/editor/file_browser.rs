@@ -130,7 +130,13 @@ impl FileBrowser {
     fn update(&mut self, ctx: &egui::Context) -> Option<(Purpose, Option<PathBuf>)> {
         let (purpose, dialog) = self.active.as_mut()?;
         dialog.config_mut().max_size = Some(ctx.content_rect().size() - egui::vec2(24., 24.));
+        // Pinned dialog 0.12 subtracts item spacing from its filename width,
+        // then adds an 8px TextEdit margin. Smaller spacing grows the window
+        // every frame. Keep its layout at least 8px without changing app style.
+        let style = ctx.style();
+        ctx.style_mut(|style| style.spacing.item_spacing.x = style.spacing.item_spacing.x.max(8.));
         dialog.update(ctx);
+        ctx.set_style(style);
         let purpose = *purpose;
         if let Some(path) = dialog.take_picked() {
             self.cancel();
@@ -203,6 +209,66 @@ impl Editor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn browser_bounds_remain_stable_across_frames_and_viewport_sizes() {
+        for purpose in [
+            Purpose::Save,
+            Purpose::Export,
+            Purpose::Open,
+            Purpose::Import,
+        ] {
+            let ctx = egui::Context::default();
+            ctx.style_mut(|style| style.spacing.item_spacing = egui::vec2(6., 6.));
+            let mut browser = FileBrowser::default();
+            browser.begin(
+                purpose,
+                &std::env::current_dir()
+                    .unwrap()
+                    .join("BrowserRegression.FCStd"),
+            );
+            let id = browser.active.as_ref().unwrap().1.get_window_id();
+            for size in [
+                egui::vec2(1280., 900.),
+                egui::vec2(1080., 2157.),
+                egui::vec2(720., 600.),
+            ] {
+                let mut bounds = Vec::new();
+                for _ in 0..12 {
+                    let _ = ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                            ..Default::default()
+                        },
+                        |ctx| {
+                            egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
+                                ui.label("CAD");
+                            });
+                            egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
+                                ui.label("Ready");
+                            });
+                            egui::CentralPanel::default().show(ctx, |ui| {
+                                ui.label("Viewport");
+                            });
+                            browser.update(ctx);
+                        },
+                    );
+                    assert_eq!(ctx.style().spacing.item_spacing, egui::vec2(6., 6.));
+                    bounds.push(ctx.memory(|memory| memory.area_rect(id).unwrap()));
+                }
+                assert!(
+                    bounds[2..]
+                        .iter()
+                        .all(|rect| (rect.size() - bounds[2].size()).length() < 1.
+                            && (rect.min - bounds[2].min).length() < 1.
+                            && rect.min.x >= 0.
+                            && rect.min.y >= 0.
+                            && rect.max.x <= size.x + 1.
+                            && rect.max.y <= size.y + 1.),
+                    "{purpose:?} {size:?}: {bounds:?}"
+                );
+            }
+        }
+    }
     #[test]
     fn browser_formats_do_not_route_legacy_or_unrelated_files_to_native_document_open() {
         for purpose in [Purpose::Open, Purpose::Save] {

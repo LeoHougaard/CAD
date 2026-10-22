@@ -61,6 +61,7 @@ impl Editor {
             && self.state["document"].is_string()
             && self.sketch_ui.session.is_none()
             && self.draft.is_none()
+            && self.sketch_creation.is_none()
             && self.file_dialog.is_none()
             && !self.overwrite
             && self.pending_file.is_none()
