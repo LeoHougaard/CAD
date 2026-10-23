@@ -26,6 +26,12 @@ Windows application. The [migration gates](MIGRATION.md) describe the remaining
 work toward a complete Part Studio. The [component inventory](COMPONENTS.md)
 records what is Rust, what remains native and what each replacement must prove.
 
+The [Part Studio and Assembly checklist](COVERAGE.md) records 306 scoped Onshape
+help topics and 1,378 open requirements. Its implementation evidence is pinned
+to `15703c5`; later verified changes are recorded in [VERIFICATION.md](VERIFICATION.md).
+The checklist records remaining work and acceptance gates. It does not establish
+full feature coverage or Rust modeling parity.
+
 ## Run the editor
 
 Build the optional desktop target and use the same pinned runtime configuration:
