@@ -19,7 +19,7 @@ def main():
     args=p.parse_args();out=args.output.resolve();out.mkdir(parents=True,exist_ok=True)
     runtime=json.loads(args.runtime.read_text(encoding='utf-8-sig'))
     helper=Path(__file__).with_name('extrusion_termination_workflows.py').resolve()
-    def native(*arguments):subprocess.run([runtime['executable'],str(helper),*map(str,arguments)],check=True)
+    def native(*arguments):subprocess.run([runtime['executable'],*runtime['args'],str(helper),*map(str,arguments)],check=True)
     native('--native-fixtures',out/'inputs')
     fixtures=json.loads((out/'inputs/fixtures.json').read_text())
     def compile(request,flag='--native-properties'):

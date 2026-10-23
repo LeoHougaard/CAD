@@ -16,7 +16,7 @@ def main():
     for flag in ['host','compiler','runtime','output']:p.add_argument('--'+flag,type=Path,required=True)
     args=p.parse_args();out=args.output.resolve();out.mkdir(parents=True,exist_ok=True)
     runtime=json.loads(args.runtime.read_text(encoding='utf-8-sig'))
-    subprocess.run([runtime['executable'],str(Path(__file__).with_name('extrusion_termination_workflows.py').resolve()),'--native-fixtures',str(out/'inputs')],check=True)
+    subprocess.run([runtime['executable'],*runtime['args'],str(Path(__file__).with_name('extrusion_termination_workflows.py').resolve()),'--native-fixtures',str(out/'inputs')],check=True)
     fixtures=json.loads((out/'inputs/fixtures.json').read_text())
     def compiled(request,mode='--native-properties'):
         r=subprocess.run([str(args.compiler.resolve()),mode,'-'],input=json.dumps(request),capture_output=True,text=True,check=True)

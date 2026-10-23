@@ -176,7 +176,7 @@ def main():
     out=args.output.resolve();out.mkdir(parents=True,exist_ok=True)
     runtime=json.loads(args.runtime.read_text(encoding='utf-8-sig'))
     def native(*extra):
-        subprocess.run([runtime['executable'],str(Path(__file__).resolve()),*map(str,extra)],check=True)
+        subprocess.run([runtime['executable'],*runtime['args'],str(Path(__file__).resolve()),*map(str,extra)],check=True)
     def compile(parameters,flag='--native-properties'):
         p=subprocess.run([str(args.compiler.resolve()),flag,'-'],input=json.dumps(parameters),capture_output=True,text=True,check=True)
         return json.loads(p.stdout)
