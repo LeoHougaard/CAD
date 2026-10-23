@@ -262,9 +262,11 @@ impl Editor {
         if !success && op == "sketch_finish" {
             self.sketch_ui.after_finish = None;
         }
-        if op == "undo" && success && self.sketch_ui.cleanup {
+        if op == "undo" && self.sketch_ui.cleanup {
             self.sketch_ui.cleanup = false;
-            self.dirty = self.sketch_ui.dirty_before;
+            if success {
+                self.dirty = self.sketch_ui.dirty_before;
+            }
         }
     }
     pub(super) fn feature_from_sketch(&mut self, id: &str) {
@@ -936,3 +938,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod lifecycle_tests;

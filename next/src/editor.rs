@@ -8,6 +8,7 @@ mod file_browser;
 mod history;
 mod profile_references;
 mod properties;
+mod recovery;
 mod sketch;
 mod sketch_creation;
 mod sketch_tools;
@@ -111,7 +112,9 @@ fn model_thread(
         let mut error = None;
         match result {
             Ok(result) => {
-                if result.get("state").is_some() {
+                if job.op == "close" {
+                    current = Value::Null;
+                } else if result.get("state").is_some() {
                     current = result["state"].clone();
                 } else if result.get("objects").is_some() && result.get("document").is_some() {
                     current = result;
@@ -250,6 +253,7 @@ enum FileAction {
     New,
     Open,
     Close,
+    Recover,
 }
 
 pub struct Editor {
@@ -455,13 +459,13 @@ impl Editor {
             if success {
                 match reply.op.as_str() {
                     "transaction" | "preview_commit" | "undo" | "redo" => self.dirty = true,
-                    "new" | "open" => {
+                    "new" | "open" | "close" => {
                         self.dirty = false;
-                        self.sketch = None;
-                        self.selected_object = None;
+                        self.reset_document_interaction();
                         self.viewport.fit();
-                        if reply.op == "new" {
+                        if reply.op != "open" {
                             self.path.clear();
+                            self.file_input.clear();
                         } else if !self.file_input.is_empty() {
                             self.path = self.file_input.clone();
                         }
@@ -707,6 +711,11 @@ impl Editor {
             FileAction::Close => {
                 self.allow_close = true;
             }
+            FileAction::Recover => {
+                if self.unavailable() {
+                    self.send("close", json!({}));
+                }
+            }
         }
     }
 
@@ -723,6 +732,7 @@ impl Editor {
                     && self.sketch_ui.drag.is_none()
                     && self.sketch_ui.dimension.is_none()
                     && !self.busy
+                    && !self.unavailable()
                     && self.draft.is_none()
                     && self.sketch_creation.is_none()
                     && self.pending_file.is_none()
@@ -777,6 +787,7 @@ impl Editor {
             ui.horizontal_wrapped(|ui| {
                 ui.add_enabled_ui(
                     !self.busy
+                        && !self.unavailable()
                         && self.sketch_ui.drag.is_none()
                         && self.sketch_ui.dimension.is_none()
                         && self.sketch_ui.task.is_none()
@@ -990,26 +1001,6 @@ impl Editor {
                 self.finish_preview(false);
             }
         }
-        if let Some(action) = self.pending_file {
-            egui::Modal::new(egui::Id::new("unsaved")).show(ctx, |ui| {
-                ui.label("Discard unsaved changes to this document?");
-                ui.horizontal(|ui| {
-                    if ui
-                        .add_enabled(
-                            !self.busy && self.draft.is_none(),
-                            egui::Button::new("Discard"),
-                        )
-                        .clicked()
-                    {
-                        self.pending_file = None;
-                        self.file_action(action);
-                    }
-                    if ui.button("Cancel").clicked() {
-                        self.pending_file = None;
-                    }
-                });
-            });
-        }
     }
 
     fn canvas(&mut self, ui: &mut egui::Ui) {
@@ -1028,7 +1019,9 @@ impl Editor {
             self.body_ui.selected.clear();
             self.selected_object = Some(selection.object.clone());
         }
-        self.sketch_canvas(ui);
+        if !self.unavailable() {
+            self.sketch_canvas(ui);
+        }
     }
 }
 
@@ -1039,7 +1032,10 @@ impl eframe::App for Editor {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll();
         if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close {
-            if self.busy
+            if self.unavailable() && !self.busy {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.pending_file = Some(FileAction::Recover);
+            } else if self.busy
                 || self.draft.is_some()
                 || self.sketch_creation.is_some()
                 || self.sketch_ui.session.is_some()
@@ -1057,7 +1053,9 @@ impl eframe::App for Editor {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
         if ctx.input(|i| i.key_pressed(Key::Escape)) {
-            if self.file_browser.active() {
+            if self.unavailable() {
+                self.pending_file = None;
+            } else if self.file_browser.active() {
                 self.cancel_file_browser();
             } else if self.exchange_ui.active() {
                 self.exchange_ui.cancel();
@@ -1077,6 +1075,9 @@ impl eframe::App for Editor {
         }
         self.toolbar(ctx);
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
+            if self.unavailable() {
+                ui.horizontal(|ui| self.recovery_controls(ui));
+            }
             if self.sketch_ui.session.is_some()
                 && let Some(hint) = self.sketch_ui.hint()
             {
@@ -1103,16 +1104,20 @@ impl eframe::App for Editor {
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(Color32::from_rgb(5, 7, 9)))
             .show(ctx, |ui| self.canvas(ui));
-        if !self.exchange_ui.active() && !self.file_browser.active() {
-            self.panels(ctx);
+        if !self.unavailable() {
+            if !self.exchange_ui.active() && !self.file_browser.active() {
+                self.panels(ctx);
+            }
+            self.sketch_creation_dialog(ctx);
+            self.exchange_dialog(ctx);
+            self.file_browser_ui(ctx);
+            self.sketch_pump(ctx);
         }
-        self.sketch_creation_dialog(ctx);
-        self.exchange_dialog(ctx);
-        self.file_browser_ui(ctx);
-        self.sketch_pump(ctx);
+        self.file_action_dialog(ctx);
         // Text editors consume their own Undo first. Button focus must not
         // disable application shortcuts, and modals must block document writes.
         if !self.busy
+            && !self.unavailable()
             && self.draft.is_none()
             && self.sketch_creation.is_none()
             && self.pending_file.is_none()
@@ -1147,6 +1152,7 @@ impl eframe::App for Editor {
             }
         }
         if !self.busy
+            && !self.unavailable()
             && let Some(changed) = self.draft.as_ref().and_then(|d| d.changed)
         {
             if changed.elapsed() >= Duration::from_millis(150) {

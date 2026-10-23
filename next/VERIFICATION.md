@@ -927,3 +927,59 @@ Warm startup medians are 693.87 and 687.36 ms. All memory/startup/operation late
 gates pass and all six five-second idle samples measure zero CPU. These samples
 establish a bounded regression result, not viewport or input-to-frame speed,
 moderate complex-part performance, cold startup or real GUI acceptance.
+
+## Editor recovery challenge checks
+
+Fresh independent checks of the integrated editor found three recovery defects.
+Rejected ordinary dimension edits discarded their dialog and entered text. A
+failed new-sketch cleanup could carry stale dirty-state restoration into another
+document. An unavailable native preview could retain its operation owner while
+blocking all ordinary ways to close the document.
+
+Dimension edits now keep the entered value and expression mode after rejection,
+refocus for correction, and close only after an accepted transaction. Pending
+submissions block duplicate Apply and Cancel. Native row checks prevent retries
+against a replaced constraint. Nineteen focused actual-Editor tests and four
+independent probes passed, including the exact regression that fails on the
+unchanged baseline. A fresh native run matched all eleven selected states.
+
+Sketch cleanup releases its pending state after either accepted or rejected
+cleanup Undo. Successful New/Open clears document interaction state. Unavailable
+documents have an explicit Close/discard confirmation that retains the current
+document until native Close succeeds. Cancel preserves state and ownership;
+failed Close permits retry. Saved files never change automatically.
+
+Nine explicit native Editor tests cover dirty-state protection, document
+replacement, failed Open, poisoned feature/sketch/dimension/task owners and
+Close retry. Independent review caught a false-positive test helper that clicked
+a disabled toolbar Cancel instead of the confirmation. The corrected helper
+targets the actual modal and asserts dismissal. Independent instrumentation
+passed all nine tests plus a window-close probe, proving twelve modal Cancel
+dismissals with unchanged state, ownership and request counts. These remain
+headless egui events; physical desktop delivery is a separate gate.
+
+The extrusion comparison oracle also needed a correction. Empty whole-object
+subelement tuples are normalized only for native LinkSubList properties. Twelve
+native assignment boundaries and eight shape comparisons pass, while the old
+oracle fails the whole-object Pad/Pocket controls. Portable launcher tests now
+cover six boundaries and preserve opaque runtime arguments before the script.
+GNU env probes reject the old ordering and accept the corrected ordering.
+
+An additional composed native workflow checks a 24-hole Pad, face-attached Pocket
+with a parent expression, fillet, transformed second Body, Boolean union, parent
+edit, Undo/Redo, rejected edits and saved-file reopen/edit. Independent native
+readback verifies both saved results. Changing the Pad height breaks this
+fixture's fillet reference in pinned FreeCAD itself. The adapter rejects that
+whole edit and restores the valid document; this is an explicit native limit.
+
+These checks cover the implemented workflows and failure recovery. They do not
+close the Part Studio/Assembly checklist or establish a Rust geometry kernel.
+FreeCAD, Open CASCADE and the Python adapter remain the modeling engine.
+
+The combined Windows source passes formatting, all-target Clippy with warnings
+denied, 194 active Rust tests, the desktop/bin build, callback and runtime-prefix
+tests, the new dimension/whole-object suites, all 70 extrusion comparisons and
+24 rejected-preview recoveries, and all eleven explicitly enabled native Editor
+tests. CI now runs 31 native workflow suites and those eleven Editor tests on
+Windows and Linux. Real desktop checks and their saved-file evidence are tracked
+separately; headless results alone do not establish desktop acceptance.

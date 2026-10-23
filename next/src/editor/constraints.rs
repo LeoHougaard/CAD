@@ -12,6 +12,8 @@ pub(super) struct DimensionEdit {
     pub(super) value: String,
     pub(super) expression: bool,
     focus: bool,
+    submitting: bool,
+    constraint: Option<Value>,
     preview: Option<DimensionPreview>,
 }
 
@@ -381,6 +383,8 @@ impl Editor {
                         value: String::new(),
                         expression: false,
                         focus: true,
+                        submitting: false,
+                        constraint: None,
                         preview: Some(DimensionPreview {
                             baseline: snapshot,
                             previous_constraint,
@@ -420,6 +424,8 @@ impl Editor {
                     value: dimension_input(kind, value),
                     expression: false,
                     focus: true,
+                    submitting: false,
+                    constraint: None,
                     preview: None,
                 });
                 self.error = None;
@@ -460,6 +466,8 @@ impl Editor {
             value,
             expression: formula.is_some(),
             focus: true,
+            submitting: false,
+            constraint: Some(constraint.clone()),
             preview: None,
         });
         self.error = None;
@@ -475,6 +483,13 @@ impl Editor {
         let Some(mut edit) = self.sketch_ui.dimension.take() else {
             return;
         };
+        if op == "transaction" && edit.submitting {
+            if success {
+                return;
+            }
+            edit.submitting = false;
+            edit.focus = true;
+        }
         if let Some(preview) = &mut edit.preview {
             self.refresh_dimension_selection(preview);
         }
@@ -674,7 +689,17 @@ impl Editor {
         let Some(mut edit) = self.sketch_ui.dimension.take() else {
             return;
         };
+        let target_valid = edit.constraint.as_ref().is_none_or(|previous| {
+            edit.index
+                .and_then(|index| native_constraint(snapshot, index))
+                .is_some_and(|current| same_constraint(previous, current))
+        });
+        if !target_valid && self.sketch_ui.selected_constraint == edit.index {
+            self.sketch_ui.selected_constraint = None;
+            self.sketch_ui.constraint_name.clear();
+        }
         let can_edit = self.constraint_editable()
+            && !edit.submitting
             && edit
                 .preview
                 .as_ref()
@@ -746,7 +771,9 @@ impl Editor {
                     });
                 });
             });
-        cancel |= !self.busy && ctx.input(|input| input.key_pressed(egui::Key::Escape));
+        cancel |= !self.busy
+            && !edit.submitting
+            && ctx.input(|input| input.key_pressed(egui::Key::Escape));
         if cancel {
             if let Some(preview) = &mut edit.preview
                 && !self.state["preview"].is_null()
@@ -800,6 +827,11 @@ impl Editor {
             if value.is_empty() {
                 self.error = Some("Enter a dimension value or expression".into());
             } else {
+                if !target_valid {
+                    self.error = Some("This dimension changed. Cancel and select it again".into());
+                    self.sketch_ui.dimension = Some(edit);
+                    return;
+                }
                 let edits = if let Some(index) = edit.index {
                     datum_edits(
                         snapshot,
@@ -821,7 +853,15 @@ impl Editor {
                 };
                 match edits {
                     Ok(edits) => {
+                        edit.submitting = true;
+                        self.sketch_ui.dimension = Some(edit);
                         self.transaction("Set sketch dimension", edits);
+                        if !self.busy
+                            && let Some(edit) = &mut self.sketch_ui.dimension
+                        {
+                            edit.submitting = false;
+                            edit.focus = true;
+                        }
                         return;
                     }
                     Err(error) => self.error = Some(error),
@@ -848,6 +888,8 @@ mod tests {
             value: String::new(),
             expression: false,
             focus: true,
+            submitting: false,
+            constraint: None,
             preview: Some(DimensionPreview {
                 baseline: json!({}),
                 previous_constraint: None,

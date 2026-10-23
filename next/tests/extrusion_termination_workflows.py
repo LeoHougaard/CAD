@@ -96,7 +96,14 @@ def native_reference(baseline, request_path, output):
                 parent.addGeometry(Part.Circle(A.Vector(*edit['center']),A.Vector(0,0,1),edit['radius']),False)
         # Native task setters permit editor-read-only properties until recompute.
         for prop,value in request['properties'].items():
-            setattr(obj,prop,A.Vector(*value) if prop == 'Direction' else decode(value))
+            value=A.Vector(*value) if prop == 'Direction' else decode(value)
+            if obj.getTypeIdOfProperty(prop) in {
+                    'App::PropertyLinkSubList', 'App::PropertyLinkSubListChild',
+                    'App::PropertyLinkSubListGlobal', 'App::PropertyXLinkSubList'} and isinstance(value,list):
+                # Native LinkSubList drops (object, []) tuples. Only list
+                # properties use [''] to retain whole-object tuple targets.
+                value=[(item[0],item[1] or ['']) if isinstance(item,tuple) else item for item in value]
+            setattr(obj,prop,value)
         for prop,value in request.get('expressions',{}).items():obj.setExpression(prop,value)
         if not request['create'] and request.get('tip'):
             d.getObject(request['body']).Tip=d.getObject(request['tip'])
