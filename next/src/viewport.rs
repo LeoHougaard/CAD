@@ -396,9 +396,21 @@ impl Viewport {
             }
         }
         self.sketch = sketch;
+        let axis_ids: Vec<_> = self
+            .sketch
+            .as_ref()
+            .into_iter()
+            .flat_map(|s| s["sketch"]["axes"].as_array())
+            .flatten()
+            .filter(|axis| axis["kind"] == "line")
+            .filter_map(|axis| axis["index"].as_i64())
+            .filter(|i| matches!(i, -1 | -2))
+            .collect();
         self.sketch_selection.retain(|element| {
-            if element.index == -1 {
-                return self.sketch.is_some() && element.point == 1;
+            if matches!(element.index, -1 | -2) {
+                return self.sketch.is_some()
+                    && (element.index == -1 && element.point == 1
+                        || element.point == 0 && axis_ids.contains(&i64::from(element.index)));
             }
             if element.index <= -3
                 && external_references

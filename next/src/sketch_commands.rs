@@ -323,6 +323,7 @@ struct Sketch<'a> {
     name: &'a str,
     geometry: &'a [Value],
     externals: &'a [Value],
+    axes: &'a [Value],
     constraints: usize,
 }
 
@@ -344,6 +345,10 @@ impl<'a> Sketch<'a> {
                 .as_array()
                 .map(Vec::as_slice)
                 .unwrap_or_default(),
+            axes: snapshot["sketch"]["axes"]
+                .as_array()
+                .map(Vec::as_slice)
+                .unwrap_or_default(),
             constraints,
         })
     }
@@ -358,6 +363,11 @@ impl<'a> Sketch<'a> {
         self.geometry
             .iter()
             .filter(|geometry| geometry["index"].as_i64().is_some_and(|index| index >= 0))
+            .chain(self.axes.iter().filter(|geometry| {
+                matches!(geometry["index"].as_i64(), Some(-1 | -2))
+                    && geometry["kind"] == "line"
+                    && geometry["handles"].as_array().is_some_and(Vec::is_empty)
+            }))
             .chain(self.externals.iter().filter_map(|wrapper| {
                 // Flattened native cache indices differ from source link indices.
                 // Only the explicitly paired signed solver index is selectable.
@@ -511,8 +521,9 @@ pub fn constrain(
             sketch.point(*element)?;
         }
     }
-    if matches!(kind, "Tangent" | "Perpendicular") && selection.len() == 3 {
-        if value.is_some() {
+    let angle_via_point = kind == "AngleViaPoint" || kind == "Angle" && selection.len() == 3;
+    if matches!(kind, "Tangent" | "Perpendicular") && selection.len() == 3 || angle_via_point {
+        if value.is_some() && !angle_via_point {
             return Err("Via-point tangency and perpendicularity do not take a datum".into());
         }
         let curves: Vec<_> = selection.iter().copied().filter(|e| e.point == 0).collect();
@@ -535,7 +546,8 @@ pub fn constrain(
                             && c["first_pos"].as_i64() == Some(0)
                     })
         };
-        if curves.iter().all(|e| fixed(*e)) {
+        let reference = curves.iter().all(|e| fixed(*e));
+        if reference && !angle_via_point {
             return Err(
                 "Cannot constrain two fixed curves; external and blocked curves are fixed".into(),
             );
@@ -548,6 +560,19 @@ pub fn constrain(
                 .any(|c| c["control_index"].as_i64() == Some(i64::from(e.index)))
         }) {
             return Err("A B-spline weight circle cannot be a via-point curve".into());
+        }
+        if angle_via_point {
+            if value.is_some_and(|value| value.trim().is_empty()) {
+                return Err("Enter an angle with units".into());
+            }
+            // Preparation changes the geometry. Only native Sketcher can measure
+            // the constructor seed and choose its curve order after solving.
+            let mut edit = json!({"op":"via_point","object":sketch.name,"kind":"AngleViaPoint",
+                "args":[curves[0].index,curves[1].index,points[0].index,points[0].point,0.0],"driving":!reference});
+            if let Some(value) = value {
+                edit["value"] = json!(value.trim());
+            }
+            return Ok(vec![edit]);
         }
         return Ok(vec![json!({"op":"via_point","object":sketch.name,
             "kind":format!("{kind}ViaPoint"),"args":[curves[0].index,curves[1].index,points[0].index,points[0].point]})]);
@@ -826,6 +851,30 @@ pub fn constrain(
     let mut edits = vec![constraint(sketch.name, kind, args)];
     if let Some(value) = value {
         edits.push(json!({"op":"datum", "object":sketch.name, "index":sketch.constraints, "value":value.trim()}));
+    }
+    Ok(edits)
+}
+
+/// Compile native datum, formula and reference options at the native-owned index.
+pub fn angle_via_point_edits(
+    snapshot: &Value,
+    selection: &[SketchElement],
+    value: Option<&str>,
+    expression: Option<&str>,
+    driving: Option<bool>,
+) -> Result<Vec<Value>, String> {
+    if value.is_some() && expression.is_some() {
+        return Err("Choose an angle datum or an expression".into());
+    }
+    if expression.is_some_and(|expression| expression.trim().is_empty()) {
+        return Err("Enter a native angle expression".into());
+    }
+    let mut edits = constrain(snapshot, "AngleViaPoint", selection, value)?;
+    if let Some(expression) = expression {
+        edits[0]["expression"] = json!(expression.trim());
+    }
+    if driving == Some(false) {
+        edits[0]["driving"] = json!(false);
     }
     Ok(edits)
 }
@@ -1279,6 +1328,49 @@ mod tests {
         snapshot["sketch"]["spline_controls"] = json!([]);
         assert!(constrain(&snapshot, "Tangent", &[e(0, 0), e(1, 0), e(1, 3)], None).is_err());
         assert!(constrain(&snapshot, "Tangent", &[e(0, 0), e(2, 1), e(1, 1)], None).is_err());
-        assert!(constrain(&snapshot, "Angle", &[e(0, 0), e(1, 0), e(2, 1)], None).is_err());
+        assert!(constrain(&snapshot, "Angle", &[e(0, 0), e(1, 0), e(2, 1)], None).is_ok());
+    }
+
+    #[test]
+    fn angle_via_point_keeps_native_measurement_and_selection_order() {
+        let mut snapshot = advanced_sketch();
+        snapshot["sketch"]["axes"] = json!([
+            {"index":-1,"kind":"line","start":[0,0,0],"end":[1,0,0],"handles":[]},
+            {"index":-2,"kind":"line","start":[0,0,0],"end":[0,1,0],"handles":[]}
+        ]);
+        for selection in [
+            vec![e(-1, 1), e(-2, 0), e(-1, 0)],
+            vec![e(-2, 0), e(-1, 1), e(-1, 0)],
+            vec![e(-2, 0), e(-1, 0), e(-1, 1)],
+        ] {
+            let edit = &constrain(&snapshot, "Angle", &selection, None).unwrap()[0];
+            assert_eq!(edit["args"], json!([-2, -1, -1, 1, 0.0]));
+            assert_eq!(edit["driving"], false);
+        }
+        let selection = [e(-1, 0), e(0, 0), e(-1, 1)];
+        let edits =
+            angle_via_point_edits(&snapshot, &selection, Some("-450 deg"), None, None).unwrap();
+        assert_eq!(edits[0]["value"], "-450 deg");
+        assert_eq!(edits[0]["driving"], true);
+        let edits = angle_via_point_edits(
+            &snapshot,
+            &selection,
+            None,
+            Some("30 deg + 15 deg"),
+            Some(false),
+        )
+        .unwrap();
+        assert_eq!(edits[0]["expression"], "30 deg + 15 deg");
+        assert_eq!(edits[0]["driving"], false);
+        assert!(angle_via_point_edits(&snapshot, &selection, Some("1"), Some("2"), None).is_err());
+        assert!(
+            constrain(
+                &snapshot,
+                "AngleViaPoint",
+                &[e(-1, 0), e(0, 0), e(-2, 1)],
+                None
+            )
+            .is_err()
+        );
     }
 }

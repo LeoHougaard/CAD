@@ -38,6 +38,10 @@ enum Request {
         selection: Vec<SketchElement>,
         #[serde(default)]
         value: Option<String>,
+        #[serde(default)]
+        expression: Option<String>,
+        #[serde(default)]
+        driving: Option<bool>,
     },
 }
 
@@ -74,7 +78,26 @@ fn compile(line: &str) -> Result<Vec<Value>, String> {
             kind,
             selection,
             value,
-        } => constrain(&snapshot, &kind, &selection, value.as_deref()),
+            expression,
+            driving,
+        } => {
+            if expression.is_some() || driving.is_some() {
+                if !matches!(kind.as_str(), "Angle" | "AngleViaPoint") {
+                    return Err(
+                        "Angle creation options require two curves and an exposed point".into(),
+                    );
+                }
+                cad_next::sketch_commands::angle_via_point_edits(
+                    &snapshot,
+                    &selection,
+                    value.as_deref(),
+                    expression.as_deref(),
+                    driving,
+                )
+            } else {
+                constrain(&snapshot, &kind, &selection, value.as_deref())
+            }
+        }
     }
 }
 
@@ -83,6 +106,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if argument == "--help" || argument == "-h" {
             println!(
                 "cad-next-sketch\nCompile one local JSON request per stdin line into native sketch edits.\nDraw: {{\"op\":\"draw\",\"object\":\"Sketch\",\"tool\":\"line\",\"points\":[[0,0,0],[10,0,0]],\"index\":0,\"construction\":false}}\nConstraint: {{\"op\":\"constraint\",\"snapshot\":<native sketch object>,\"kind\":\"Distance\",\"selection\":[{{\"index\":0,\"point\":0}}],\"value\":\"10 mm\"}}\nEdit: {{\"op\":\"edit\",\"snapshot\":<native sketch object>,\"kind\":\"extend\",\"selection\":[{{\"index\":0,\"point\":2}}],\"parameters\":{{\"increment\":\"5 mm\"}}}}\nDraw may include snaps:[null,{{\"index\":0,\"point\":1}},null] paired with the input points.\nOutput: {{\"ok\":true,\"edits\":[...]}} or {{\"ok\":false,\"error\":{{\"code\":\"invalid_sketch_command\",\"message\":\"...\"}}}}\nDatum: {{\"op\":\"datum\",\"snapshot\":<native sketch object>,\"index\":0,\"value\":\"1.5\",\"expression\":false}}. Refraction creation uses kind SnellsLaw and two selected line endpoints in n1, n2 order plus one whole boundary.\nNo document is opened or changed. Submit returned edits with a native revision guard."
+            );
+            println!(
+                "Angle through a point: kind Angle with two whole curves and one exposed point, in any selection order. Optional value or expression strings and driving:false use native datum/formula/reference policy. Native axis curve IDs are -1/-2; the origin point is {{\"index\":-1,\"point\":1}}."
             );
             return Ok(());
         }

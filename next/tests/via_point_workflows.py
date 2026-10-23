@@ -178,7 +178,7 @@ def failures(session,compiler,out,kind):
     session.call('transaction',document=doc,edits=[dict(edit,kind='AngleViaPoint')],expect_error='invalid_request')
     state=session.call('inspect',document=doc);assert same(objects(state)['Sketch']['sketch'],before)
     session.call('close',document=doc)
-    return dict(case=kind+'FailedPreparationAndFixedCurves',passed=True,failed_first_preview_atomic=True,recovery=True,both_fixed_rejected=True,angle_via_point_unavailable=True)
+    return dict(case=kind+'FailedPreparationAndFixedCurves',passed=True,failed_first_preview_atomic=True,recovery=True,both_fixed_rejected=True,malformed_angle_via_point_rejected=True)
 
 
 def consumed(session,compiler,out,kind):

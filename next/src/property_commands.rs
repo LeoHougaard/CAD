@@ -55,6 +55,24 @@ pub fn writable(schema: &Value, property: &str) -> bool {
 /// Only changed values are written. Native computed/default properties never
 /// round-trip through the UI, and clearing an expression precedes its new value.
 pub fn build(parameters: &Value) -> Result<Vec<Value>, String> {
+    if let Some(selection) = parameters.get("extrusion_selection") {
+        if !crate::extrusion_commands::supported(parameters["type"].as_str().unwrap_or_default()) {
+            return Err("Termination selection requires Pad or Pocket".into());
+        }
+        let property = selection["property"]
+            .as_str()
+            .ok_or("Choose a target field")?;
+        let selected: Vec<(String, String)> =
+            serde_json::from_value(selection["selections"].clone()).map_err(|e| e.to_string())?;
+        let value = crate::extrusion_commands::selection(property, &selected)?;
+        let mut candidate = parameters.clone();
+        candidate
+            .as_object_mut()
+            .unwrap()
+            .remove("extrusion_selection");
+        candidate["properties"][property] = value;
+        return build(&candidate);
+    }
     if let Some(choice) = parameters.get("reference_choice") {
         let request = &choice["request"];
         let source = request["source"]
@@ -145,7 +163,21 @@ pub fn build(parameters: &Value) -> Result<Vec<Value>, String> {
             .iter()
             .position(|field| *field == property.as_str())
             .unwrap_or(controllers.len());
-        (!is_reference(value), control)
+        if crate::extrusion_commands::supported(parameters["type"].as_str().unwrap_or_default()) {
+            // Assemble task controllers before targets, then dimensional values.
+            // Do not recompute between them: a mode can require a new target.
+            let rank = match property.as_str() {
+                "SideType" => 0,
+                "Type" => 1,
+                "Type2" => 2,
+                "UseCustomVector" => 3,
+                _ if is_reference(value) => 4,
+                _ => 5,
+            };
+            (rank, 0)
+        } else {
+            (usize::from(!is_reference(value)), control)
+        }
     });
     for (property, value) in fields {
         if property == "Support"

@@ -354,16 +354,19 @@ def refraction(obj, edit):
 
 def via_point(obj, edit):
     kind, args = edit.get("kind"), edit.get("args", [])
-    if kind not in {"TangentViaPoint", "PerpendicularViaPoint"}:
-        raise GeometryError("Via-point creation supports Tangent and Perpendicular only")
+    if kind not in {"TangentViaPoint", "PerpendicularViaPoint", "AngleViaPoint"}:
+        raise GeometryError("Unsupported native via-point constraint")
     validate_constraint(kind, args)
-    first, second, point_index, point_pos = args
+    angle = kind == "AngleViaPoint"
+    if angle and "driving" in edit and type(edit["driving"]) is not bool:
+        raise GeometryError("Angle driving state must be a boolean")
+    first, second, point_index, point_pos = args[:4]
     if first == second:
         raise GeometryError("Select two distinct whole curves and one exposed native point")
     def geometry(index):
         if 0 <= index < obj.GeometryCount:
             return obj.Geometry[index]
-        if index <= -3 and -index <= len(obj.ExternalGeo):
+        if index <= -1 and -index <= len(obj.ExternalGeo):
             return obj.ExternalGeo[-index - 1]
         raise GeometryError("Via-point geometry is outside the current native list")
     curves = {index: geometry(index) for index in (first, second)}
@@ -375,7 +378,8 @@ def via_point(obj, edit):
             raise GeometryError("A B-spline weight circle cannot be a via-point curve")
     def fixed(index):
         return index < 0 or any(c.Type == "Block" and c.First == index and c.FirstPos == 0 for c in obj.Constraints)
-    if fixed(first) and fixed(second):
+    reference = fixed(first) and fixed(second)
+    if reference and not angle:
         raise GeometryError("Cannot constrain two fixed curves; external and blocked curves are fixed")
     if (point_index, point_pos) != (-1, 1):
         point_geometry = geometry(point_index)
@@ -397,6 +401,14 @@ def via_point(obj, edit):
             # but assess diagnostics after the native spline substitution.
             obj.solve()
             prepared.append(added)
+    if angle:
+        point = obj.getPoint(point_index, point_pos)
+        measured = finite(obj.calculateAngleViaPoint(first, second, point.x, point.y))
+        # Match pinned CommandConstraints.cpp, including native angular tolerance
+        # and the GUI command's eight-significant-digit constructor argument.
+        if measured < -Part.Precision.angular():
+            first, second, measured = second, first, -measured
+        args = [first, second, point_index, point_pos, float(format(measured, ".8g"))]
     index = obj.addConstraint(Sketcher.Constraint(kind, *args))
     if index < 0:
         raise GeometryError("Native Sketcher rejected " + kind)
@@ -408,10 +420,49 @@ def via_point(obj, edit):
                and isinstance(curves[c.Second], Part.BSplineCurve)]
     for remove in reversed(removed):
         obj.delConstraint(remove)
+    index -= len(removed)
+    if angle:
+        if reference or edit.get("driving") is False:
+            obj.setDriving(index, False)
+        if "value" in edit:
+            value = edit["value"]
+            if not isinstance(value, str):
+                finite(value)
+            quantity = App.Units.Quantity(value)
+            finite(quantity.Value)
+            obj.setDatum(index, quantity)
+        if "expression" in edit:
+            expression = edit["expression"]
+            if not isinstance(expression, str) or not expression.strip():
+                raise GeometryError("Enter a native angle expression")
+            obj.setExpression("Constraints[" + str(index) + "]", expression)
     if obj.solve() != 0:
         raise GeometryError("Native Sketcher rejected " + kind + "; conflicting "
                             + str(list(obj.ConflictingConstraints)) + ", redundant "
                             + str(list(obj.RedundantConstraints)))
-    return {"object": obj.Name, "index": index - len(removed),
+    return {"object": obj.Name, "index": index,
             "preparation": [i - sum(old < i for old in removed) for i in prepared],
             "removed_point_on_object": removed}
+
+
+def axes(obj):
+    result = []
+    for slot, geo in enumerate(obj.ExternalGeo[:2]):
+        entry = geometry_entry(geo, -1-slot, obj.getConstruction(-1-slot), sketch=obj)
+        # Native sketch axes are whole selectable curves, not extra unit-length
+        # endpoint handles. The origin remains the existing (-1, 1) selection.
+        entry.update(handles=[], editable=False)
+        result.append(entry)
+    return result
+
+
+def angle_witness(obj, constraint):
+    if constraint.Type != "Angle" or constraint.Third == -2000:
+        return {}
+    try:
+        point = obj.getPoint(constraint.Third, constraint.ThirdPos)
+        start = finite(obj.calculateAngleViaPoint(-1, constraint.First, point.x, point.y))
+        return {"angle_via_point": {"center": xyz(point), "start_angle": start}}
+    except Exception as error:
+        # An annotation cannot reject an otherwise valid native document.
+        return {"angle_via_point": {"display_error": str(error)}}

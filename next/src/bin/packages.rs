@@ -43,6 +43,7 @@ enum Mode {
     Catalog,
     Seed(Value),
     Properties(Value),
+    ExtrusionSchema(Value),
     History(Value),
     Reference(Value),
     SketchCreate(Value),
@@ -74,6 +75,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             "--feature-catalog"
             | "--feature-seed"
             | "--native-properties"
+            | "--extrusion-schema"
             | "--native-history"
             | "--native-reference"
             | "--native-sketch-create" => {
@@ -82,6 +84,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 mode = Some(match arg.as_str() {
                     "--feature-catalog" => Mode::Catalog,
+                    "--extrusion-schema" => Mode::ExtrusionSchema(read_json(
+                        args.next().ok_or("--extrusion-schema requires JSON or -")?,
+                    )?),
                     "--feature-seed" => Mode::Seed(read_json(
                         args.next()
                             .ok_or("--feature-seed requires JSON or - for stdin")?,
@@ -106,7 +111,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             "--help" | "-h" => {
                 println!(
-                    "cad-next-packages [--package-dir DIR] [--id ID --parameters JSON]\nLists local packages, or builds native edits for the chosen package.\n--feature-catalog lists native feature definitions.\n--feature-seed JSON suggests native properties from {{type,state,name,body?,selected_object?,selections?}}.\n--native-properties JSON builds the same native property edits as the editor.\n--native-history JSON builds Body Tip/reorder edits from {{state,request}}.\n--native-reference JSON builds profile reference edits from {{state,request}}.\n--native-sketch-create JSON builds native sketch attachment edits from {{state,request}}.\nUse - instead of JSON to read a request from stdin. These commands do not mutate documents."
+                    "cad-next-packages [--package-dir DIR] [--id ID --parameters JSON]\nLists local packages, or builds native edits for the chosen package.\n--feature-catalog lists native feature definitions.\n--feature-seed JSON suggests native properties from {{type,state,name,body?,selected_object?,selections?}}.\n--native-properties JSON builds the same native property edits as the editor.\n--extrusion-schema JSON derives Pad/Pocket task fields from {{schema,parameters}}.\n--native-history JSON builds Body Tip/reorder edits from {{state,request}}.\n--native-reference JSON builds profile reference edits from {{state,request}}.\n--native-sketch-create JSON builds native sketch attachment edits from {{state,request}}.\nUse - instead of JSON to read a request from stdin. These commands do not mutate documents."
                 );
                 return Ok(());
             }
@@ -139,6 +144,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     &request.request,
                 )?)?
             }
+            Mode::ExtrusionSchema(request) => cad_next::extrusion_commands::task_schema(
+                &request["schema"],
+                &request["parameters"],
+            ),
             Mode::Catalog => serde_json::to_value(feature_commands::definitions())?,
             Mode::Properties(parameters) => {
                 serde_json::to_value(property_commands::build(&parameters)?)?

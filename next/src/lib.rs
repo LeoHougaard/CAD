@@ -3,6 +3,7 @@
 pub mod body_commands;
 #[cfg(feature = "desktop")]
 pub mod editor;
+pub mod extrusion_commands;
 pub mod feature_commands;
 mod gesture_leases;
 pub mod history_commands;

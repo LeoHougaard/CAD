@@ -38,6 +38,14 @@ static DEFINITIONS: &[FeatureDefinition] = &[
             "Offset2",
             "UpToFace",
             "UpToFace2",
+            "UpToShape",
+            "UpToShape2",
+            "TaperAngle",
+            "TaperAngle2",
+            "UseCustomVector",
+            "ReferenceAxis",
+            "Direction",
+            "AlongSketchNormal",
             "Reversed"
         ]
     ),
@@ -92,6 +100,14 @@ static DEFINITIONS: &[FeatureDefinition] = &[
             "Offset2",
             "UpToFace",
             "UpToFace2",
+            "UpToShape",
+            "UpToShape2",
+            "TaperAngle",
+            "TaperAngle2",
+            "UseCustomVector",
+            "ReferenceAxis",
+            "Direction",
+            "AlongSketchNormal",
             "Reversed"
         ]
     ),
@@ -889,9 +905,6 @@ pub fn defaults(
         _ => (),
     }
     match definition.type_id {
-        "PartDesign::Pad" | "PartDesign::Pocket" => {
-            properties.insert("Length".into(), json!(10.));
-        }
         "PartDesign::Revolution"
         | "PartDesign::Groove"
         | "PartDesign::AdditiveHelix"
@@ -1172,7 +1185,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(pad["Profile"], link("Sketch"));
-        assert_eq!(pad["Length"], json!(10.));
+        assert!(!pad.contains_key("Length")); // Native Pad/Pocket defaults are authoritative.
         let revolve = seed(
             &state,
             "PartDesign::Revolution",

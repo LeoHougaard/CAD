@@ -230,6 +230,14 @@ def property_metadata(obj, prop):
         result["enumerations"] = list(obj.getEnumerationsOfProperty(prop))
     if prop == "Support" and obj.TypeId in {"PartDesign::ShapeBinder", "PartDesign::SubShapeBinder"}:
         result["task_editable"] = True
+    # Native TaskExtrudeParameters writes these even when a previous successful
+    # recompute left its property editor read-only. Incomplete mode/target edits
+    # must be assembled before recomputation, as in the native task dialog.
+    if obj.TypeId in {"PartDesign::Pad", "PartDesign::Pocket"} and prop in {
+            "Type2", "Length", "Length2", "TaperAngle", "TaperAngle2",
+            "UpToFace", "UpToFace2", "UpToShape", "UpToShape2", "Offset", "Offset2",
+            "Direction", "ReferenceAxis", "AlongSketchNormal"}:
+        result["task_editable"] = True
     return result
 
 
@@ -251,7 +259,9 @@ def writable_property(obj, prop, expression=False):
     type_id = property_type(obj, prop)
     if expression and obj.isDerivedFrom("Sketcher::SketchObject") and prop == "Constraints":
         return type_id
-    if property_metadata(obj, prop)["read_only"]:
+    metadata = property_metadata(obj, prop)
+    task_write = obj.TypeId in {"PartDesign::Pad", "PartDesign::Pocket"} and metadata.get("task_editable", False)
+    if metadata["read_only"] and not task_write:
         fail("read_only_property", "Native property is read-only: " + prop)
     return type_id
 
@@ -456,6 +466,7 @@ def snapshot(doc, revision=None):
                                "conflicting_constraints": list(obj.ConflictingConstraints),
                                "redundant_constraints": list(obj.RedundantConstraints),
                                "geometry": sketch_geometry(obj),
+                               "axes": SketchGeometry.axes(obj),
                                "spline_controls": SketchOperations.spline_controls(obj),
                                "externals": SketchGeometry.externals(obj),
                                "constraints": [{"index": i, "type": c.Type, "first": c.First,
@@ -463,7 +474,8 @@ def snapshot(doc, revision=None):
                                                 "second_pos": c.SecondPos, "third": c.Third,
                                                 "third_pos": c.ThirdPos, "value": c.Value,
                                                 "name": c.Name, "driving": c.Driving,
-                                                "virtual": c.InVirtualSpace, "active": c.IsActive}
+                                                "virtual": c.InVirtualSpace, "active": c.IsActive,
+                                                **SketchGeometry.angle_witness(obj, c)}
                                                for i, c in enumerate(obj.Constraints)]}
         objects.append(entry)
     return {"document": doc.Name, "revision": revision_request("current", doc.Name) if revision is None else revision, "objects": objects,
@@ -695,7 +707,10 @@ def apply_edit(doc, edit):
             quantity = App.Units.Quantity(value)
             number(quantity.Value)
             # FreeCAD 1.1.4 getDatum excludes SnellsLaw although setDatum works.
+            # Via-point angles preserve native setDatum's quantity policy too.
+            native_angle = obj.Constraints[index].Type == "Angle" and obj.Constraints[index].Third != -2000
             if (isinstance(value, str) and obj.Constraints[index].Type != "SnellsLaw"
+                    and not native_angle
                     and quantity.Unit != obj.getDatum(index).Unit):
                 fail("dimension_mismatch", "Datum unit does not match the native constraint dimension")
             obj.setDatum(index, quantity)
@@ -771,8 +786,8 @@ def preflight_constraints(edits):
     for edit in edits:
         if isinstance(edit, dict) and edit.get("op") in {"constraint", "refraction", "via_point"}:
             try:
-                if edit.get("op") == "via_point" and edit.get("kind") not in {"TangentViaPoint", "PerpendicularViaPoint"}:
-                    raise SketchGeometry.GeometryError("Via-point creation supports Tangent and Perpendicular only")
+                if edit.get("op") == "via_point" and edit.get("kind") not in {"TangentViaPoint", "PerpendicularViaPoint", "AngleViaPoint"}:
+                    raise SketchGeometry.GeometryError("Unsupported native via-point constraint")
                 SketchGeometry.validate_constraint("SnellsLaw" if edit.get("op") == "refraction" else edit.get("kind"), edit.get("args", []))
             except SketchGeometry.GeometryError as error:
                 fail("invalid_request", str(error))

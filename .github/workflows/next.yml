@@ -78,10 +78,25 @@ jobs:
           python next/tests/refraction_workflows.py --host "$host" --compiler "$sketch_compiler" --runtime next/target/runtime.json --output next/target/refraction-documents
           python next/tests/refraction_compatibility_workflows.py --host "$host" --compiler "$sketch_compiler" --runtime next/target/runtime.json --output next/target/refraction-compatibility-documents
           python next/tests/via_point_workflows.py --host "$host" --compiler "$sketch_compiler" --runtime next/target/runtime.json --output next/target/via-point-documents
+          python next/tests/angle_via_point_workflows.py --host "$host" --compiler "$sketch_compiler" --runtime next/target/runtime.json --output next/target/angle-via-point-documents
+          python next/tests/angle_selection_workflows.py --host "$host" --compiler "$sketch_compiler" --runtime next/target/runtime.json --output next/target/angle-selection-documents
           python next/tests/projected_point_workflows.py --host "$host" --compiler "$sketch_compiler" --runtime next/target/runtime.json --output next/target/projected-point-documents
           python next/tests/internal_point_copy_workflows.py --host "$host" --runtime next/target/runtime.json --output next/target/internal-point-copy-documents
           python next/tests/feature_workflows.py --host "$host" --compiler "$compiler" --runtime next/target/runtime.json --output next/target/feature-documents
+          python next/tests/extrusion_termination_workflows.py --host "$host" --compiler "$compiler" --runtime next/target/runtime.json --output next/target/extrusion-termination-documents
+          python next/tests/extrusion_task_retention_workflows.py --host "$host" --compiler "$compiler" --runtime next/target/runtime.json --output next/target/extrusion-task-retention-documents
+          python next/tests/extrusion_expression_workflows.py --host "$host" --compiler "$compiler" --runtime next/target/runtime.json --output next/target/extrusion-expression-documents
           python next/tests/sketch_curves_workflows.py --host "$host" --compiler "$sketch_compiler" --runtime next/target/runtime.json --output next/target/sketch-curve-documents
           python next/tests/sketch_operations_workflows.py --host "$host" --compiler "$sketch_compiler" --runtime next/target/runtime.json --output next/target/sketch-operation-documents
           python next/tests/transform_workflows.py --host "$host" --compiler "$compiler" --runtime next/target/runtime.json --output next/target/transform-documents
           python next/tests/exchange_workflows.py --host "$host" --runtime next/target/runtime.json --output next/target/exchange-documents
+      - name: Native extrusion editor controls through headless egui
+        env:
+          CAD_EDITOR_ACCEPTANCE_RUNTIME: ${{ github.workspace }}/next/target/runtime.json
+          CAD_EDITOR_ACCEPTANCE_FIXTURES: ${{ github.workspace }}/next/target/extrusion-termination-documents/inputs/fixtures.json
+          CAD_EDITOR_ACCEPTANCE_OUTPUT: ${{ github.workspace }}/next/target/extrusion-editor-documents
+          FREECAD_USER_HOME: ${{ github.workspace }}/next/target/extrusion-editor-config
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          mkdir -p "$CAD_EDITOR_ACCEPTANCE_OUTPUT" "$FREECAD_USER_HOME"
+          cargo test --manifest-path next/Cargo.toml --all-features --locked extrusion_editor_ -- --ignored --test-threads=1

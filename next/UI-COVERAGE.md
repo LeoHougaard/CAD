@@ -10,10 +10,10 @@ still owns modeling, constraints, references and history.
 | --- | --- | --- |
 | Document lifecycle | New, FCStd Open, Save/Save as through a filtered modal file browser, unsaved-change protection, native Undo/Redo and guarded writes. | Broader files and failure/recovery, multiple-document interaction and cross-process locking. Pixel GUI verifies filtered picking, folder navigation, replacement confirmation, cancellation and unsaved-change protection. |
 | Sketch creation and editing | Native XY/XZ/YZ origin-plane chooser, same-Body tree datum/sketch-frame and face support; Point, Line, Polyline, Rectangle, Circle, Arc, Ellipse, elliptic/hyperbolic/parabolic arcs and open/periodic B-splines; native internal geometry, snapping/inference, construction, boxes, dragging, trim/deletion and projected/defining/intersection references; fillet/chamfer, split/extend, Carbon Copy and spline degree/knot/pole/weight task forms. | Standalone orientation/reverse/offset dialog, broader support/reference policy, remaining native tools, spline variants and broader Binder/projection combinations. Pixel GUI plus native reopen checks cover fillet/chamfer, split/extension, Carbon Copy, spline degree/knot/pole/weight tasks and invalid-weight recovery; broader operation combinations remain. |
-| Sketch constraints | Common geometric constraints, length/coordinate/radius/diameter/angle dimensions, circular arc length/span and boundary clearances, native refraction ratios, Tangent/Perpendicular through an exposed point, expressions, names, reference/driving and activation controls. | Remaining native constraint families and combinations, including AngleViaPoint; full selection, conflict and recovery coverage. |
+| Sketch constraints | Common geometric constraints, length/coordinate/radius/diameter/angle dimensions, circular arc length/span and boundary clearances, native refraction ratios, Tangent/Perpendicular/Angle through an exposed point, native axis-curve selection, expressions, names, reference/driving and activation controls. | Remaining native constraint families and combinations; real desktop acceptance of AngleViaPoint/axis selection; full selection, conflict and recovery coverage. |
 | Sketch sessions | Action Undo/Redo, gesture previews, Finish validation and Cancel to baseline, including repair of consumed profiles. | Broader histories, topology changes and operation combinations; the weight task now has a real GUI Cancel-preserves-Redo check. |
 | Feature property forms | Native schema supplies defaults, enums, documentation, status and property types. Forms edit explicit overrides and expressions, including references, lists, vectors and placements; foreign Sketch profiles offer Independent/Dependent copy or Cross-reference in the feature transaction. | Every declared type's required inputs and conditional options; broader foreign-reference types, broader independent defining/intersection materialization combinations and task-specific behavior that generic writable fields cannot provide. |
-| Extrusions and revolutions | Pad/Pocket and Revolution/Groove forms expose native profile, extent/direction and available second-side options. | Complete termination modes, offsets, axes, parent changes, invalid selections, reopen and GUI workflows. |
+| Extrusions and revolutions | Pad/Pocket task forms expose native one/symmetric/two-side modes, termination targets, offsets, taper and reference/custom direction, with dormant inputs retained and expression-controlled fields kept reachable. Revolution/Groove retain their native property forms. | Real Pad/Pocket GUI acceptance, broader imported/legacy references and directions; complete Revolution/Groove workflows. |
 | Lofts, sweeps and helices | Additive/subtractive feature forms expose profiles, sections, paths, axes and native modes. | Section/path ordering, multiple sections, guide/orientation modes and topology-edit recovery through the UI. |
 | Holes and dress-ups | Hole, Fillet, Chamfer, Draft and Thickness forms expose native parameters and references. | Hole/thread variants, face/edge selection rules, neutral planes, shell modes and difficult blends. |
 | Patterns and transforms | Linear, Polar, Mirrored and Scaled forms; MultiTransform adds, edits, removes and reorders native child steps in the parent preview transaction. Pixel GUI verifies Linear/Mirror steps, cancellation, Undo/Redo and editing after reopen. | Broader direction/axis/plane and real GUI combinations; full transform task-dialog parity. |
@@ -86,10 +86,36 @@ from each baseline and compare geometry, branch, constraint count/identity and
 expressions. These checks do not claim real GUI acceptance.
 
 The scope is the editor's existing selectable curve families and exposed point
-handles. Axis-curve selection remains outside the existing selection boundary.
-Projected-edge endpoints are covered. AngleViaPoint, ratio validation and
-coincident-selection behavior are unchanged by this delta. Real GUI acceptance
-remains pending.
+handles. Projected-edge endpoints are covered. Real GUI acceptance remains
+pending. Native axis curves and AngleViaPoint are described below.
+
+### Bounded angle-through-point candidate
+
+D or Dimension > Angle accepts two whole curves and one exposed point in any
+selection order. Native preparation and measurement seed the existing Dimension
+window. Apply supports a datum, expression or reference angle; Cancel restores
+the native baseline. Two fixed curves create a reference directly. With Redo,
+preparation waits for Apply and the window may use the native measured value
+without a typed override. Existing angle rows support editing, expressions,
+names, driving/reference, activation, deletion and curve/point highlighting.
+Native witnesses provide a pickable angular label, including signed and
+multi-turn values. Native axes use IDs -1/-2, transformed with the sketch frame;
+they can be clicked away from other geometry. The origin keeps its point
+identity. Axis lines have no artificial endpoint handles and cannot be dragged.
+
+The native/CLI scope covers existing line, circular, conic and spline families;
+origin, endpoint, center, standalone and projected-point selections; native
+preparation and spline cleanup; signed/zero/reflex/multi-turn values and native
+quantity conversions; formulas, state changes, atomic failures and recovery;
+transformed source updates, persistent external identities, previews, action and
+document history, consumed Pad Finish/Cancel and reopen. Direct pinned native
+comparisons check branch, geometry, IDs, constraints, expressions and explicit
+metadata/recompute boundaries. Both-fixed reference mode follows native policy.
+The editor does not implement native GUI selection inference beyond its exposed
+handles, native task-dialog preferences, or a separate angle solver. This is a
+bounded implementation, not full FreeCAD parity. No Pixel or desktop interaction
+has occurred for this candidate. Immutable native inputs and read-only verifier
+steps accompany the private handoff; real GUI acceptance remains pending.
 
 Standalone native vertex projections now serialize using authoritative native
 property metadata, including their signed geometry IDs, persistent references

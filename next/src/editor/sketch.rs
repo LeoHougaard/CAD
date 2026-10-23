@@ -176,6 +176,7 @@ impl Editor {
         self.begin_sketch();
     }
     pub(super) fn sketch_reply(&mut self, op: &str, success: bool) {
+        self.dimension_reply(op, success);
         if op == "preview_commit" && success && self.sketch_ui.task.is_some() {
             self.sketch_ui.branch_pending = false;
         }

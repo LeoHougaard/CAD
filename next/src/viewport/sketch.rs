@@ -70,6 +70,7 @@ impl Viewport {
             .as_array()
             .into_iter()
             .flatten()
+            .chain(sketch["axes"].as_array().into_iter().flatten())
             .chain(
                 sketch["externals"]
                     .as_array()
@@ -78,6 +79,34 @@ impl Viewport {
                     .map(|wrapper| &wrapper["geometry"]),
             )
             .find(|geo| geo["index"].as_i64() == Some(i64::from(index)))
+    }
+
+    fn axis_segments(&self) -> Vec<(SketchElement, [Pos2; 2])> {
+        self.sketch
+            .as_ref()
+            .into_iter()
+            .flat_map(|s| s["sketch"]["axes"].as_array())
+            .flatten()
+            .filter_map(|axis| {
+                let index = i32::try_from(axis["index"].as_i64()?).ok()?;
+                if !matches!(index, -1 | -2) || axis["kind"] != "line" {
+                    return None;
+                }
+                let world = |p: &Value| self.sketch_origin + self.sketch_rotation * vector(p);
+                let start = self.project(world(&axis["start"])).0;
+                let delta = self.project(world(&axis["end"])).0 - start;
+                if delta.length_sq() < 1e-8 {
+                    return None;
+                }
+                let direction = delta.normalized();
+                let center = start + direction * (self.rect.center() - start).dot(direction);
+                let extent = self.rect.width() + self.rect.height();
+                Some((
+                    SketchElement { index, point: 0 },
+                    [center - direction * extent, center + direction * extent],
+                ))
+            })
+            .collect()
     }
 
     /// Only native handles explicitly verified for movement are drag targets.
@@ -150,6 +179,16 @@ impl Viewport {
             })
             .min_by(|a, b| a.0.total_cmp(&b.0))
             .map(|(_, element)| element)
+            .or_else(|| {
+                self.axis_segments()
+                    .into_iter()
+                    .filter_map(|(element, [a, b])| {
+                        let distance = segment_distance(pos, a, b).0;
+                        (distance <= 5.).then_some((distance, element))
+                    })
+                    .min_by(|a, b| a.0.total_cmp(&b.0))
+                    .map(|(_, element)| element)
+            })
     }
 
     /// Select displayed geometry using the same tessellated paths as the canvas.
@@ -294,6 +333,16 @@ impl Viewport {
         };
         let constrained = sketch["sketch"]["degrees_of_freedom"].as_i64() == Some(0);
         let selected_color = Color32::from_rgb(236, 204, 96);
+        for (element, segment) in self.axis_segments() {
+            let color = if self.sketch_selection.contains(&element) {
+                selected_color
+            } else if element.index == -1 {
+                Color32::from_rgb(120, 65, 75)
+            } else {
+                Color32::from_rgb(65, 110, 90)
+            };
+            painter.line_segment(segment, Stroke::new(1_f32, color));
+        }
         for curve in &self.curves {
             let selected = self
                 .sketch_selection
@@ -685,32 +734,62 @@ impl Viewport {
                         .iter()
                         .find(|curve| curve.native.index == index && curve.points.len() == 2)
                         .map(|curve| (curve.points[0], curve.points[1]))
+                        .or_else(|| {
+                            self.native_geometry(index)
+                                .filter(|g| g["kind"] == "line")
+                                .map(|g| {
+                                    (
+                                        self.sketch_origin
+                                            + self.sketch_rotation * vector(&g["start"]),
+                                        self.sketch_origin
+                                            + self.sketch_rotation * vector(&g["end"]),
+                                    )
+                                })
+                        })
                 };
-                if let Some((a, b)) = line(first) {
-                    let inverse = self.sketch_rotation.conjugate();
-                    let (mut vertex, start_angle) = if let Some((c, d)) = line(second) {
-                        let (a, b, c, d) = (
-                            inverse * (a - self.sketch_origin),
-                            inverse * (b - self.sketch_origin),
-                            inverse * (c - self.sketch_origin),
-                            inverse * (d - self.sketch_origin),
-                        );
-                        let u = b - a;
-                        let v = d - c;
-                        let denominator = u.x * v.y - u.y * v.x;
-                        let vertex = if denominator.abs() > 1e-6 {
-                            a + u * ((c.x - a.x) * v.y - (c.y - a.y) * v.x) / denominator
+                let via_point = constraint["third"].as_i64().is_some_and(|i| i != -2000);
+                let measured = if via_point {
+                    let witness = &constraint["angle_via_point"];
+                    witness["start_angle"]
+                        .as_f64()
+                        .filter(|a| a.is_finite())
+                        .and_then(|a| {
+                            witness["center"]
+                                .as_array()
+                                .filter(|p| p.len() == 3)
+                                .map(|_| (vector(&witness["center"]), a as f32))
+                        })
+                } else {
+                    line(first).map(|(a, b)| {
+                        let inverse = self.sketch_rotation.conjugate();
+                        if let Some((c, d)) = line(second) {
+                            let (a, b, c, d) = (
+                                inverse * (a - self.sketch_origin),
+                                inverse * (b - self.sketch_origin),
+                                inverse * (c - self.sketch_origin),
+                                inverse * (d - self.sketch_origin),
+                            );
+                            let u = b - a;
+                            let v = d - c;
+                            let denominator = u.x * v.y - u.y * v.x;
+                            let vertex = if denominator.abs() > 1e-6 {
+                                a + u * ((c.x - a.x) * v.y - (c.y - a.y) * v.x) / denominator
+                            } else {
+                                a
+                            };
+                            (vertex, u.y.atan2(u.x))
                         } else {
-                            a
-                        };
-                        (vertex, u.y.atan2(u.x))
-                    } else {
-                        (inverse * (a - self.sketch_origin), 0.)
-                    };
+                            (inverse * (a - self.sketch_origin), 0.)
+                        }
+                    })
+                };
+                if let Some((mut vertex, start_angle)) = measured {
                     vertex.z = 0.;
                     let radius = 34. / self.scale;
                     let sweep = value as f32;
-                    if sweep.is_finite() && sweep.abs() <= std::f32::consts::TAU + 0.001 {
+                    if sweep.is_finite()
+                        && (via_point || sweep.abs() <= std::f32::consts::TAU + 0.001)
+                    {
                         let project = |angle: f32| {
                             self.project(
                                 self.sketch_origin
@@ -725,6 +804,13 @@ impl Viewport {
                                 project(start_angle + sweep * step as f32 / 24.),
                                 project(start_angle + sweep * (step + 1) as f32 / 24.),
                             ]);
+                        }
+                        if via_point {
+                            let center = self
+                                .project(self.sketch_origin + self.sketch_rotation * vertex)
+                                .0;
+                            segments.push([center, project(start_angle)]);
+                            segments.push([center, project(start_angle + sweep)]);
                         }
                         let middle = start_angle + sweep * 0.5;
                         let position = self
@@ -842,6 +928,76 @@ mod tests {
         viewport.set_sketch(Some(snapshot()));
         viewport.align_sketch();
         viewport
+    }
+    #[test]
+    fn native_axes_are_whole_curve_fallback_picks_without_endpoint_handles() {
+        let mut viewport = viewport();
+        let mut sketch = snapshot();
+        sketch["global_placement"] = json!({"position":[100,200,300],"rotation":[0,0,1,0]});
+        sketch["sketch"]["axes"] = json!([
+            {"index":-1,"kind":"line","start":[0,0,0],"end":[1,0,0],"handles":[]},
+            {"index":-2,"kind":"line","start":[0,0,0],"end":[0,1,0],"handles":[]}
+        ]);
+        viewport.set_sketch(Some(sketch.clone()));
+        viewport.align_sketch();
+        for (point, index) in [([50., 0., 0.], -1), ([0., 50., 0.], -2)] {
+            assert_eq!(
+                viewport.sketch_hit(viewport.sketch_screen_point(point)),
+                Some(SketchElement { index, point: 0 })
+            );
+        }
+        assert_eq!(
+            viewport.sketch_hit(viewport.sketch_screen_point([0., 0., 0.])),
+            Some(SketchElement {
+                index: -1,
+                point: 1
+            })
+        );
+        assert!(
+            viewport
+                .geometry_point(SketchElement {
+                    index: -2,
+                    point: 1
+                })
+                .is_none()
+        );
+        viewport.sketch_selection = vec![SketchElement {
+            index: -2,
+            point: 0,
+        }];
+        viewport.set_sketch(Some(sketch));
+        assert_eq!(
+            viewport.sketch_selection,
+            vec![SketchElement {
+                index: -2,
+                point: 0
+            }]
+        );
+    }
+
+    #[test]
+    fn via_point_annotations_use_native_witnesses_and_keep_signed_sweeps_pickable() {
+        for value in [-std::f64::consts::FRAC_PI_4, 0., std::f64::consts::PI * 2.5] {
+            let mut viewport = viewport();
+            let mut sketch = snapshot();
+            sketch["global_placement"] = json!({"position":[100,200,300],"rotation":[0,0,1,0]});
+            sketch["sketch"]["constraints"] = json!([{"index":12,"type":"Angle","third":-1,"third_pos":1,
+                "first":0,"second":1,"value":value,"driving":true,
+                "angle_via_point":{"center":[0,0,0],"start_angle":0.25}}]);
+            viewport.set_sketch(Some(sketch));
+            viewport.align_sketch();
+            let context = egui::Context::default();
+            let _ = context.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default()
+                    .show(ctx, |ui| viewport.draw_dimensions(ui.painter()));
+            });
+            let hit = &viewport.dimension_hits[0];
+            assert_eq!(hit.index, 12);
+            assert!(hit.label.is_finite());
+            assert_eq!(viewport.dimension_hit(hit.label.center()), Some(12));
+            let center = viewport.sketch_screen_point([0., 0., 0.]);
+            assert!(hit.segments.iter().any(|s| s[0].distance(center) < 1e-4));
+        }
     }
     #[test]
     fn curve_pick_uses_actual_attached_sketch_cursor_and_invalidates_with_native_changes() {

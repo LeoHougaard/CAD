@@ -276,7 +276,12 @@ impl Editor {
             );
             ui.checkbox(&mut self.property_ui.advanced, "All properties");
         });
-        let schema = &self.property_ui.schema;
+        let task_schema =
+            crate::extrusion_commands::task_schema(&self.property_ui.schema, &draft.parameters);
+        let schema = &task_schema;
+        let extrusion = crate::extrusion_commands::supported(
+            draft.parameters["type"].as_str().unwrap_or_default(),
+        );
         let filter = self.property_ui.filter.to_lowercase();
         let definition = draft.parameters["type"]
             .as_str()
@@ -379,13 +384,19 @@ impl Editor {
                                         );
                                         value_changed = value != before;
                                     } else {
-                                        let link_objects = if property == "Profile" {
+                                        let link_objects = if property == "Profile"
+                                            || extrusion
+                                                && crate::extrusion_commands::reference(&property)
+                                        {
                                             self.property_ui.reference.objects()
                                         } else {
                                             native_objects
                                         };
                                         let profile_selection;
-                                        let link_selection = if property == "Profile" {
+                                        let link_selection = if property == "Profile"
+                                            || extrusion
+                                                && crate::extrusion_commands::reference(&property)
+                                        {
                                             profile_selection = self
                                                 .property_ui
                                                 .reference
@@ -394,6 +405,8 @@ impl Editor {
                                         } else {
                                             &selected
                                         };
+                                        let target = extrusion
+                                            && crate::extrusion_commands::reference(&property);
                                         value_changed = property_widget(
                                             ui,
                                             &property,
@@ -403,8 +416,30 @@ impl Editor {
                                             &mut self.property_ui.buffers,
                                             link_objects,
                                             &object_name,
-                                            link_selection,
+                                            if target { &[] } else { link_selection },
                                         );
+                                        if target {
+                                            let selection = crate::extrusion_commands::selection(
+                                                &property,
+                                                link_selection,
+                                            );
+                                            let reason = selection
+                                                .as_ref()
+                                                .err()
+                                                .cloned()
+                                                .unwrap_or_default();
+                                            if ui
+                                                .add_enabled(
+                                                    selection.is_ok(),
+                                                    egui::Button::new("Use native selection"),
+                                                )
+                                                .on_disabled_hover_text(reason)
+                                                .clicked()
+                                            {
+                                                value = selection.unwrap();
+                                                value_changed = true;
+                                            }
+                                        }
                                     }
                                 });
                                 if expression_capable(type_id) {
@@ -1089,3 +1124,7 @@ mod tests {
         }));
     }
 }
+
+#[cfg(test)]
+#[path = "properties/extrusion_acceptance.rs"]
+mod acceptance_probe;

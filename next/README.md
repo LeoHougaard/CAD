@@ -62,7 +62,16 @@ driving/reference dimensions, names, activation and deletion. The native solver'
 solved geometry and remaining freedom are authoritative.
 
 Tangent and Perpendicular also accept two whole curves and one exposed native
-point. For refraction, select two line endpoints in n1, n2 order and a whole
+point. The same selection with D or Dimension > Angle creates a native angle
+through the point. Click either sketch axis away from other geometry to select
+its whole native curve. The origin remains a point selection. Native preparation
+and measurement seed the dimension dialog; Apply accepts a datum, expression or
+reference angle, and Cancel restores the sketch. Two fixed curves create a
+reference angle directly. When Redo exists, preparation waits for Apply so
+opening and canceling the dialog preserves it. This workflow has native and
+headless Rust checks; desktop interaction remains unverified.
+
+For refraction, select two line endpoints in n1, n2 order and a whole
 boundary curve, then choose Refraction ratio n2/n1. Native Sketcher validates
 the ratio and prepares missing relationships. At coincident handles, repeated
 Shift-clicks visit each handle to add it, then visit each again to remove it.
@@ -95,6 +104,16 @@ Apply commits one undo step; Cancel or Escape restores the baseline. An invalid
 value cannot be applied. When native redo history exists, feature recomputation
 is deferred until Apply so Cancel preserves redo. See
 [preview ownership and native limits](PROTOCOL.md).
+
+Pad and Pocket use native one-side, symmetric and two-side modes, with each
+side's length, first/last or through-all extent, face/shape target, offset and
+taper as supported by the selected native feature. Select a native target and
+use its field's selection button. Direction can use a reference axis or custom
+vector. Mode changes retain inactive values, links and expressions. Controller
+expressions keep dependent inputs available until native evaluation resolves
+their mode. Required fields remain accessible after an incomplete preview fails.
+These workflows have native and shared-command verification; real GUI acceptance
+and broader imported/legacy target coverage remain open.
 
 Selecting a Body makes it the active modeling target; selecting a feature keeps
 that target. A profile sketch outside the target Body offers Independent copy,

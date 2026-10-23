@@ -307,6 +307,20 @@ Dedicated sketch/expression operations retain their existing contracts.
 Support only on ShapeBinder/SubShapeBinder. This task-specific input is marked
 `task_editable` even where FreeCAD marks the generic property read-only.
 
+Pad/Pocket snapshots also mark native task inputs `task_editable` where their
+previous recompute left conditional read-only flags. This is limited to exact
+Pad/Pocket types and Type2, Length/Length2, TaperAngle/TaperAngle2,
+UpToFace/UpToFace2, UpToShape/UpToShape2, Offset/Offset2, Direction, ReferenceAxis
+and AlongSketchNormal. Native read-only metadata remains visible. Computed data
+and other types retain the generic protection. Controllers are assigned before
+targets and dimensions, then native recomputation validates the complete task.
+
+`cad-next-packages --extrusion-schema` derives the same task presentation as the
+editor from `{schema, parameters}` without document writes. It retains inactive
+properties and expressions. A controller expression makes dependent inputs
+available conservatively after an incomplete preview fails; Rust does not
+evaluate its text. Exact expression keys and clears retain native semantics.
+
 Native Visibility is an Output/NoModify display property. It does not create its
 own native undo entry and native transaction rollback does not provide the same
 history behavior as modeling properties. The editor uses explicit tree/View
@@ -650,8 +664,8 @@ The shared Rust `constrain` builder accepts three selected elements for existing
 kind `Tangent` or `Perpendicular`: two distinct whole selectable native curves and
 one exposed native point. The point can appear anywhere in selection order;
 relative curve order is preserved. No datum or expression is accepted. Existing
-two-element creation keeps its existing path. AngleViaPoint is not part of this
-workflow.
+two-element creation keeps its existing path. Angle through a point uses the
+separate measured workflow below.
 
 The builder emits one atomic `via_point` sketch edit with `object`, native `kind`
 `TangentViaPoint` or `PerpendicularViaPoint`, and four signed integer `args`
@@ -680,6 +694,51 @@ constraint values/branch choices are retained. Refresh the complete snapshot
 rather than retaining old constraint indices. Ordinary transactions, preview
 replacement/Cancel, sketch actions and consumed-sketch Finish/Cancel own the
 atomic lifecycle. There is no frontend solver or second constraint history.
+
+## Angle through two curves and a point
+
+The shared Rust builder accepts kind `Angle` with three selected elements, or
+explicit kind `AngleViaPoint`. Select two whole native curves and one exposed
+point in any order; relative curve order is preserved until the native command
+selects its angle branch. Native sketch axes are whole curves with signed IDs
+`-1` and `-2`. They appear in the additive snapshot `sketch.axes` array with
+native line coordinates, empty `handles` and `editable:false`. The origin keeps
+its existing point identity `[-1,1]`; axis unit endpoints are not handles.
+
+The builder emits one atomic `via_point` edit with kind `AngleViaPoint`,
+`args:[curve1,curve2,point_geometry,point_position,0.0]` and a boolean `driving`.
+The last argument is a guarded placeholder. After native PointOnObject
+preparation, the worker calls native `calculateAngleViaPoint`, swaps curves for
+a negative measurement below native angular precision, and uses the command's
+eight-significant-digit constructor seed. Native C++ owns spline parameters,
+the angle branch, solving and expression remapping. Preparation and selected
+spline PointOnObject cleanup follow the pinned Angle command. B-spline weight
+circles are rejected. Two fixed curves produce a reference angle rather than
+the Tangent/Perpendicular fixed-curve rejection.
+
+The optional edit `value` is forwarded to native `setDatum`; optional
+`expression` binds the final native index after spline cleanup. The shared CLI
+constraint request accepts those options as strings, plus optional boolean
+`driving`. Use either value or expression. `driving:false` requests a reference;
+the native command still creates reference mode for two fixed curves when
+`driving:true` is requested. Native reference policy decides whether a subsequent
+datum/expression is valid. There is no extra positive/range/unit restriction on
+via-point angles. Existing datum requests use the same native policy.
+
+Stored native type is `Angle`, with its point in `third`/`third_pos`. Each such
+constraint snapshot includes `angle_via_point:{center,start_angle}`, measured
+through the native API for annotations. The center is in the sketch frame and
+start_angle is radians relative to native X. If native witness measurement is
+unavailable, `display_error` is explicit and the valid document still opens.
+This display information never defines constraint geometry or the solver seed.
+
+The editor starts an owned preview to seed its existing Dimension window. Apply
+replaces the preview with the selected value, expression or reference option,
+then commits only on native success. Cancel releases the preview. Failed Apply
+keeps the dialog recoverable. With document or sketch-action Redo, opening the
+dialog performs no mutation; native preparation/measurement waits for Apply.
+Ordinary edits, sketch actions and consumed-profile Finish/Cancel use the
+existing journal, revision and lease boundary.
 
 ## Private gesture owner boundary
 

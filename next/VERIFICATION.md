@@ -846,3 +846,84 @@ found no remaining P0/P1/P2 defect. It reproduced both fixes on the original
 inputs, checked six saved source/result pairs and exercised unavailable metadata,
 rollback recovery and nondefault native geometry flags/layers. Real GUI
 acceptance remains open. Cross-platform CI runs all 24 public native suites.
+
+The private AngleViaPoint candidate adds the self-contained
+`tests/angle_via_point_workflows.py` suite using the public host and the same Rust
+compiler as the editor. Its 31 workflows pass, with 29 direct pinned-native
+comparisons. These cover native preparation and curve order, all existing curve
+families, one/two-spline cleanup, both-fixed reference mode, axes, exposed points,
+signed and multi-turn native datums, expressions/state, failed preparation and
+replacement, source updates, consumed profiles, history and reopen. Numeric
+comparisons retain the existing public native-workflow tolerance; no broader
+tolerance was added. The underconstrained two-spline exploratory fixture showed
+native solver drift and is retained in private failed evidence. The deterministic
+two-spline fixture fixes both curves and checks native reference/cleanup policy.
+
+The construction-point-only both-axes fixture has a matched native transient
+`_ElementMapVersion` sequence: empty on open, `15.70200.5` after preparation,
+retained after abort/Undo, empty on reopen. The consumed sketch has native
+`Touched` status after abort plus sketch-only solve/recompute, then returns to
+Valid after document recompute. Each oracle checks only that exact fixture and
+phase transition; unrelated metadata/version/status mutations must fail. Full
+graph, property, geometry, constraint and identity comparisons remain enabled.
+The final private Rust desktop library run passes 173 tests, with two ignored;
+all-target desktop Clippy passes with warnings denied. No actual desktop/Pixel
+acceptance, broad regression matrix or resource comparison was run by this
+candidate author. Independent review and root integration remain required.
+
+Independent Angle review found one P2 selection-lifecycle defect: selecting the
+temporary native Angle row and canceling left its index selected, so a later
+unrelated Radius reusing that index inherited the selection. A private follow-up
+keeps selection state inside the Angle dialog lifecycle. It checks the native
+slot/type/geometry-point references on refresh, preserves a still-valid selected
+row on failed or successful Apply, and restores a verified prior row after
+Cancel. A replaced or absent native row clears both its selection and name.
+Deferred cancellation performs no request and preserves Redo; immediate
+reference creation cannot inherit an old row selection. This is not a global
+selection reset and does not invent persistent constraint IDs or remap indices.
+
+The exact reported editor sequence fails against the unchanged prior candidate
+and passes with the fix. Eight focused tests drive actual editor methods,
+headless Escape/Enter, replies, native row selection and revision/owner request
+fields using full captured public-host snapshots. Four existing dialog tests
+also pass. Four focused native sequences cover Cancel/index reuse, failed
+replacement/commit, spline cleanup and deferred/reference creation. A direct
+native abort plus sketch-only recompute control checks the exact Touched phase
+and restored geometry/IDs/constraints/formulas. No backend/native policy changed,
+no full native matrix or resource run was repeated, and desktop/Pixel acceptance
+remains pending. The new frozen follow-up requires independent re-review.
+
+## Pad and Pocket termination workflows
+
+The task schema now follows pending modes rather than only a previous successful
+native recompute's conditional property flags. Native task setters remain scoped
+to Pad/Pocket; computed data and other feature types retain read-only protection.
+The property compiler applies controllers before targets and dimensional values.
+Pocket retains its pinned native 5 mm default. No expression evaluator, geometry
+engine, native history replacement or runtime prototype probing was added.
+
+The three public extrusion suites cover both sides, face/shape termination,
+offsets, taper, custom/reference direction, expressions, placements, parent and
+topology changes, dormant values, preview replacement/Cancel, failures, Undo/Redo
+and reopen. Their saved results are compared with direct native geometry and
+properties. Independent review found and verified the fix for an expression-mode
+target that remained hidden after a failed incomplete preview. Further schema
+and native probes preserve exact expression-clear keys and unrelated read-only
+properties. These are headless native/shared-editor-command checks. Desktop
+interaction and broader imported/legacy geometry remain unaccepted.
+
+The combined root implementation passes 183 Rust tests, two separately enabled
+native editor tests, callback tests, Clippy with warnings denied, the desktop/bin
+build and all 29 native workflow suites on Windows. The native editor tests run
+the actual form methods, worker actor and headless egui pointer controls for mode
+changes, target buttons, exact expression clears, Apply/Cancel and deferred Redo.
+They do not initialize OpenGL, open a desktop window or pick geometry on screen.
+CI runs both these tests and the native suites on Windows and Linux.
+
+Fresh interleaved debug headless resource checks compare the preserved baseline
+with this combined source using the same 12-hole Pad and sketch-action workload.
+Working set medians are 80.96 and 80.48 MiB; peak medians are 81.43 and 80.96 MiB.
+Warm startup medians are 693.87 and 687.36 ms. All memory/startup/operation latency
+gates pass and all six five-second idle samples measure zero CPU. These samples
+establish a bounded regression result, not viewport or input-to-frame speed,
+moderate complex-part performance, cold startup or real GUI acceptance.
