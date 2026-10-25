@@ -81,7 +81,7 @@ pub fn display_objects(state: &Value) -> Vec<String> {
     for entry in all.iter().filter(|entry| {
         entry["type"]
             .as_str()
-            .is_some_and(|kind| kind.starts_with("Part::"))
+            .is_some_and(|kind| kind.starts_with("Part::") || kind == "App::Link")
             && displayable_part_shape(&entry["shape"])
             && entry["properties"]["Visibility"] != false
             && entry["effective_visibility"] != false

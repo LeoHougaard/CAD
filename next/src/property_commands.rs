@@ -247,11 +247,55 @@ fn is_reference(value: &Value) -> bool {
             .is_some_and(|items| items.iter().any(|v| v.get("link").is_some()))
 }
 
+/// Native Link and LinkSub contain one distinct object, not necessarily one
+/// viewport pick. LinkSub retains that object's complete selected subname list.
+/// Keep validation separate from assignment so a rejected pick changes no task.
+pub fn selected_reference(
+    type_id: &str,
+    objects: &[Value],
+    selections: &[(String, String)],
+) -> Result<Value, String> {
+    let kind = type_id.strip_prefix("App::Property").unwrap_or_default();
+    if !kind.starts_with("Link") && !kind.starts_with("XLink") {
+        return Err("Choose a native reference field".into());
+    }
+    if selections.is_empty() {
+        return Err("Select a native object for this field".into());
+    }
+    validate_selected_objects(objects, selections)?;
+    let links = selected_links(selections, kind.contains("Sub"));
+    if kind.contains("List") {
+        Ok(links)
+    } else if links.as_array().unwrap().len() == 1 {
+        Ok(links[0].clone())
+    } else {
+        Err(
+            "Select one native object for this field. Clear picks from other objects and retry."
+                .into(),
+        )
+    }
+}
+
+/// Check every selected identity before a task narrows its reference choices.
+pub fn validate_selected_objects(
+    objects: &[Value],
+    selections: &[(String, String)],
+) -> Result<(), String> {
+    for (name, _) in selections {
+        if !objects.iter().any(|object| object["name"] == *name) {
+            return Err(format!(
+                "Selected native object {name} is unavailable. Clear the stale selection and retry."
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub fn selected_links(selections: &[(String, String)], subelements: bool) -> Value {
     let mut links: Vec<Value> = Vec::new();
     for (object, subelement) in selections {
         if let Some(existing) = links.iter_mut().find(|v| v["link"] == *object) {
-            if subelements && !subelement.is_empty() {
+            if subelements {
                 let names = existing["subelements"].as_array_mut().unwrap();
                 if !names.iter().any(|v| v == subelement) {
                     names.push(json!(subelement));
@@ -260,13 +304,19 @@ pub fn selected_links(selections: &[(String, String)], subelements: bool) -> Val
         } else {
             let mut link = json!({"link":object});
             if subelements {
-                link["subelements"] = json!(if subelement.is_empty() {
-                    vec![]
-                } else {
-                    vec![subelement]
-                });
+                link["subelements"] = json!([subelement]);
             }
             links.push(link);
+        }
+    }
+    if subelements {
+        for link in &mut links {
+            // Keep the existing whole-object encoding when it is the only pick.
+            // A mixed whole-object/subelement pick needs its explicit empty
+            // subname so neither native reference is silently discarded.
+            if link["subelements"] == json!([""]) {
+                link["subelements"] = json!([]);
+            }
         }
     }
     json!(links)

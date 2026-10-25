@@ -66,6 +66,7 @@ impl Native {
             transform_ui: transforms::TransformUi::default(),
             exchange_ui: exchange::ExchangeUi::default(),
             draft: None,
+            measurement_ui: super::super::measurements::MeasurementUi::default(),
             sequence: 0,
             error: None,
             status: String::new(),

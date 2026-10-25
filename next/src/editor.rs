@@ -1,11 +1,13 @@
 //! The UI owns interaction state. The worker owns all document state and history.
 
+mod assembly;
 mod bodies;
 mod constraints;
 mod drawing;
 mod exchange;
 mod file_browser;
 mod history;
+mod measurements;
 mod profile_references;
 mod properties;
 mod recovery;
@@ -16,6 +18,7 @@ mod sketch_tools;
 mod tests;
 mod transforms;
 mod view;
+mod workflow_guide;
 
 use crate::body_commands::display_objects;
 use crate::sketch_commands::Tool as Draw;
@@ -86,7 +89,7 @@ fn model_thread(
         // Preserve the old document until a replacement loads successfully.
         // Opening the same path twice returns the worker's already_open error.
         let result = call(&mut worker, &job.op, job.parameters);
-        if job.op == "feature_schema" {
+        if matches!(job.op.as_str(), "feature_schema" | "measure") {
             let (accepted, data, error) = match result {
                 Ok(data) => (true, data, None),
                 Err(error) => (false, Value::Null, Some(error)),
@@ -193,7 +196,9 @@ fn model_thread(
 }
 
 fn feature_edits(registry: &Registry, draft: &Draft) -> Result<Vec<Value>, String> {
-    if draft.id == "native.history" {
+    if draft.id == "native.assembly" {
+        crate::assembly_commands::build(&draft.parameters["state"], &draft.parameters["request"])
+    } else if draft.id == "native.history" {
         crate::history_commands::build(&draft.parameters["state"], &draft.parameters["request"])
     } else if draft.id == "native.properties" {
         crate::property_commands::build(&draft.parameters)
@@ -269,6 +274,7 @@ pub struct Editor {
     sketch_creation: Option<sketch_creation::SketchCreation>,
     body_ui: BodyUi,
     property_ui: properties::PropertyUi,
+    measurement_ui: measurements::MeasurementUi,
     transform_ui: transforms::TransformUi,
     exchange_ui: exchange::ExchangeUi,
     draft: Option<Draft>,
@@ -321,6 +327,7 @@ impl Editor {
             sketch_creation: None,
             body_ui: BodyUi::default(),
             property_ui: properties::PropertyUi::default(),
+            measurement_ui: measurements::MeasurementUi::default(),
             transform_ui: transforms::TransformUi::default(),
             exchange_ui: exchange::ExchangeUi::default(),
             draft: None,
@@ -351,6 +358,9 @@ impl Editor {
     fn send(&mut self, op: &str, mut parameters: Value) {
         if self.busy {
             return;
+        }
+        if op != "feature_schema" {
+            self.measurement_invalidate();
         }
         if !matches!(op, "new" | "open") {
             parameters["document"] = self.state["document"].clone();
@@ -428,6 +438,10 @@ impl Editor {
     fn poll(&mut self) {
         while let Ok(reply) = self.replies.try_recv() {
             self.busy = false;
+            if reply.op == "measure" {
+                self.measurement_reply(reply);
+                continue;
+            }
             let success = reply.accepted;
             if reply.op == "feature_schema" {
                 self.error = reply.error;
@@ -559,6 +573,9 @@ impl Editor {
         }
     }
     fn edit_feature(&mut self, name: &str) {
+        if self.edit_assembly_object(name) {
+            return;
+        }
         self.edit_native_properties(name);
     }
     fn start_package(&mut self, id: &str) {
@@ -782,6 +799,14 @@ impl Editor {
                         self.viewport.iso();
                     }
                     self.view_controls(ui);
+                    if ui
+                        .button("Help")
+                        .on_hover_text("Workflow guide (F1)")
+                        .clicked()
+                    {
+                        workflow_guide::open(ctx);
+                    }
+                    self.measurement_controls(ui);
                 });
             });
             ui.horizontal_wrapped(|ui| {
@@ -800,9 +825,19 @@ impl Editor {
                     |ui| {
                         if self.sketch_ui.session.is_none() {
                             self.body_toolbar(ui);
+                            self.assembly_toolbar(ui);
                         }
-                        if self.sketch_ui.session.is_none() && ui.button("Sketch").clicked() {
-                            self.new_sketch();
+                        if self.sketch_ui.session.is_none() {
+                            let sketch = ui.button("Sketch");
+                            if sketch.clicked() {
+                                self.new_sketch();
+                            }
+                            sketch.context_menu(|ui| {
+                                if ui.button("Create sketch with options").clicked() {
+                                    self.new_sketch_with_options();
+                                    ui.close();
+                                }
+                            });
                         }
                         if self.sketch.is_some() {
                             self.sketch_toolbar(ui);
@@ -871,6 +906,13 @@ impl Editor {
                             .max_height((ctx.content_rect().height() - 220.).clamp(150., 650.))
                             .show(ui, |ui| self.native_property_fields(ui));
                     }
+                    let assembly = self
+                        .draft
+                        .as_ref()
+                        .is_some_and(|d| d.id == "native.assembly");
+                    if assembly {
+                        self.assembly_fields(ui);
+                    }
                     let history = self
                         .draft
                         .as_ref()
@@ -879,7 +921,7 @@ impl Editor {
                         self.history_fields(ui);
                     }
                     let draft = self.draft.as_mut().unwrap();
-                    if !boolean && !native && !history {
+                    if !boolean && !native && !history && !assembly {
                         ui.label(&draft.name);
                     }
                     if draft.deferred {
@@ -890,7 +932,7 @@ impl Editor {
                         .as_object()
                         .unwrap()
                         .keys()
-                        .filter(|_| !boolean && !native && !history)
+                        .filter(|_| !boolean && !native && !history && !assembly)
                         .cloned()
                         .collect();
                     ui.add_enabled_ui(!self.busy, |ui| {
@@ -1013,11 +1055,15 @@ impl Editor {
             && self.sketch_ui.task.is_none();
         let before = self.viewport.selected.clone();
         self.viewport.ui(ui);
-        if self.viewport.selected != before
-            && let Some(selection) = &self.viewport.selected
-        {
-            self.body_ui.selected.clear();
-            self.selected_object = Some(selection.object.clone());
+        if self.viewport.selected != before {
+            if !self.measurement_keeps_selection(ui.input(|i| i.modifiers.shift)) {
+                self.body_ui.selected.clear();
+            }
+            self.selected_object = self
+                .viewport
+                .selected
+                .as_ref()
+                .map(|selection| selection.object.clone());
         }
         if !self.unavailable() {
             self.sketch_canvas(ui);
@@ -1031,6 +1077,10 @@ impl eframe::App for Editor {
     }
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll();
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::F1)) {
+            workflow_guide::open(ctx);
+        }
+        let guide_was_open = workflow_guide::active(ctx);
         if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close {
             if self.unavailable() && !self.busy {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -1053,7 +1103,12 @@ impl eframe::App for Editor {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
         if ctx.input(|i| i.key_pressed(Key::Escape)) {
-            if self.unavailable() {
+            if workflow_guide::active(ctx) {
+                workflow_guide::close(ctx);
+                ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Escape));
+            } else if self.measurement_escape() {
+                ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Escape));
+            } else if self.unavailable() {
                 self.pending_file = None;
             } else if self.file_browser.active() {
                 self.cancel_file_browser();
@@ -1103,8 +1158,12 @@ impl eframe::App for Editor {
         });
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(Color32::from_rgb(5, 7, 9)))
-            .show(ctx, |ui| self.canvas(ui));
-        if !self.unavailable() {
+            .show(ctx, |ui| {
+                ui.add_enabled_ui(!guide_was_open && !workflow_guide::active(ctx), |ui| {
+                    self.canvas(ui)
+                });
+            });
+        if !self.unavailable() && !guide_was_open && !workflow_guide::active(ctx) {
             if !self.exchange_ui.active() && !self.file_browser.active() {
                 self.panels(ctx);
             }
@@ -1113,10 +1172,20 @@ impl eframe::App for Editor {
             self.file_browser_ui(ctx);
             self.sketch_pump(ctx);
         }
-        self.file_action_dialog(ctx);
+        if !guide_was_open && !workflow_guide::active(ctx) {
+            self.measurement_ui(ctx);
+            self.file_action_dialog(ctx);
+        }
+        workflow_guide::show(ctx);
+        let guide_is_open = workflow_guide::active(ctx);
+        if guide_was_open || guide_is_open {
+            self.sketch_help_input(ctx, !guide_is_open);
+        }
         // Text editors consume their own Undo first. Button focus must not
         // disable application shortcuts, and modals must block document writes.
         if !self.busy
+            && !guide_was_open
+            && !workflow_guide::active(ctx)
             && !self.unavailable()
             && self.draft.is_none()
             && self.sketch_creation.is_none()

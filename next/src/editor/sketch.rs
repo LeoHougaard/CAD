@@ -613,7 +613,7 @@ impl Editor {
         self.transaction("Draw sketch geometry", edits);
     }
     pub(super) fn sketch_canvas(&mut self, ui: &mut egui::Ui) {
-        if self.sketch_ui.session.is_none() || self.draft.is_some() {
+        if !ui.is_enabled() || self.sketch_ui.session.is_none() || self.draft.is_some() {
             return;
         }
         let Some(response) = self.viewport.response.clone() else {
@@ -768,6 +768,30 @@ impl Editor {
                 self.draw_point(point, snap, !alt);
             } else {
                 self.sketch_ui.selected_constraint = None;
+            }
+        }
+    }
+    pub(super) fn sketch_help_input(&mut self, ctx: &egui::Context, resume: bool) {
+        // Help cancels only the transient rubber band, never accepted picks.
+        self.sketch_ui.box_start = None;
+        let Some(drag) = &mut self.sketch_ui.drag else {
+            return;
+        };
+        if ctx.input(|i| {
+            !i.pointer.primary_down() || i.pointer.button_released(egui::PointerButton::Primary)
+        }) {
+            drag.released = true;
+        } else if resume && !drag.released {
+            // Resume from the last canvas target, without a jump to Help's
+            // cursor. If the pointer is unavailable, finish at that target.
+            if let Some(local) = ctx
+                .input(|i| i.pointer.interact_pos())
+                .and_then(|pos| self.viewport.sketch_point(pos))
+            {
+                drag.anchor = drag.target;
+                drag.origin = local;
+            } else {
+                drag.released = true;
             }
         }
     }

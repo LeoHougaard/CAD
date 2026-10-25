@@ -25,7 +25,9 @@ import sketch_operations as SketchOperations
 import feature_history as FeatureHistory
 import profile_references as ProfileReferences
 import expression_links as ExpressionLinks
+import assembly as AssemblyAuthoring
 import exchange as Exchange
+import measurements as Measurements
 import sketch_journal as SketchJournal
 import session_callbacks as SessionCallbacks
 
@@ -36,10 +38,12 @@ VERSION = 1
 OPERATIONS = ["capabilities", "new", "open", "inspect", "transaction", "undo",
               "redo", "save", "mesh", "topology", "close", "preview",
               "preview_commit", "preview_cancel", "sketch_begin", "sketch_finish", "sketch_cancel", "feature_schema", "export_exchange"]
+OPERATIONS.append("measure")
 EDIT_OPERATIONS = ["add_object", "set", "expression", "geometry", "constraint",
                    "datum", "move_geometry", "construction", "delete_geometry", "delete_constraint", "refraction", "via_point",
                    "constraint_state", "trim_geometry", "remove_object", "binder_support",
-                   "expose_internal", "external_geometry", "external_state", "delete_external", "import_exchange"]
+                   "expose_internal", "external_geometry", "external_state", "delete_external", "import_exchange", "detach_sketch"]
+EDIT_OPERATIONS += sorted(AssemblyAuthoring.OPERATIONS)
 EDIT_OPERATIONS += list(SketchOperations.OPERATIONS)
 EDIT_OPERATIONS += list(FeatureHistory.OPERATIONS)
 EDIT_OPERATIONS += list(ProfileReferences.OPERATIONS)
@@ -121,6 +125,8 @@ def document(request, writable=False):
         lease("pre_revision", key, request=request)
         revision_request("check", key, expected_revision=request.get("expected_revision"))
         lease("local", key, request=request)
+        if request.get("op") not in ("close", "preview_cancel", "sketch_cancel"):
+            validate_assembly_proxies(doc)
     return doc
 
 
@@ -326,6 +332,8 @@ def topology(shape, deflection=0.1):
 
 
 def world_from_shape(obj):
+    if obj.TypeId == "App::Link":
+        return encode(AssemblyAuthoring.link_world_from_shape(obj))
     if hasattr(obj, "getGlobalPlacement") and hasattr(obj, "Placement"):
         return encode(obj.getGlobalPlacement().multiply(obj.Placement.inverse()))
     return encode(App.Placement())
@@ -435,13 +443,14 @@ def body_states(doc):
 
 
 def snapshot(doc, revision=None):
+    validate_assembly_proxies(doc)
     objects = []
     bodies = body_states(doc)
     for obj in doc.Objects:
         entry = {"name": obj.Name, "type": obj.TypeId, "label": obj.Label,
                  "effective_visibility": effective_visibility(obj),
                  "valid": obj.isValid(), "status": obj.getStatusString(),
-                 "state": list(obj.State), **property_snapshot(obj)}
+                 "state": list(obj.State), **property_snapshot(obj), **AssemblyAuthoring.metadata(obj)}
         owner = owner_body(obj)
         entry["body"] = owner.Name if owner else None
         entry["history_flags"] = FeatureHistory.flags(obj, owner)
@@ -449,6 +458,8 @@ def snapshot(doc, revision=None):
             entry["body_state"] = bodies[obj.Name]
         if hasattr(obj, "getGlobalPlacement"):
             entry["global_placement"] = encode(obj.getGlobalPlacement())
+        elif obj.TypeId == "App::Link":
+            entry["global_placement"] = encode(AssemblyAuthoring.link_global_placement(obj))
         reference = reference_display(obj)
         if reference is not None:
             entry["reference_display"] = reference
@@ -497,7 +508,31 @@ def publish_state(doc, state):
     return state
 
 
+def validate_assembly_proxies(doc):
+    try:
+        AssemblyAuthoring.validate_proxies(doc)
+    except AssemblyAuthoring.AssemblyError as error:
+        fail(error.code, str(error))
+
+
+def recompute_document(doc):
+    validate_assembly_proxies(doc)
+    result = doc.recompute()
+    if result is not False and not _native_sketch_sessions.get(doc.Name):
+        try:
+            result = AssemblyAuthoring.solve_document(doc)
+        except AssemblyAuthoring.AssemblyError as error:
+            fail(error.code, str(error))
+    return result
+
+
 def validate(doc, whole=False):
+    validate_assembly_proxies(doc)
+    if whole:
+        try:
+            AssemblyAuthoring.solve_document(doc)
+        except AssemblyAuthoring.AssemblyError as error:
+            fail(error.code, str(error))
     session = _native_sketch_sessions.get(doc.Name)
     objects = [object_in(doc, session["object"])] if session and not whole else doc.Objects
     for obj in objects:
@@ -542,6 +577,11 @@ def set_boolean_tools(feature, tools):
 
 def apply_edit(doc, edit):
     op = edit.get("op", edit.get("kind"))
+    if op in AssemblyAuthoring.OPERATIONS:
+        try:
+            return AssemblyAuthoring.apply(doc, edit)
+        except AssemblyAuthoring.AssemblyError as error:
+            fail(error.code, str(error))
     if op in ProfileReferences.OPERATIONS:
         try:
             return ProfileReferences.apply(doc, edit)
@@ -630,6 +670,15 @@ def apply_edit(doc, edit):
             setattr(obj, prop, value)
         else:
             setattr(obj, prop, value)
+    elif op == "detach_sketch":
+        if not obj.isDerivedFrom("Sketcher::SketchObject"):
+            fail("invalid_request", "Detaching a sketch requires a native SketchObject")
+        doc.recompute()
+        obj.positionBySupport()
+        placement = obj.Placement.copy()
+        obj.MapMode = "Deactivated"
+        obj.AttachmentSupport = []
+        obj.Placement = placement
     elif op == "expression":
         prop = edit["property"]
         # Native canonical component paths can start with a self-relative dot.
@@ -759,7 +808,7 @@ def transaction(doc, request):
     doc.openTransaction(request.get("label", "Edit"))
     try:
         results = [apply_edit(doc, edit) for edit in edits]
-        if doc.recompute() is False:
+        if recompute_document(doc) is False:
             fail("invalid_model", "Native recompute failed")
         validate(doc)
         state = prepare_state(doc)
@@ -768,7 +817,7 @@ def transaction(doc, request):
     except Exception:
         try:
             doc.abortTransaction()
-            doc.recompute()
+            recompute_document(doc)
             validate(doc)
         except Exception:
             lease("poison", doc.Name)
@@ -906,7 +955,7 @@ def sketch_session(doc, request):
             if session["opened"]:
                 doc.abortTransaction()
                 session["opened"] = False
-            doc.recompute()
+            recompute_document(doc)
             validate(doc, whole=True)
             state = prepare_state(doc)
             state.update(sketch_edit=None, preview=None)
@@ -918,7 +967,7 @@ def sketch_session(doc, request):
             raise
     else:
         try:
-            if doc.recompute() is False:
+            if recompute_document(doc) is False:
                 fail("invalid_model", "Native finish recompute failed")
             validate(doc, whole=True)
             state = prepare_state(doc)
@@ -1010,7 +1059,7 @@ def preview(doc, request):
         else:
             try:
                 doc.abortTransaction()
-                doc.recompute()
+                recompute_document(doc)
                 validate(doc)
                 state = prepare_state(doc)
                 state["preview"] = None
@@ -1031,7 +1080,7 @@ def preview(doc, request):
     if active:
         try:
             doc.abortTransaction()
-            doc.recompute()
+            recompute_document(doc)
             validate(doc)
         except Exception:
             lease("poison", doc.Name)
@@ -1041,7 +1090,7 @@ def preview(doc, request):
     staged = False
     try:
         results = [apply_edit(doc, edit) for edit in edits]
-        if doc.recompute() is False:
+        if recompute_document(doc) is False:
             fail("invalid_model", "Native recompute failed")
         validate(doc)
         lease("preview_stage", doc.Name, request=request, label=label)
@@ -1053,12 +1102,12 @@ def preview(doc, request):
             lease("preview_resolve", doc.Name, accepted=False)
         try:
             doc.abortTransaction()
-            doc.recompute()
+            recompute_document(doc)
             if active:
                 doc.openTransaction(active["label"])
                 for edit in active["edits"]:
                     apply_edit(doc, edit)
-                doc.recompute()
+                recompute_document(doc)
             validate(doc)
         except Exception:
             lease("poison", doc.Name)
@@ -1092,7 +1141,10 @@ def dispatch(request):
                 "object_types": sorted(OBJECT_TYPES), "geometry_kinds": ["line", "circle", "arc", "point",
                     "ellipse", "ellipse_arc", "bspline", "hyperbola_arc", "parabola_arc"],
                 "constraint_signatures": SketchGeometry.CONSTRAINT_SIGNATURES,
-                "edit_operations": EDIT_OPERATIONS}
+                "edit_operations": EDIT_OPERATIONS,
+                "assembly": {"container_type": "Assembly::AssemblyObject", "instance_type": "App::Link",
+                             "joint_types": list(AssemblyAuthoring.JOINT_TYPES),
+                             "component_sources": ["local_document"], "external_file_insertion": False}}
     if op == "feature_schema":
         type_id = request.get("type")
         if type_id not in _feature_schemas:
@@ -1100,32 +1152,37 @@ def dispatch(request):
         return _feature_schemas[type_id]
     lease("global", request=request)
     if op in ("new", "open"):
-        if op == "new":
-            key = name(request["name"])
-            if key in App.listDocuments():
-                fail("name_conflict", "Document name already exists")
-            doc = App.newDocument(key)
-        else:
-            path = native_path(request["path"])
-            if not Path(path).is_file():
-                fail("not_found", "Native document does not exist")
-            if any(os.path.normcase(d.FileName) == os.path.normcase(path) for d in App.listDocuments().values()):
-                fail("already_open", "Native document is already open")
-            doc = App.openDocument(path)
+        before = set(App.listDocuments())
+        active = App.ActiveDocument
         try:
+            if op == "new":
+                key = name(request["name"])
+                if key in before:
+                    fail("name_conflict", "Document name already exists")
+                doc = App.newDocument(key)
+            else:
+                path = native_path(request["path"])
+                if not Path(path).is_file():
+                    fail("not_found", "Native document does not exist")
+                if any(os.path.normcase(d.FileName) == os.path.normcase(path) for d in App.listDocuments().values()):
+                    fail("already_open", "Native document is already open")
+                doc = App.openDocument(path)
             doc.UndoMode = 1
-            doc.recompute()
+            recompute_document(doc)
             # Untouched restored sketches can retain the Python DoF default 0
             # until their solver runs, even when they are underconstrained.
             # Initialize native freedom/conflict state before publishing it.
             for obj in doc.Objects:
                 if obj.isDerivedFrom("Sketcher::SketchObject") and obj.solve() != 0:
                     fail("invalid_model", obj.Name + ": native sketch solver rejected restored constraints")
-            doc.recompute()
+            recompute_document(doc)
             validate(doc)
             state = prepare_state(doc)
         except Exception:
-            App.closeDocument(doc.Name)
+            for key in set(App.listDocuments()) - before:
+                App.closeDocument(key)
+            if active is not None and active.Name in App.listDocuments():
+                App.setActiveDocument(active.Name)
             raise
         return publish_state(doc, state)
     if op not in OPERATIONS:
@@ -1133,6 +1190,16 @@ def dispatch(request):
     doc = document(request, writable=op in ("transaction", "undo", "redo", "save", "close",
                                            "preview", "preview_commit", "preview_cancel",
                                            "sketch_begin", "sketch_finish", "sketch_cancel", "export_exchange"))
+    if op == "measure":
+        lease("read_guard", doc.Name)
+        revision_request("check", doc.Name, expected_revision=request.get("expected_revision"))
+        active = sketch_metadata(doc)
+        try:
+            result = Measurements.measure(doc, request, active["object"] if active else None)
+        except Measurements.MeasurementError as error:
+            fail(error.code, str(error))
+        return {"document": doc.Name, "revision": revision_request("current", doc.Name),
+                "preview": preview_metadata(doc), "sketch_edit": active, **result}
     if op == "inspect":
         return snapshot(doc)
     if op == "transaction":
@@ -1158,7 +1225,7 @@ def dispatch(request):
         getattr(doc, op)()
         try:
             ExpressionLinks.repair_new(doc, names_before)
-            doc.recompute()
+            recompute_document(doc)
             validate(doc)
             state = prepare_state(doc)
         except Exception:
@@ -1166,7 +1233,7 @@ def dispatch(request):
                 names_before = {obj.Name for obj in doc.Objects}
                 getattr(doc, "redo" if op == "undo" else "undo")()
                 ExpressionLinks.repair_new(doc, names_before)
-                doc.recompute()
+                recompute_document(doc)
                 validate(doc)
             except Exception:
                 lease("poison", doc.Name)

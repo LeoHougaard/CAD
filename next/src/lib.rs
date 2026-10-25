@@ -1,5 +1,6 @@
 //! Persistent local modeling session. Native documents stay inside the worker.
 
+pub mod assembly_commands;
 pub mod body_commands;
 #[cfg(feature = "desktop")]
 pub mod editor;
@@ -7,6 +8,8 @@ pub mod extrusion_commands;
 pub mod feature_commands;
 mod gesture_leases;
 pub mod history_commands;
+pub mod measurement_commands;
+pub mod measurement_types;
 pub mod packages;
 pub mod profile_reference_commands;
 pub mod property_commands;

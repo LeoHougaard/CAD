@@ -11,6 +11,21 @@ struct Request {
     body: String,
     create_body: bool,
     support: Support,
+    #[serde(default)]
+    reversed: Option<bool>,
+    #[serde(default)]
+    offset: Option<Offset>,
+    #[serde(default)]
+    offset_expression: Option<String>,
+    #[serde(default)]
+    detach: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Offset {
+    position: [f64; 3],
+    rotation: [f64; 4],
 }
 
 #[derive(Deserialize)]
@@ -187,6 +202,37 @@ pub fn build(state: &Value, request: &Value) -> Result<Vec<Value>, String> {
             edits.push(json!({"op":"set","object":request.name,"property":"MapMode","value":mode}));
         }
     }
+    if let Some(reversed) = request.reversed {
+        edits.push(
+            json!({"op":"set","object":request.name,"property":"MapReversed","value":reversed}),
+        );
+    }
+    if let Some(offset) = request.offset {
+        if !offset
+            .position
+            .iter()
+            .chain(offset.rotation.iter())
+            .all(|v| v.is_finite())
+        {
+            return Err("Sketch offset must contain finite native placement values".into());
+        }
+        edits.push(
+            json!({"op":"set","object":request.name,"property":"AttachmentOffset",
+            "value":{"position":offset.position,"rotation":offset.rotation}}),
+        );
+    }
+    if let Some(expression) = request.offset_expression {
+        if expression.trim().is_empty() {
+            return Err("Enter a normal-offset expression or turn Expression off".into());
+        }
+        edits.push(json!({"op":"expression","object":request.name,
+            "property":"AttachmentOffset.Base.z","expression":expression}));
+    }
+    if request.detach {
+        // The native attachment engine evaluates the chosen support and offset
+        // before freezing its resulting placement. Rust does not infer a frame.
+        edits.push(json!({"op":"detach_sketch","object":request.name}));
+    }
     Ok(edits)
 }
 
@@ -209,6 +255,45 @@ mod tests {
     }
     fn request(support: Value) -> Value {
         json!({"name":"NewSketch","body":"Body","create_body":false,"support":support})
+    }
+
+    #[test]
+    fn attachment_options_follow_native_support_and_detach_last() {
+        let mut request = request(json!({"kind":"origin","role":"XY_Plane"}));
+        request["reversed"] = json!(true);
+        request["offset"] = json!({"position":[1.,2.,3.],"rotation":[0.,0.,0.,1.]});
+        request["offset_expression"] = json!("0.5 in");
+        request["detach"] = json!(true);
+        let edits = build(&state(), &request).unwrap();
+        assert_eq!(edits.len(), 5);
+        assert_eq!(edits[0]["origin_plane"], "XY_Plane");
+        assert_eq!(
+            edits[1],
+            json!({"op":"set","object":"NewSketch","property":"MapReversed","value":true})
+        );
+        assert_eq!(edits[2]["property"], "AttachmentOffset");
+        assert_eq!(
+            edits[3],
+            json!({"op":"expression","object":"NewSketch",
+            "property":"AttachmentOffset.Base.z","expression":"0.5 in"})
+        );
+        assert_eq!(edits[4], json!({"op":"detach_sketch","object":"NewSketch"}));
+    }
+
+    #[test]
+    fn attachment_option_rejects_missing_expression_and_malformed_placement() {
+        let mut request = request(json!({"kind":"origin","role":"XY_Plane"}));
+        request["offset_expression"] = json!("  ");
+        assert!(
+            build(&state(), &request)
+                .unwrap_err()
+                .contains("expression")
+        );
+        request.as_object_mut().unwrap().remove("offset_expression");
+        request["offset"] = json!({"position":[1.,2.],"rotation":[0.,0.,0.,1.]});
+        assert!(build(&state(), &request).is_err());
+        request["offset"] = json!({"position":[1.,2.,3.],"rotation":[0.,0.,0.,1.],"unknown":1});
+        assert!(build(&state(), &request).is_err());
     }
 
     #[test]

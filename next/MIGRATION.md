@@ -112,8 +112,11 @@ exposes typed native forms for revolutions, lofts, sweeps, holes, dress-ups,
 patterns, primitives and references. Conditional property values, expressions,
 links and native metadata share the guarded command boundary. Workflow fixtures
 cover specific cases, not every task option. Complete sketch/reference variants,
-remaining advanced feature workflows, suppression, assemblies and executable
-plugins remain open. See [UI-COVERAGE.md](UI-COVERAGE.md). This application work does not constitute a Rust geometry-kernel
+remaining advanced feature workflows, suppression, external-file and nested
+assemblies and executable plugins remain open. Local assembly authoring, native
+joints and measurement now have Rust task interfaces with bounded native and
+headless Editor verification. Their physical desktop acceptance remains open.
+See [UI-COVERAGE.md](UI-COVERAGE.md). This application work does not constitute a Rust geometry-kernel
 replacement.
 
 Local pipes keep native handles and failure ownership in one worker process and

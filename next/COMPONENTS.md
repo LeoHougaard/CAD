@@ -20,8 +20,9 @@ Third-party addons and unrelated FreeCAD workbenches have no blanket parity comm
 | Transactions, history and recomputation | C++ document transactions; Python native replay payloads and native sequencing; Rust preview/sketch tokens, worker-wide and active-sketch edit admission, staged gesture metadata, poison state, revisions and accepted-action journal. | Atomic failure, revision guards, preview ownership, action/document Undo/Redo, Cancel and validated final recomputation. |
 | Persistence and interchange | C++ FCStd and STEP/IGES through Python; Rust file browser; legacy prototype preserved separately. | Editable graph and references after reopen; explicit import/export coverage, browser cancellation/replacement, unsupported-data reporting and original preservation. |
 | PartDesign feature families | Native C++ features; selected operations exposed through Python and Rust forms/packages. | Each feature's complete declared options, linked parent edits, failure recovery, history and persistence. |
-| Assemblies | No replacement assembly implementation; native C++ Body placement available. | Joint/constraint behavior, component references, transforms, recomputation and saved assemblies. |
+| Assemblies | Rust local-component/joint command construction and task UI; Python adapter; shipped native Assembly solver, Joint/GroundedJoint proxies and App::Link instances. | Joint behavior, component references, transforms, recomputation, proxy restoration and saved assemblies. Local native/headless workflows pass; external-file insertion, nested authoring and real desktop acceptance remain open. |
 | Display, picking and input | Rust editor, OpenGL display and selection; native meshes/topology remain display inputs. | Occlusion, native identities, attached coordinates, multiple Bodies, gesture ownership and input during recomputation. |
+| Measure and inspect | Rust typed requests, result types and editor; Python read adapter; native FreeCAD/OCCT BRep measures, transforms and unit formatting. | Native scalar properties, distance witnesses, defined line/plane angles, transformed/nested references, read-only ownership/history/revisions, selection invalidation, units and reopen; real desktop acceptance remains open. |
 | Feature packages and agent protocol | Rust declarative loader, edit builders and persistent NDJSON host; Python native adapter. | Typed requests, errors, revision/ownership rules, equivalent agent/UI edits and extensibility without duplicate document history. |
 
 Functional gates remain for complete extrude/pocket termination and directions;
@@ -39,3 +40,9 @@ and poison state. Python retains opaque native replay payloads,
 native transaction sequencing and the decision when to advance a revision.
 Native sequencing remains a further bounded port.
 Native document transactions, solving and BRep geometry remain separate ports.
+
+The current sketch replay path has a known identity-preservation gap: cancelling
+a later task can replace native geometry IDs from earlier accepted actions.
+Its checkpoint-based correction is private, with Windows lifetime checks and
+Linux portability still under verification. The existing journal is not
+certified for complete native recovery behavior by the earlier matched tests.

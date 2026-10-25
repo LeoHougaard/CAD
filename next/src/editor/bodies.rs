@@ -451,7 +451,9 @@ impl Editor {
     fn select_tree_object(&mut self, name: &str, additive: bool) {
         select_tree_name(&mut self.body_ui.selected, name, additive);
         self.selected_object = self.tree_selections().last().cloned();
-        self.viewport.clear_selection();
+        if !self.measurement_keeps_selection(additive) {
+            self.viewport.clear_selection();
+        }
         if self.draft.is_none() {
             self.sketch = None;
             self.viewport.set_sketch(None);
@@ -471,6 +473,7 @@ impl Editor {
                 egui::ScrollArea::vertical()
                     .max_height(450.)
                     .show(ui, |ui| {
+                        self.assembly_tree(ui);
                         for body in &all {
                             let name = body["name"].as_str().unwrap_or_default();
                             self.feature_row(ui, body);
@@ -481,6 +484,8 @@ impl Editor {
                             .iter()
                             .filter(|object| {
                                 object["type"] != "PartDesign::Body"
+                                    && object["type"] != "Assembly::AssemblyObject"
+                                    && object["assembly"].is_null()
                                     && body_of(
                                         &self.state,
                                         object["name"].as_str().unwrap_or_default(),

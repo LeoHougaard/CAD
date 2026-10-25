@@ -358,14 +358,14 @@ static DEFINITIONS: &[FeatureDefinition] = &[
     ),
     feature!(
         "part.fuse",
-        "Union",
+        "Union of two objects",
         "Part::Fuse",
         "Part operations",
         ["Base", "Tool", "Refine"]
     ),
     feature!(
         "part.multi_fuse",
-        "Union",
+        "Union of multiple objects",
         "Part::MultiFuse",
         "Part operations",
         ["Shapes", "Refine"]

@@ -30,11 +30,23 @@ parameters. Responses repeat version and id, contain `ok`, and contain either
 
 The initial operations are `capabilities`, `new`, `open`, `inspect`, `transaction`,
 `preview`, `preview_commit`, `preview_cancel`, `undo`, `redo`, `save`, `mesh`,
-`topology`, `sketch_begin`, `sketch_finish`, `sketch_cancel` and `close`.
+`topology`, `measure`, `sketch_begin`, `sketch_finish`, `sketch_cancel` and `close`.
 `new` takes a document `name`; `open`
 and `save` take a native file `path`; other document operations take `document`.
 `mesh` and `topology` also take the result object's `object` name and optional
 positive `deflection`, default 0.1 model units.
+
+The shared Rust sketch-creation compiler accepts optional `reversed`, `offset`
+with native placement `position` and quaternion `rotation`, a native length
+`offset_expression`, and `detach`. Defaults preserve the original creation
+command. These options follow support assignment within the same guarded
+transaction. `offset_expression` targets `AttachmentOffset.Base.z` through the
+native expression engine. `detach_sketch` is a document edit for a native
+SketchObject: recompute and evaluate its native support, retain the resulting
+Placement, clear AttachmentSupport and set MapMode to Deactivated. It does not
+discard sketch geometry, constraints or dormant native offset data. The normal
+transaction revision/lease, rollback and validation rules apply. It is not a
+sketch-session edit or a separate placement solver.
 
 `transaction` takes `label`, `edits` and a required `expected_revision`. It
 applies its edits, recomputes and validates solid results before committing.
@@ -51,6 +63,17 @@ single-worker revision, not a cross-process file concurrency claim.
 return `missing_revision`; stale tokens return `stale_revision` before mutation.
 Read requests preserve revisions. Save advances the revision. A transaction's
 response is prepared before commit so serialization errors also abort the edit.
+
+`measure` is a guarded read with required `expected_revision` and one or two native
+`selections`. Each selection names an `object` and optional native `subelement`
+path, or an explicit native `sketch_geometry:{index,point}`. It returns applicable
+native scalar properties, world-space centers, native closest distance/witnesses,
+and straight-line/planar-normal angles where defined. Results use the document's
+native UnitSystem without changing global unit preferences. It neither recomputes
+nor changes native ownership, dirty state, revision or history, including on
+failure. During sketch editing, only the active sketch is current; cached solid
+context is rejected as `stale_context`. See [MEASUREMENTS.md](MEASUREMENTS.md) for
+the complete request, result, identity lifetime and UI workflow.
 
 `preview` takes `document`, the current `expected_revision`, a caller-chosen
 nonempty string `token` of at most 256 characters, `label` and nonempty `edits`.

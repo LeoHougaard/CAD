@@ -44,6 +44,19 @@ next/target/debug/cad-next-editor --runtime next/target/runtime.json
 Use `.exe` on Windows. `--open part.FCStd` opens an existing native document.
 Run this as a separate application; it does not replace `dist/CAD.exe`.
 
+**Help** or **F1** opens the workflow guide. Current instructions cover
+[local assemblies](ASSEMBLY.md), [measurements](MEASUREMENTS.md) and
+[sketch attachment options](SKETCH-ATTACHMENT.md). The separate parity checklist
+maps the audited UI routes and missing operations. Its evidence stays pinned to
+the stated commit; it does not certify complete functionality in the current build.
+Opening Help preserves the active modeling task. Escape dismisses Help first.
+
+Assembly tools create native local component instances, grounds and joints in the
+same document. Measure reads native geometry and units without accepting or
+canceling a modeling gesture. External-file insertion, nested assembly authoring,
+many sketch tools and broader Part Studio workflows remain open. See the
+[workflow ledger](WORKFLOWS.md) for the full scoped list and UI steps.
+
 Choose Sketch, then XY, XZ or YZ for native Body-origin attachment. Canceling
 the chooser makes no document writes and preserves Redo. A selected same-Body
 datum plane, existing sketch frame or planar solid face supplies native support
@@ -156,6 +169,13 @@ View provides seven standard directions, shaded/edge/wireframe display, native
 face/edge/vertex filters and Show/Hide. The tree includes references and guarded
 leaf deletion. Native planes and axes use bounded presentation graphics, preserving
 their actual native identities for attachment and selection.
+
+Measure or Ctrl+M inspects one or two selected native vertices, edges, faces or
+tree objects. The floating results show native quantities in document units,
+world-space centers, closest distance with witness points, and line/plane angles
+where defined. Clear selection, Recompute and Escape preserve the native model
+and active gesture. See [Measure and inspect](MEASUREMENTS.md) for the complete
+workflow and the limits of native/headless verification.
 Open, Save as, Import and Export use a modal file browser with folder navigation,
 format filters and destination replacement confirmation. Native documents use
 FCStd; geometry exchange uses STEP/IGES. Canceling the browser starts no native

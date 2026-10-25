@@ -50,6 +50,37 @@ class RuntimeArgumentTests(unittest.TestCase):
                 self.assertEqual(Path(command[len(prefix)]).name, "extrusion_termination_workflows.py")
                 self.assertEqual(command[len(prefix) + 1], "--native-fixtures")
 
+    def test_proxy_helper_preserves_launcher_arguments(self):
+        runtime = {
+            "executable": "/usr/bin/env",
+            "args": ["PYTHONPATH=/portable runtime/lib", "/portable runtime/AppRun", "python", "-u"],
+            "script": "/portable runtime/native worker.py",
+        }
+        with tempfile.TemporaryDirectory(prefix="cad proxy runtime args ") as temporary:
+            directory = Path(temporary)
+            config = directory / "runtime.json"
+            config.write_text(json.dumps(runtime), encoding="utf-8")
+            path = TESTS_ROOT / "proxy_restore_workflows.py"
+            spec = importlib.util.spec_from_file_location("proxy_runtime_guard", path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            commands = []
+
+            def capture(arguments, **options):
+                commands.append(list(arguments))
+                self.assertEqual(os.environ.get("PYTHONDONTWRITEBYTECODE"), "1")
+                raise NativeInvocationCaptured()
+
+            output = directory / "outputs with spaces"
+            arguments = [str(path), "--host", "unused host", "--runtime", str(config), "--output", str(output)]
+            with patch.dict(os.environ), patch.object(sys, "argv", arguments), \
+                    patch.object(module.subprocess, "run", capture):
+                with self.assertRaises(NativeInvocationCaptured):
+                    module.main()
+            self.assertEqual(commands, [[runtime["executable"], *runtime["args"], str(module.SUPPORT),
+                "--fixtures", str(Path(runtime["script"]).resolve().parent), str(output.resolve() / "fixtures")]])
+            self.assertEqual(json.loads(config.read_text(encoding="utf-8")), runtime)
+
     def test_whole_object_preparation_and_worker_preserve_runtime(self):
         runtime = {
             "executable": "/usr/bin/env",

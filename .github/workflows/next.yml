@@ -32,6 +32,8 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # Workflow evidence resolves its pinned source commit.
       - name: Linux runtime libraries
         if: runner.os == 'Linux'
         run: |
@@ -52,6 +54,8 @@ jobs:
           cargo build --manifest-path next/Cargo.toml --all-features --bins --locked
           python -B next/tests/session_callback_tests.py
           python -B next/tests/runtime_argument_tests.py
+          python -B next/tools/validate_workflows.py
+          python -B next/tests/workflow_ledger_tests.py
       - name: Verified native runtime
         run: python next/tools/setup_runtime.py --output next/target/runtime.json
       - name: Native sketch editing, attachment, fillets, Bodies and history
@@ -73,6 +77,11 @@ jobs:
           python next/tests/body_workflows.py --host "$host" --compiler "$compiler" --runtime next/target/runtime.json --output next/target/body-documents
           python next/tests/history_workflows.py --host "$host" --compiler "$compiler" --runtime next/target/runtime.json --output next/target/history-documents
           python next/tests/sketch_creation_workflows.py --host "$host" --compiler "$compiler" --runtime next/target/runtime.json --output next/target/sketch-creation-documents
+          python -B next/tests/sketch_attachment_workflows.py --host "$host" --compiler "$compiler" --runtime next/target/runtime.json --output next/target/sketch-attachment-documents
+          python -B next/tests/assembly_workflows.py --host "$host" --compiler "$compiler" --runtime next/target/runtime.json --output next/target/assembly-documents
+          python -B next/tests/assembly_loading_workflows.py --host "$host" --runtime next/target/runtime.json --output next/target/assembly-loading-documents
+          python -B next/tests/proxy_restore_workflows.py --host "$host" --runtime next/target/runtime.json --output next/target/proxy-restore-documents
+          python -B next/tests/measurement_workflows.py --host "$host" --runtime next/target/runtime.json --output next/target/measurement-documents
           python next/tests/profile_reference_workflows.py --host "$host" --compiler "$compiler" --runtime next/target/runtime.json --output next/target/profile-reference-documents
           python next/tests/profile_materialization_workflows.py --host "$host" --compiler "$compiler" --runtime next/target/runtime.json --output next/target/profile-materialization-documents
           python next/tests/common_dimension_workflows.py --host "$host" --compiler "$sketch_compiler" --runtime next/target/runtime.json --output next/target/common-dimension-documents
@@ -112,3 +121,29 @@ jobs:
         run: |
           mkdir -p "$CAD_LIFECYCLE_OUTPUT" "$FREECAD_USER_HOME"
           cargo test --manifest-path next/Cargo.toml --all-features --locked editor::sketch::lifecycle_tests:: -- --ignored --test-threads=1
+      - name: Native assembly, measurement, attachment and reference editor workflows
+        env:
+          FREECAD_USER_HOME: ${{ github.workspace }}/next/target/parity-editor-config
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          cargo test --manifest-path next/Cargo.toml --all-features --locked --no-run --message-format=json > next/target/editor-test-artifacts.jsonl
+          python -B - <<'PY'
+          import json, os, pathlib, subprocess, sys
+          root = pathlib.Path.cwd()
+          artifacts = [json.loads(line) for line in (root/'next/target/editor-test-artifacts.jsonl').read_text().splitlines() if line.startswith('{')]
+          binary = next(a['executable'] for a in artifacts if a.get('reason') == 'compiler-artifact' and a.get('executable') and 'lib' in a['target']['kind'] and a['profile']['test'])
+          out = root/'next/target/parity-editor-documents'
+          out.mkdir()
+          runtime = str(root/'next/target/runtime.json')
+          for case in ['native_assembly_authoring', 'native_joint_override_opt_out']:
+              env = dict(os.environ, CAD_ASSEMBLY_RUNTIME=runtime, CAD_ASSEMBLY_OUTPUT=str(out/case))
+              subprocess.run([binary, 'editor::assembly::tests::'+case, '--exact', '--ignored', '--test-threads=1'], env=env, check=True)
+          (out/'attachment').mkdir()
+          env = dict(os.environ, CAD_SKETCH_ATTACHMENT_RUNTIME=runtime, CAD_SKETCH_ATTACHMENT_OUTPUT=str(out/'attachment'))
+          subprocess.run([binary, 'editor::sketch_creation::native_tests::', '--ignored', '--test-threads=1'], env=env, check=True)
+          env = dict(os.environ, CAD_MEASUREMENT_RUNTIME=runtime, CAD_MEASUREMENT_OUTPUT=str(out/'measurement'))
+          subprocess.run([binary, 'editor::measurements::tests::', '--ignored', '--skip', 'scene_tests::', '--test-threads=1'], env=env, check=True)
+          host = root/'next/target/debug'/('cad-next.exe' if os.name == 'nt' else 'cad-next')
+          subprocess.run([sys.executable, '-B', 'next/tests/measurement_scene_workflows.py', '--host', str(host), '--runtime', runtime, '--editor-tests', binary, '--output', str(out/'link-scene')], check=True)
+          subprocess.run([sys.executable, '-B', 'next/tests/reference_selection_workflows.py', '--runtime', runtime, '--tests', binary, '--output', str(out/'reference-selection')], check=True)
+          PY

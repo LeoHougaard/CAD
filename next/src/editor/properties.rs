@@ -392,22 +392,27 @@ impl Editor {
                                         } else {
                                             native_objects
                                         };
-                                        let profile_selection;
-                                        let link_selection = if property == "Profile"
+                                        let profile_selection = if property == "Profile"
                                             || extrusion
                                                 && crate::extrusion_commands::reference(&property)
                                         {
-                                            profile_selection = self
-                                                .property_ui
-                                                .reference
-                                                .selections(&object_name, &selected);
-                                            &profile_selection
+                                            Some(
+                                                self.property_ui
+                                                    .reference
+                                                    .selections(&object_name, &selected),
+                                            )
                                         } else {
-                                            &selected
+                                            None
+                                        };
+                                        let link_selection = match &profile_selection {
+                                            Some(result) => {
+                                                result.as_deref().map_err(String::as_str)
+                                            }
+                                            None => Ok(selected.as_slice()),
                                         };
                                         let target = extrusion
                                             && crate::extrusion_commands::reference(&property);
-                                        value_changed = property_widget(
+                                        value_changed = property_widget_with_selection(
                                             ui,
                                             &property,
                                             type_id,
@@ -416,13 +421,16 @@ impl Editor {
                                             &mut self.property_ui.buffers,
                                             link_objects,
                                             &object_name,
-                                            if target { &[] } else { link_selection },
+                                            if target { Ok(&[]) } else { link_selection },
                                         );
                                         if target {
-                                            let selection = crate::extrusion_commands::selection(
-                                                &property,
-                                                link_selection,
-                                            );
+                                            let selection = link_selection
+                                                .map_err(str::to_owned)
+                                                .and_then(|picks| {
+                                                    crate::extrusion_commands::selection(
+                                                        &property, picks,
+                                                    )
+                                                });
                                             let reason = selection
                                                 .as_ref()
                                                 .err()
@@ -433,11 +441,17 @@ impl Editor {
                                                     selection.is_ok(),
                                                     egui::Button::new("Use native selection"),
                                                 )
-                                                .on_disabled_hover_text(reason)
+                                                .on_disabled_hover_text(&reason)
                                                 .clicked()
                                             {
                                                 value = selection.unwrap();
                                                 value_changed = true;
+                                            }
+                                            if !selected.is_empty() && !reason.is_empty() {
+                                                ui.colored_label(
+                                                    egui::Color32::from_rgb(225, 142, 138),
+                                                    reason,
+                                                );
                                             }
                                         }
                                     }
@@ -592,6 +606,32 @@ pub(super) fn property_widget(
     own: &str,
     selected: &[(String, String)],
 ) -> bool {
+    property_widget_with_selection(
+        ui,
+        property,
+        type_id,
+        metadata,
+        value,
+        buffers,
+        objects,
+        own,
+        Ok(selected),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn property_widget_with_selection(
+    ui: &mut egui::Ui,
+    property: &str,
+    type_id: &str,
+    metadata: &Value,
+    value: &mut Value,
+    buffers: &mut BTreeMap<String, String>,
+    objects: &[Value],
+    own: &str,
+    selections: Result<&[(String, String)], &str>,
+) -> bool {
+    let selected = selections.unwrap_or_default();
     let before = value.clone();
     let kind = type_id.strip_prefix("App::Property").unwrap_or_default();
     if type_id == "Part::PropertyFilletEdges" {
@@ -623,8 +663,13 @@ pub(super) fn property_widget(
     } else if kind.starts_with("Link") || kind.starts_with("XLink") {
         let multiple = kind.contains("List");
         let sub = kind.contains("Sub");
+        let selection = selections
+            .map_err(str::to_owned)
+            .and_then(|picks| property_commands::selected_reference(type_id, objects, picks));
+        let reason = selection.as_ref().err().cloned().unwrap_or_default();
         if multiple {
             let mut links = value.as_array().cloned().unwrap_or_default();
+            let previous = links.clone();
             let mut remove = None;
             let mut reorder = None;
             let count = links.len();
@@ -673,27 +718,31 @@ pub(super) fn property_widget(
                         }
                     });
                     if ui
-                        .add_enabled(!selected.is_empty(), egui::Button::new("Use selection"))
+                        .add_enabled(selection.is_ok(), egui::Button::new("Use selection"))
+                        .on_disabled_hover_text(&reason)
                         .clicked()
                     {
-                        links = property_commands::selected_links(selected, sub)
-                            .as_array()
-                            .unwrap()
-                            .clone();
+                        links = selection.as_ref().unwrap().as_array().unwrap().clone();
                     }
                 });
             });
-            *value = json!(links);
+            if links != previous {
+                *value = json!(links);
+            }
         } else {
             ui.vertical(|ui| {
                 link_widget(ui, value, sub, objects, own);
                 if ui
-                    .add_enabled(!selected.is_empty(), egui::Button::new("Use selection"))
+                    .add_enabled(selection.is_ok(), egui::Button::new("Use selection"))
+                    .on_disabled_hover_text(&reason)
                     .clicked()
                 {
-                    *value = property_commands::selected_links(selected, sub)[0].clone();
+                    *value = selection.as_ref().unwrap().clone();
                 }
             });
+        }
+        if (selections.is_err() || !selected.is_empty()) && selection.is_err() {
+            ui.colored_label(egui::Color32::from_rgb(225, 142, 138), reason);
         }
     } else if matches!(kind, "Vector" | "VectorDistance" | "Position") {
         vector_widget(ui, value, 3);
@@ -1128,3 +1177,7 @@ mod tests {
 #[cfg(test)]
 #[path = "properties/extrusion_acceptance.rs"]
 mod acceptance_probe;
+
+#[cfg(test)]
+#[path = "properties/reference_selection_tests.rs"]
+mod reference_selection_tests;

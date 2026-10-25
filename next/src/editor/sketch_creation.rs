@@ -8,6 +8,57 @@ pub(super) struct SketchCreation {
     state: Value,
     request: Value,
     pending: bool,
+    show_options: bool,
+    reversed: bool,
+    detach: bool,
+    position: [f64; 3],
+    axis: [f64; 3],
+    angle: f64,
+    expression: bool,
+    offset_expression: String,
+}
+
+impl SketchCreation {
+    fn native_request(&self) -> Result<Value, String> {
+        let mut request = self.request.clone();
+        if self.reversed {
+            request["reversed"] = json!(true);
+        }
+        if self.position != [0.; 3] || self.angle != 0. {
+            if !self
+                .position
+                .iter()
+                .chain(self.axis.iter())
+                .all(|v| v.is_finite())
+                || !self.angle.is_finite()
+            {
+                return Err("Enter finite sketch offset and rotation values".into());
+            }
+            let mut rotation = [0., 0., 0., 1.];
+            if self.angle != 0. {
+                let length = self.axis.iter().fold(0_f64, |n, v| n.hypot(*v));
+                let half = self.angle.to_radians() * 0.5;
+                if length == 0. || !length.is_finite() || !half.is_finite() {
+                    return Err("Choose a nonzero rotation axis and a finite angle".into());
+                }
+                let (sin, cos) = half.sin_cos();
+                rotation = [
+                    self.axis[0] / length * sin,
+                    self.axis[1] / length * sin,
+                    self.axis[2] / length * sin,
+                    cos,
+                ];
+            }
+            request["offset"] = json!({"position":self.position,"rotation":rotation});
+        }
+        if self.expression {
+            request["offset_expression"] = json!(self.offset_expression);
+        }
+        if self.detach {
+            request["detach"] = json!(true);
+        }
+        Ok(request)
+    }
 }
 
 fn reference_support(state: &Value, body: &str, name: &str, face: Option<&str>) -> Option<Value> {
@@ -53,6 +104,14 @@ fn support_label(state: &Value, support: &Value) -> String {
 
 impl Editor {
     pub(super) fn new_sketch(&mut self) {
+        self.start_sketch_creation(false);
+    }
+
+    pub(super) fn new_sketch_with_options(&mut self) {
+        self.start_sketch_creation(true);
+    }
+
+    fn start_sketch_creation(&mut self, show_options: bool) {
         if self.busy
             || self.sketch_creation.is_some()
             || self.draft.is_some()
@@ -81,12 +140,20 @@ impl Editor {
                     .as_deref()
                     .and_then(|name| reference_support(&self.state, &body, name, None))
             });
-        let apply = selected.is_some();
+        let apply = selected.is_some() && !show_options;
         self.sketch_creation = Some(SketchCreation {
             state: self.state.clone(),
             request: json!({"name":name,"body":body,"create_body":create_body,
                 "support":selected.unwrap_or_else(|| json!({"kind":"origin","role":"XY_Plane"}))}),
             pending: false,
+            show_options,
+            reversed: false,
+            detach: false,
+            position: [0.; 3],
+            axis: [0., 0., 1.],
+            angle: 0.,
+            expression: false,
+            offset_expression: String::new(),
         });
         if apply {
             self.create_attached_sketch();
@@ -100,7 +167,14 @@ impl Editor {
         if self.busy || creation.pending {
             return;
         }
-        let edits = match sketch_creation_commands::build(&creation.state, &creation.request) {
+        let request = match creation.native_request() {
+            Ok(request) => request,
+            Err(error) => {
+                self.error = Some(error);
+                return;
+            }
+        };
+        let edits = match sketch_creation_commands::build(&creation.state, &request) {
             Ok(edits) => edits,
             Err(error) => {
                 self.error = Some(error);
@@ -112,7 +186,14 @@ impl Editor {
         self.prepare_new_sketch();
         self.selected_object = Some(name.clone());
         self.sketch = Some(name);
-        self.transaction("Create attached sketch", edits);
+        self.transaction(
+            if request["detach"] == true {
+                "Create unattached sketch"
+            } else {
+                "Create attached sketch"
+            },
+            edits,
+        );
     }
 
     pub(super) fn sketch_creation_reply(&mut self, op: &str, success: bool) {
@@ -185,6 +266,37 @@ impl Editor {
                             ui.label(support_label(&task.state, &task.request["support"]));
                         }
                     });
+                egui::CollapsingHeader::new("Attachment options")
+                    .default_open(task.show_options)
+                    .show(ui, |ui| {
+                        ui.checkbox(&mut task.reversed, "Reverse normal");
+                        ui.checkbox(&mut task.detach, "Unattached")
+                            .on_hover_text("Keep the computed plane and position without following this support");
+                        ui.label("Offset in the support frame");
+                        ui.horizontal(|ui| {
+                            for (i, label) in ["X", "Y", "Z"].iter().enumerate() {
+                                ui.label(*label);
+                                ui.add_enabled(!task.expression || i != 2,
+                                    egui::DragValue::new(&mut task.position[i]).speed(0.1).suffix(" mm"));
+                            }
+                        });
+                        ui.checkbox(&mut task.expression, "Normal offset expression");
+                        if task.expression {
+                            ui.text_edit_singleline(&mut task.offset_expression)
+                                .on_hover_text("Native length expression, for example Base.Height / 2 or 0.5 in");
+                        }
+                        ui.label("Rotation axis in the support frame");
+                        ui.horizontal(|ui| {
+                            for (i, label) in ["X", "Y", "Z"].iter().enumerate() {
+                                ui.label(*label);
+                                ui.add(egui::DragValue::new(&mut task.axis[i]).speed(0.05));
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Angle");
+                            ui.add(egui::DragValue::new(&mut task.angle).speed(1.).suffix(" deg"));
+                        });
+                    });
                 ui.horizontal(|ui| {
                     apply = ui.button("Create sketch").clicked();
                     cancel = ui.button("Cancel").clicked();
@@ -202,6 +314,64 @@ impl Editor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn creation() -> SketchCreation {
+        SketchCreation {
+            state: Value::Null,
+            request: json!({"name":"Sketch","body":"Body","create_body":true,
+                "support":{"kind":"origin","role":"XY_Plane"}}),
+            pending: false,
+            show_options: true,
+            reversed: false,
+            detach: false,
+            position: [0.; 3],
+            axis: [0., 0., 1.],
+            angle: 0.,
+            expression: false,
+            offset_expression: String::new(),
+        }
+    }
+
+    #[test]
+    fn unchanged_creation_options_preserve_existing_command_payload() {
+        let creation = creation();
+        assert_eq!(creation.native_request().unwrap(), creation.request);
+    }
+
+    #[test]
+    fn rotated_offset_fields_compile_the_local_axis_and_preserve_native_formula() {
+        let mut creation = creation();
+        creation.position = [1., 2., 3.];
+        creation.angle = 180.;
+        creation.axis = [0., 2., 0.];
+        creation.reversed = true;
+        creation.expression = true;
+        creation.offset_expression = "Base.Height / 2".into();
+        creation.detach = true;
+        let request = creation.native_request().unwrap();
+        assert_eq!(request["offset"]["position"], json!([1., 2., 3.]));
+        let rotation: Vec<f64> =
+            serde_json::from_value(request["offset"]["rotation"].clone()).unwrap();
+        assert!(
+            rotation[0].abs() < 1e-12
+                && (rotation[1] - 1.).abs() < 1e-12
+                && rotation[2].abs() < 1e-12
+                && rotation[3].abs() < 1e-12
+        );
+        assert_eq!(request["offset_expression"], "Base.Height / 2");
+        assert_eq!(request["reversed"], true);
+        assert_eq!(request["detach"], true);
+    }
+
+    #[test]
+    fn rotation_axis_must_define_an_actual_rotation() {
+        let mut creation = creation();
+        creation.angle = 30.;
+        creation.axis = [0.; 3];
+        assert!(creation.native_request().is_err());
+        creation.angle = 0.;
+        assert_eq!(creation.native_request().unwrap(), creation.request);
+    }
     #[test]
     fn tree_support_preserves_native_frames_and_rejects_other_bodies_and_nonplanes() {
         let state = json!({"objects":[
@@ -228,3 +398,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod native_tests;

@@ -983,3 +983,113 @@ tests, the new dimension/whole-object suites, all 70 extrusion comparisons and
 tests. CI now runs 31 native workflow suites and those eleven Editor tests on
 Windows and Linux. Real desktop checks and their saved-file evidence are tracked
 separately; headless results alone do not establish desktop acceptance.
+## Assembly, measurement and attachment integration
+
+The current development batch adds local native assembly authoring, read-only
+measurement, sketch attachment options and an optional Help/F1 workflow guide.
+Rust still calls the pinned FreeCAD/OCCT modeling system. These are native
+functionality exposed through the Rust application, not Rust solver or kernel
+replacements. Full Part Studio and Assembly parity remains open.
+
+The combined source passes 212 active Rust tests, all-target Clippy with warnings
+denied and desktop/CLI builds. Runtime-dependent Editor tests are separated from
+ordinary Cargo tests and enabled explicitly. Headless Editor checks cover two
+assembly workflows, eleven attachment/Help cases and five measurement/Help
+cases. A separate scene test picks native vertices on placed nested
+Parts, Links with LinkTransform enabled and disabled, and a Link targeting a
+Link. Displayed mesh vertices, topology, global frames, measurements and nonempty
+distance witnesses match independently generated native controls. This closes
+the tested Link display/frame integration gate for those fixtures.
+
+The scene gate also covers uniform scale 2, reflection by scale -1 and native
+nonuniform ScaleVector values 1.5, 0.7 and 2 on rotated, nested Links. Native
+validity and absolute volume factors are checked before saving. The combined
+host and actual Editor pick all seven fixture vertices in the native world
+frame; measured centers, mesh corners and nonempty pair witnesses agree within
+the existing tolerance. These are headless viewport events, not physical GUI
+delivery or general scaled-assembly certification.
+
+The public attachment suite passes 16 direct native comparisons, expression
+failure rollback, unit correction, parent edits, native document history and
+saved reopen. Capability discovery now advertises `detach_sketch` alongside its
+execution. The measurement suite passes 29 native controls, 426 scalar
+comparisons and 51 reads, including native units, transformed references,
+ownership guards and save/reopen. The assembly suite passes local component and
+joint creation/editing, native parent updates, placement, rejected edits,
+Cancel, Undo/Redo and saved reopen. Independent reviews cover the assembly
+property opt-out correction, discarded measurement read recovery and sketch
+attachment options.
+
+The initial combined test runner reused one assembly output directory and omitted
+the sketch harness's parent directory. Those setup failures are retained; the
+same tests pass with fresh per-test output directories and the required parent.
+No product change was made for those runner errors.
+
+The first resource comparison rejected eager assembly proxy imports. The
+Part Studio fixture grew from 80.46 to 120.46 MiB, and warm startup from 831 to
+1121 ms. Joint proxies now load on native grounding/joint use or FCStd proxy
+restoration. A separate fresh-process native test checks deferred loading,
+all thirteen advertised/native joint types, saved proxy restoration, continued
+editing and native history. No native joint or geometry implementation was
+replaced.
+
+The repeated interleaved resource comparison uses the same compiled host for
+the candidate before and after this loading change. All gates pass: baseline
+80.11 MiB versus candidate 81.35 MiB working set, peak 80.72 versus 81.96 MiB,
+warm startup median 783 versus 798 ms, zero measured CPU in six five-second idle
+samples, and accepted transaction/history/preview timings within the established
+limits. This is a debug headless Windows Part Studio fixture with 16 geometries,
+47 constraints, 64 accepted sketch actions and 32 Undo/Redo actions. It does not
+measure desktop latency or memory after assembly proxy use.
+
+After integrating proxy-restoration admission, a fresh matched comparison also
+passes every existing gate. Working set medians are 80.39 and 81.41 MiB, peak
+medians 81.01 and 82.00 MiB, and warm startup medians 712 and 728 ms. All six
+five-second idle samples measure zero process CPU. Transaction, Undo/Redo,
+preview, Cancel and Finish timings stay within the predeclared limits. This uses
+the same bounded headless Part Studio workload and excludes the private
+checkpoint, Hole-task and document-units candidates.
+
+The corrected reference-selection and workflow-ledger batch passes independent
+review, 48 public ledger checks and combined Editor/native reference workflows.
+Historical anchors and labels resolve from their pinned commit or a hash-verified
+source tree. Strict current catalog compatibility retains explicit presentation
+updates for the two Union entries. Stale Profile and termination picks preserve
+the draft and accepted native candidate until corrected.
+
+All 36 native workflow suites pass on Windows x64 after integrating the reviewed
+proxy-restoration guard. The rebuilt actual Editor tests also pass for assembly,
+attachment/Help, measurement/Help, native reference selection, lifecycle recovery
+and proxy-restore rejection with unsaved content and save-path preservation.
+Physical desktop acceptance and cross-platform CI for this batch are pending.
+
+Independent review found that opening Help during a live sketch drag could
+change the pending drag target. The correction now blocks canvas input while
+Help is open and resumes a held drag from its last accepted target. The exact
+baseline regression fails before the correction and passes afterward. Focused
+native Editor tests also cover release, pointer loss, dismissal and delayed
+preview replies. Independent review closed this defect within that scope.
+
+Further data-preservation checks hold complete session promotion. A failed native assembly
+proxy restoration could publish and save a document without its joint proxies.
+The rejection and failed-Open cleanup passed independent native and cached
+Editor review and are now integrated. Missing or partially restored proxies
+reject publication and writes; failed Open closes only its new documents and
+restores the previous active document. Dirty existing Parts and external
+documents remain intact. Ordinary Parts, Links and empty assemblies retain
+deferred proxy loading. Independent review also closed the public regression's
+launcher ordering correction. Its unchanged baseline fails, the correction
+passes through GNU env, and the configured runtime prefix stays intact. The
+combined Windows native and actual Editor checks above include this correction.
+Sketch action replay can replace native geometry identities after cancellation.
+Its private checkpoint correction passes Windows ownership and repeated-restore
+memory checks, but Linux support and combined integration remain open.
+The checkpoint correction remains private and is excluded from the 36-suite
+results. The frozen first desktop candidate remains on hold.
+
+External-file assembly insertion, broad joint and
+connector combinations, arbitrary scaled/reflected Links and broader attachment
+modes remain open. A direct native probe returned success for four attempted
+contradictory-joint fixtures, so it does not establish nonzero-solver rollback.
+No complete-parity or performance claim follows from these finite checks.
+

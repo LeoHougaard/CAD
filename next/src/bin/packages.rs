@@ -47,6 +47,7 @@ enum Mode {
     History(Value),
     Reference(Value),
     SketchCreate(Value),
+    Assembly(Value),
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -78,7 +79,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             | "--extrusion-schema"
             | "--native-history"
             | "--native-reference"
-            | "--native-sketch-create" => {
+            | "--native-sketch-create"
+            | "--native-assembly" => {
                 if mode.is_some() {
                     return Err("Choose one feature compiler mode".into());
                 }
@@ -99,6 +101,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         args.next()
                             .ok_or("--native-reference requires JSON or - for stdin")?,
                     )?),
+                    "--native-assembly" => Mode::Assembly(read_json(
+                        args.next().ok_or("--native-assembly requires JSON or -")?,
+                    )?),
                     "--native-sketch-create" => Mode::SketchCreate(read_json(
                         args.next()
                             .ok_or("--native-sketch-create requires JSON or - for stdin")?,
@@ -110,6 +115,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 });
             }
             "--help" | "-h" => {
+                println!(
+                    "--native-assembly JSON builds native Assembly/Link/joint edits from {{state,request}}. Use - for stdin."
+                );
                 println!(
                     "cad-next-packages [--package-dir DIR] [--id ID --parameters JSON]\nLists local packages, or builds native edits for the chosen package.\n--feature-catalog lists native feature definitions.\n--feature-seed JSON suggests native properties from {{type,state,name,body?,selected_object?,selections?}}.\n--native-properties JSON builds the same native property edits as the editor.\n--extrusion-schema JSON derives Pad/Pocket task fields from {{schema,parameters}}.\n--native-history JSON builds Body Tip/reorder edits from {{state,request}}.\n--native-reference JSON builds profile reference edits from {{state,request}}.\n--native-sketch-create JSON builds native sketch attachment edits from {{state,request}}.\nUse - instead of JSON to read a request from stdin. These commands do not mutate documents."
                 );
@@ -123,6 +131,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             return Err("Feature compiler modes cannot be mixed with package options".into());
         }
         let result = match mode {
+            Mode::Assembly(request) => {
+                let request: HistoryRequest = serde_json::from_value(request)?;
+                serde_json::to_value(cad_next::assembly_commands::build(
+                    &request.state,
+                    &request.request,
+                )?)?
+            }
             Mode::History(request) => {
                 let request: HistoryRequest = serde_json::from_value(request)?;
                 serde_json::to_value(cad_next::history_commands::build(

@@ -31,14 +31,17 @@ impl ProfileReferenceUi {
         &self,
         own: &str,
         selected: &[(String, String)],
-    ) -> Vec<(String, String)> {
-        selected
+    ) -> Result<Vec<(String, String)>, String> {
+        // The edited feature and its temporary copy are intentional exclusions.
+        // Every other identity must be checked, rather than silently dropping
+        // a stale pick and accepting only the surviving part of a selection.
+        let references: Vec<_> = selected
             .iter()
-            .filter(|(name, _)| {
-                name != own && self.objects().iter().any(|object| object["name"] == *name)
-            })
+            .filter(|(name, _)| name != own && name != &self.name)
             .cloned()
-            .collect()
+            .collect();
+        crate::property_commands::validate_selected_objects(self.objects(), &references)?;
+        Ok(references)
     }
 
     fn foreign(&self, parameters: &Value, value: &Value) -> bool {
@@ -117,6 +120,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn missing_picks_reject_before_filtering_and_own_copy_exclusion_is_explicit() {
+        let model = ProfileReferenceUi::new(
+            &json!({"objects":[{"name":"A"},{"name":"B"}]}),
+            "Copy".into(),
+        );
+        let picks = |items: &[(&str, &str)]| {
+            items
+                .iter()
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            model
+                .selections(
+                    "Result",
+                    &picks(&[
+                        ("Result", "Face1"),
+                        ("Copy", "Face2"),
+                        ("A", "Face2"),
+                        ("A", "Face1")
+                    ])
+                )
+                .unwrap(),
+            picks(&[("A", "Face2"), ("A", "Face1")])
+        );
+        assert!(
+            model
+                .selections("Result", &picks(&[("Result", "Face1"), ("Copy", "")]))
+                .unwrap()
+                .is_empty()
+        );
+        for selected in [
+            picks(&[("A", ""), ("Gone", "")]),
+            picks(&[("Result", "Face1"), ("Gone", "Face2")]),
+            picks(&[("Gone", "")]),
+        ] {
+            let error = model.selections("Result", &selected).unwrap_err();
+            assert!(error.contains("Gone") && error.contains("stale"));
+        }
+    }
+
+    #[test]
     fn native_default_and_source_stay_stable_across_copy_previews_and_local_selection_clears_choice()
      {
         let state = json!({"objects":[
@@ -125,14 +170,16 @@ mod tests {
         ]});
         let model = ProfileReferenceUi::new(&state, "Reference1".into());
         assert_eq!(
-            model.selections(
-                "Pad",
-                &[
-                    ("Reference1".into(), "Face1".into()),
-                    ("Pad".into(), "Face1".into()),
-                    ("Foreign".into(), String::new())
-                ]
-            ),
+            model
+                .selections(
+                    "Pad",
+                    &[
+                        ("Reference1".into(), "Face1".into()),
+                        ("Pad".into(), "Face1".into()),
+                        ("Foreign".into(), String::new())
+                    ]
+                )
+                .unwrap(),
             vec![("Foreign".into(), String::new())]
         );
         let ctx = egui::Context::default();

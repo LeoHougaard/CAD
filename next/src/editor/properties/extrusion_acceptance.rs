@@ -67,6 +67,7 @@ impl NativeEditor {
             transform_ui: super::super::transforms::TransformUi::default(),
             exchange_ui: super::super::exchange::ExchangeUi::default(),
             draft: None,
+            measurement_ui: super::super::measurements::MeasurementUi::default(),
             sequence: 0,
             error: None,
             status: String::new(),
@@ -604,3 +605,6 @@ fn extrusion_editor_pad() {
 fn extrusion_editor_pocket() {
     run_kind("Pocket");
 }
+
+#[path = "reference_selection_native.rs"]
+mod reference_selection;

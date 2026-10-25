@@ -1,0 +1,147 @@
+{
+  "schema_version": 1,
+  "source_commit": "dbb932af266021f7aed579daf9c957e16247f063",
+  "verification": "Exact Git blob bytes. An explicit pinned root must match every listed file hash; this is not current-worktree source validation.",
+  "files": [
+    {
+      "path": "next/PROTOCOL.md",
+      "sha256": "31240d3e1be44933cbaae20308b5e1b64bdf2cf3d3bdd051bffd551d77a87fab"
+    },
+    {
+      "path": "next/VERIFICATION.md",
+      "sha256": "e62ec3a576d0379c7777b0e337b595f3fd7774ecb138b76b44c693340c35404b"
+    },
+    {
+      "path": "next/backend/freecad_worker.py",
+      "sha256": "03a37f742073cb20aaa2480de9ed93ad5ec5130625f72aa6a9302c6015406d4b"
+    },
+    {
+      "path": "next/coverage/onshape.json",
+      "sha256": "245cb02739f07cf166a74ae7e341745bdcebb0c89a9efd6e57d7258e3c88da61"
+    },
+    {
+      "path": "next/packages/body-boolean.json",
+      "sha256": "1bcea97d7bb2d1f42ed57ec6a2d0aeb3a7aa771ec4071f606fa957f8eb1ef1d4"
+    },
+    {
+      "path": "next/packages/feature.fillet.json",
+      "sha256": "2a6a40518c4e60cb71f779e90217de7482d9cb75e876a1e6262bbcdea948b74d"
+    },
+    {
+      "path": "next/packages/feature.pad.json",
+      "sha256": "bbd96eba1593f54bd10f7a4cca36978013f6b6dc1c3f53ce0e45ec6552e10d71"
+    },
+    {
+      "path": "next/packages/feature.pocket.json",
+      "sha256": "22b712be67022b9701ef9c3bfe5caa571619e84a89fc9e767cc51caba3412778"
+    },
+    {
+      "path": "next/packages/sketch.circle.json",
+      "sha256": "2607acf78388264c5d339d5844a3613bc4e916016bd2c92458ad81b7694d7a03"
+    },
+    {
+      "path": "next/packages/sketch.rectangle.json",
+      "sha256": "3b9e4d4b3dfe81d2dce5cc48681d4b028d0a93861790c63d849cce92b6169724"
+    },
+    {
+      "path": "next/src/body_commands.rs",
+      "sha256": "cf21b5609c7107e4358a48eafe1a93f8324d7e87617d85f10c5669b1ec3605ef"
+    },
+    {
+      "path": "next/src/editor.rs",
+      "sha256": "74d8aa67793bf692fdbd60500469afabc0f876488b48015f0095ca9aa68af9c0"
+    },
+    {
+      "path": "next/src/editor/bodies.rs",
+      "sha256": "b701d8323f6199fb7be30c2257a272eec4c8577f7dd0f02352b220d96fac97e0"
+    },
+    {
+      "path": "next/src/editor/constraints.rs",
+      "sha256": "af043b33eef6066aab5472b50fbed3e54c9fa5aa5c6c1fc3997fcc2a5543bf5b"
+    },
+    {
+      "path": "next/src/editor/exchange.rs",
+      "sha256": "50cdba6e31b45aa432aaf7fb29a18a9dde1cb69e4c349d6e5b5b3f0b3818f432"
+    },
+    {
+      "path": "next/src/editor/file_browser.rs",
+      "sha256": "4e82e9f68780b3a0fd6515d2a5415f12ba8e682a65280eb04c48a12a2f52cfcd"
+    },
+    {
+      "path": "next/src/editor/history.rs",
+      "sha256": "3b03b606e02a0fba5ce6406167415b64663384c4dd6e807fc81887f8f8bbc93b"
+    },
+    {
+      "path": "next/src/editor/profile_references.rs",
+      "sha256": "869f28eed326f1bf5ec262eef8a19710e700f3fe51fea7eb2e3cef86c1447175"
+    },
+    {
+      "path": "next/src/editor/properties.rs",
+      "sha256": "875c1d200e86e894b562264e6f3f44a708900c886646f1857bcf48cefa410f06"
+    },
+    {
+      "path": "next/src/editor/recovery.rs",
+      "sha256": "956c7499c5c5a52174a15928be110c0104ca642cff992b1ca6de1368243448c3"
+    },
+    {
+      "path": "next/src/editor/sketch.rs",
+      "sha256": "1d8fd815a82ad92fe997310c66846b5a026b21edc3e73f6ffaeb5992e022452d"
+    },
+    {
+      "path": "next/src/editor/sketch_creation.rs",
+      "sha256": "65fd07309f66c2e523c10fed5930f61989e871f07a12f3bbc4c78524f42ac538"
+    },
+    {
+      "path": "next/src/editor/sketch_tools.rs",
+      "sha256": "071789a7f1356b5730da2c020c679084c313e277d90bcca45c19634544bf6946"
+    },
+    {
+      "path": "next/src/editor/transforms.rs",
+      "sha256": "c8347d18ab3ff54ac2e24312dbee387b826be711c89c5da2180c07cdc0665161"
+    },
+    {
+      "path": "next/src/editor/view.rs",
+      "sha256": "765414ea8cc02104cbdc5ac03db6fa4f1465f193a370b7d771d7a06d02769208"
+    },
+    {
+      "path": "next/src/extrusion_commands.rs",
+      "sha256": "685f4998181e57ff4727d39eec50447654fc87405d3c555d94744539507e0f5c"
+    },
+    {
+      "path": "next/src/feature_commands.rs",
+      "sha256": "3a0a3cec548c2bbe0d29c2f14fcce9c38eb42df4acd1fb7d7d000941bf6ff989"
+    },
+    {
+      "path": "next/src/property_commands.rs",
+      "sha256": "e11deb904c39d74577e2c4356865c4a70a929fdc5b09cb46c0336b9c4e3b3db8"
+    },
+    {
+      "path": "next/src/sketch_commands.rs",
+      "sha256": "7e306259069e5e6fddb610b6f48bb8775646bbbc1a6b19ad5a6ec43a91dda5b0"
+    },
+    {
+      "path": "next/src/sketch_creation_commands.rs",
+      "sha256": "ca7790490607f617ee23bd87f35933a88ff83370f1a137ad8b0471f132a67e8c"
+    },
+    {
+      "path": "next/src/sketch_curve_commands.rs",
+      "sha256": "0e6065d42d5260c52f8ec636209db4f15b521add10c348d84bfce636849defad"
+    },
+    {
+      "path": "next/src/sketch_dimensions.rs",
+      "sha256": "940761eb40175c14ef5735770e79c09ac4b2e1008f26ba65c6629d1dfdf5557b"
+    },
+    {
+      "path": "next/src/sketch_operation_commands.rs",
+      "sha256": "22a0c31d2a55a626377febe18e976a1ced83753a9202e38ff81943e72320bd79"
+    },
+    {
+      "path": "next/src/viewport/navigation.rs",
+      "sha256": "37717e87b0649b07a3c8201ccc42256fe4401e1d3c65eadc341a8aecb66176c7"
+    },
+    {
+      "path": "next/src/viewport/sketch.rs",
+      "sha256": "465b750394a53444b3a94732dfb6baf73fc0a8e7353b9bb011818d17ed1bfef9"
+    }
+  ]
+}
