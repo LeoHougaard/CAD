@@ -564,3 +564,40 @@ fn ordinary_failed_open_keeps_dirty_content_and_save_retry_path() {
     n.send("open", json!({"path":path}), true);
     assert_eq!(object(&n.editor.state, "Box")["properties"]["Width"], 17.0);
 }
+
+#[test]
+#[ignore = "requires CAD_LIFECYCLE_RUNTIME and CAD_LIFECYCLE_OUTPUT"]
+fn document_switch_preserves_dirty_confirmation_and_each_save_path() {
+    let mut n = Native::new("document-switch");
+    n.send("new", json!({"name":"FirstModel"}), true);
+    n.transaction(json!([{"op":"add_object","type":"Part::Box","name":"Box"}]));
+    let first_path = n.save("First.FCStd");
+    n.transaction(set_width(17.));
+    n.assert_discard_guards();
+    assert_eq!(n.editor.path, first_path.to_string_lossy());
+    n.editor.save();
+    n.receive("save", true);
+    let first_bytes = fs::read(&first_path).unwrap();
+    n.editor.request_file(FileAction::New);
+    n.receive("new", true);
+    assert!(!n.editor.dirty && n.editor.path.is_empty());
+    n.transaction(json!([{"op":"add_object","type":"Part::Box","name":"Box"}]));
+    let second_path = n.save("Second.FCStd");
+    n.transaction(set_width(23.));
+    n.assert_discard_guards();
+    assert_eq!(n.editor.path, second_path.to_string_lossy());
+    n.editor.save();
+    n.receive("save", true);
+    assert_eq!(fs::read(&first_path).unwrap(), first_bytes);
+    n.editor.file_input = first_path.to_string_lossy().into_owned();
+    n.send("open", json!({"path":first_path}), true);
+    assert!(!n.editor.dirty);
+    assert_eq!(n.editor.path, first_path.to_string_lossy());
+    assert_eq!(object(&n.editor.state, "Box")["properties"]["Width"], 17.0);
+    n.editor.file_input = second_path.to_string_lossy().into_owned();
+    n.send("open", json!({"path":second_path}), true);
+    assert!(!n.editor.dirty);
+    assert_eq!(n.editor.path, second_path.to_string_lossy());
+    assert_eq!(object(&n.editor.state, "Box")["properties"]["Width"], 23.0);
+    assert_eq!(fs::read(&first_path).unwrap(), first_bytes);
+}

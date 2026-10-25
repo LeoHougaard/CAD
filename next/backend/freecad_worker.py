@@ -128,6 +128,12 @@ def document(request, writable=False):
         lease("local", key, request=request)
         if request.get("op") not in ("close", "preview_cancel", "sketch_cancel"):
             validate_assembly_proxies(doc)
+        # FreeCAD 1.1 transactions are app-wide. A change to an inactive
+        # document also enrolls the active document in its native history.
+        # Select the owner only after the existing write guards have admitted
+        # the request. Reads, export, and close retain their activation.
+        if request.get("op") not in ("close", "export_exchange"):
+            App.setActiveDocument(doc.Name)
     return doc
 
 

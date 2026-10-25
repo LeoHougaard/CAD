@@ -76,6 +76,21 @@ jobs:
           mkdir -p "$FREECAD_USER_HOME"
           python -B next/tests/checkpoint_restore_workflows.py --runtime next/target/runtime.json --host next/target/debug/cad-next.exe --output next/target/checkpoint-windows
           python -B next/tests/checkpoint_linux_workflows.py --runtime next/target/runtime.json --host next/target/debug/cad-next.exe --output next/target/checkpoint-windows-public
+      - name: Native document ownership and Editor save-path regressions
+        env:
+          CAD_LIFECYCLE_RUNTIME: ${{ github.workspace }}/next/target/runtime.json
+          CAD_LIFECYCLE_OUTPUT: ${{ github.workspace }}/next/target/document-ownership/editor
+          FREECAD_USER_HOME: ${{ github.workspace }}/next/target/document-ownership-config
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          host=next/target/debug/cad-next
+          compiler=next/target/debug/cad-next-packages
+          if [ "$RUNNER_OS" = Windows ]; then host="$host.exe"; compiler="$compiler.exe"; fi
+          python -B next/tools/check_document_ownership.py --runtime next/target/runtime.json --host "$host" --compiler "$compiler" --output next/target/document-ownership
+          mkdir -p "$CAD_LIFECYCLE_OUTPUT"
+          for case in document_switch_preserves_dirty_confirmation_and_each_save_path ordinary_failed_open_keeps_dirty_content_and_save_retry_path; do
+            cargo test --manifest-path next/Cargo.toml --all-features --locked "editor::sketch::lifecycle_tests::$case" -- --exact --ignored --test-threads=1 > "next/target/document-ownership/$case.log" 2>&1
+          done
       - name: Record checkpoint gate provenance
         if: always()
         run: |
@@ -83,9 +98,9 @@ jobs:
           import hashlib, json, os, pathlib, subprocess
           root = pathlib.Path.cwd()
           files = [root/'.github/workflows/next.yml', root/'next/target/runtime.json']
-          for pattern in ['next/src/**/*.rs', 'next/backend/**/*.py', 'next/backend/native/*', 'next/tools/*.py', 'next/tests/checkpoint*', 'next/tests/fixtures/checkpoint*']:
+          for pattern in ['next/src/**/*.rs', 'next/backend/**/*.py', 'next/backend/native/*', 'next/tools/*.py', 'next/tests/checkpoint*', 'next/tests/fixtures/checkpoint*', 'next/tests/document_ownership*', 'next/tests/fixtures/document_ownership*']:
               files.extend(path for path in root.glob(pattern) if path.is_file())
-          files.extend(root/'next/target/debug'/name for name in ['cad-next', 'cad-next.exe'])
+          files.extend(root/'next/target/debug'/name for name in ['cad-next', 'cad-next.exe', 'cad-next-packages', 'cad-next-packages.exe'])
           hashes = {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest() for path in files if path.is_file()}
           target = root/'next/target/checkpoint-gate-provenance.json'
           target.parent.mkdir(parents=True, exist_ok=True)
@@ -104,6 +119,7 @@ jobs:
             next/target/checkpoint-linux-x64/
             next/target/checkpoint-windows/
             next/target/checkpoint-windows-public/
+            next/target/document-ownership/
             next/backend/native/checkpoint_restore*.json
             next/backend/native/checkpoint_restore*.so
             next/backend/native/checkpoint_restore.dll
@@ -169,7 +185,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
           mkdir -p "$CAD_LIFECYCLE_OUTPUT" "$FREECAD_USER_HOME"
-          skip=(--skip mirror_editor_unavailable_constraints_preserves_default_and_redo)
+          skip=(--skip mirror_editor_unavailable_constraints_preserves_default_and_redo --skip document_switch_preserves_dirty_confirmation_and_each_save_path --skip ordinary_failed_open_keeps_dirty_content_and_save_retry_path)
           if [ "$RUNNER_OS" != Windows ]; then
             skip+=(--skip mirror_editor_apply_cancel_action_history_and_reopen --skip mirror_editor_invalid_selection_native_failure_and_session_cancel --skip mirror_editor_accepted_native_ids_survive_later_tasks_and_history)
           fi
