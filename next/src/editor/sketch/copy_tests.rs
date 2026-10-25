@@ -32,17 +32,11 @@ fn start(n: &mut Native, name: &str) {
     n.click("Edit tools");
     n.click(name);
     assert!(n.editor.sketch_ui.task.is_some());
-    n.receive("quantities", true);
+    settle(n);
 }
 fn preview(n: &mut Native, valid: bool) {
-    if n.editor.busy {
-        pending(n);
-    }
-    std::thread::sleep(Duration::from_millis(170));
-    n.frame(vec![]);
-    if n.editor.busy {
-        n.receive("preview", valid);
-    }
+    settle(n);
+    assert_eq!(task_state(n)["valid"], valid);
 }
 fn xml(n: &Native) -> Value {
     object(&n.editor.state, "Sketch")["sketch"]["native_xml"].clone()
@@ -72,18 +66,36 @@ fn pending(n: &mut Native) {
     n.record();
 }
 
-fn edit_field(n: &mut Native, label: &str, text: &str) {
-    if n.editor.busy {
-        pending(n);
+fn task_state(n: &Native) -> Value {
+    n.editor.sketch_ui.task.as_ref().unwrap().test_state()
+}
+
+fn settle(n: &mut Native) -> egui::FullOutput {
+    let deadline = std::time::Instant::now() + Duration::from_secs(25);
+    loop {
+        assert!(std::time::Instant::now() < deadline, "task did not settle");
+        if n.editor.busy {
+            pending(n);
+            continue;
+        }
+        let frame = n.frame(vec![]);
+        if !n.editor.busy && task_state(n)["pending"] == false {
+            assert_eq!(task_state(n)["enabled"], true);
+            return frame;
+        }
+        std::thread::sleep(Duration::from_millis(5));
     }
-    n.frame(vec![]);
-    if n.editor.busy {
-        pending(n);
-    }
-    let frame = n.frame(vec![]);
-    if n.editor.busy {
-        pending(n);
-    }
+}
+
+fn toggle(n: &mut Native, label: &str, key: &str, expected: Value) {
+    settle(n);
+    n.click(label);
+    assert_eq!(task_state(n)["parameters"][key], expected, "{label} input");
+    settle(n);
+}
+
+fn edit_field(n: &mut Native, label: &str, key: &str, text: &str) {
+    let frame = settle(n);
     let area = n
         .ctx
         .memory(|m| m.area_rect(egui::Id::new("native_sketch_task")))
@@ -116,6 +128,7 @@ fn edit_field(n: &mut Native, label: &str, text: &str) {
             },
         ]);
     }
+    settle(n);
     let modifiers = egui::Modifiers {
         ctrl: true,
         command: true,
@@ -131,9 +144,7 @@ fn edit_field(n: &mut Native, label: &str, text: &str) {
         },
         egui::Event::Text(text.into()),
     ]);
-    if n.editor.busy {
-        pending(n);
-    }
+    settle(n);
     n.frame(vec![egui::Event::Key {
         key: egui::Key::Enter,
         physical_key: None,
@@ -141,8 +152,16 @@ fn edit_field(n: &mut Native, label: &str, text: &str) {
         repeat: false,
         modifiers: egui::Modifiers::NONE,
     }]);
-    if n.editor.busy {
-        pending(n);
+    settle(n);
+    let state = task_state(n);
+    let value = state["parameters"].pointer(key).unwrap();
+    if let Ok(number) = text.parse::<i64>() {
+        assert_eq!(value.as_i64(), Some(number), "{label} input");
+    } else {
+        assert_eq!(
+            value["quantity_input"], text,
+            "{label} native quantity input"
+        );
     }
 }
 
@@ -183,16 +202,19 @@ fn copy_editor_widgets_history_replacement_and_reopen() {
     n.send("undo", json!({}), true);
     assert_eq!(xml(&n), baseline);
     start(&mut n, "Move");
+    assert_eq!(task_state(&n)["deferred"], true);
+    assert!(n.editor.state["preview"].is_null());
+    let redo = n.editor.state["redo_count"].clone();
     n.click("Cancel");
     assert!(!n.editor.busy);
+    assert_eq!(n.editor.state["redo_count"], redo);
     n.send("redo", json!({}), true);
     assert_eq!(xml(&n), cloned);
     n.send("undo", json!({}), true);
     start(&mut n, "Move");
-    n.click("All internal geometry");
-    n.receive("quantities", true);
-    std::thread::sleep(Duration::from_millis(170));
-    n.frame(vec![]);
+    toggle(&mut n, "All internal geometry", "all_geometry", json!(true));
+    assert_eq!(task_state(&n)["deferred"], true);
+    assert!(n.editor.state["preview"].is_null());
     assert!(!n.editor.busy);
     n.click("Apply");
     n.receive("transaction", true);
@@ -224,18 +246,41 @@ fn copy_array_controls_and_session_cancel() {
     let mut n = setup("copy-array-editor");
     let baseline = xml(&n);
     start(&mut n, "Rectangular array");
-    n.click("Clone");
-    n.receive("quantities", true);
-    n.click("Equal vertical/horizontal spacing");
-    n.receive("quantities", true);
-    edit_field(&mut n, "Columns", "3");
-    edit_field(&mut n, "Rows", "2");
-    edit_field(&mut n, "X", "1 in");
-    edit_field(&mut n, "Y", "-2 cm");
+    toggle(&mut n, "Clone", "clone", json!(true));
+    toggle(
+        &mut n,
+        "Equal vertical/horizontal spacing",
+        "perpendicular_scale",
+        json!(1.0),
+    );
+    edit_field(&mut n, "Columns", "/columns", "3");
+    edit_field(&mut n, "Rows", "/rows", "2");
+    edit_field(&mut n, "X", "/displacement/0", "1 in");
+    edit_field(&mut n, "Y", "/displacement/1", "-2 cm");
+    let form = task_state(&n);
+    assert_eq!(form["parameters"]["columns"], 3);
+    assert_eq!(form["parameters"]["rows"], 2);
+    assert_eq!(
+        form["parameters"]["displacement"][0]["quantity_input"],
+        "1 in"
+    );
+    assert_eq!(
+        form["parameters"]["displacement"][1]["quantity_input"],
+        "-2 cm"
+    );
+    fs::write(
+        n.folder.join("array-input.json"),
+        serde_json::to_vec_pretty(&form).unwrap(),
+    )
+    .unwrap();
     preview(&mut n, true);
     assert_eq!(count(&n), 12);
-    n.click("Constrain inter-element separation");
-    n.receive("quantities", true);
+    toggle(
+        &mut n,
+        "Constrain inter-element separation",
+        "constrain_displacement",
+        json!(false),
+    );
     preview(&mut n, true);
     assert_eq!(count(&n), 7);
     n.click("Apply");

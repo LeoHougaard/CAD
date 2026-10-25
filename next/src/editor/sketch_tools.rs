@@ -58,6 +58,13 @@ fn weight_equal_choices<'a>(choices: &'a Value, index: i32, pole: &Value) -> Vec
         .collect()
 }
 impl SketchTask {
+    #[cfg(test)]
+    pub(super) fn test_state(&self) -> Value {
+        json!({"parameters":self.parameters,"pending":self.changed.is_some(),
+            "valid":self.valid,"deferred":self.deferred,
+            "enabled":!self.committing && !self.finishing && !self.exposing_controls})
+    }
+
     fn reply(
         &mut self,
         op: &str,

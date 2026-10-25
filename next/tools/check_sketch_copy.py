@@ -72,16 +72,27 @@ def main():
     assert all(event['exact_native_input'] for event in events if event['event'] == 'suppression_capture')
     assert all(event['history_depth'] == 0 and not event['callback_errors'] for event in events if event['event'] == 'dispatch')
     if args.editor_tests:
-        editor = out / 'editor'
-        editor.mkdir()
-        run('editor', [args.editor_tests.resolve(), 'editor::sketch::lifecycle_tests::copy_tests::',
-            '--ignored', '--test-threads=1', '--nocapture'],
-            dict(CAD_LIFECYCLE_RUNTIME=str(runtime_path), CAD_LIFECYCLE_OUTPUT=str(editor)))
-        assert re.search(r'test result: ok\. 2 passed', (out / 'editor.log').read_text())
+        # The debounce is 150 ms. Exercise ordinary replies, that boundary and
+        # the independently reproduced 250 ms quantity-reply delay.
+        delayed = dict(runtime, test_worker=str(source / 'tests/fixtures/copy_quantity_delay_worker.py'))
+        delayed_path = out / 'editor-runtime.json'
+        delayed_path.write_text(json.dumps(delayed, indent=2) + '\n')
+        for delay in [0, 150, 250]:
+            name = 'editor-' + str(delay)
+            editor = out / name
+            editor.mkdir()
+            run(name, [args.editor_tests.resolve(), 'editor::sketch::lifecycle_tests::copy_tests::',
+                '--ignored', '--test-threads=1', '--nocapture'],
+                dict(CAD_LIFECYCLE_RUNTIME=str(delayed_path), CAD_LIFECYCLE_OUTPUT=str(editor),
+                    CAD_COPY_QUANTITY_DELAY_MS=str(delay)))
+            assert re.search(r'test result: ok\. 2 passed', (out / (name + '.log')).read_text())
+            delays = [json.loads(line) for path in editor.glob('quantity-delay-*.jsonl') for line in path.read_text().splitlines()]
+            assert delays and all(item['delay_ms'] == delay and item['before_sha256'] == item['after_sha256'] for item in delays)
     assert all(sha(path) == digest for path, digest in hashes.items())
     repeats = json.loads((out / 'native_repeat/report.json').read_text())
     (out / 'passed.json').write_text(json.dumps(dict(native_and_host=True,
         actual_editor_cases=2 if args.editor_tests else 'covered by the CI lifecycle step',
+        editor_quantity_delay_ms=[0, 150, 250] if args.editor_tests else [],
         checkpoint_restores=len(restores), sources_and_binaries_unchanged=True,
         raw_post_solve_mismatches=[item for item in repeats['comparisons'] if not item['post_solve_exact']],
         physical_gui=False, resources=False), indent=2) + '\n')
