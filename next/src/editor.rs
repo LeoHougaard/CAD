@@ -1151,6 +1151,9 @@ impl eframe::App for Editor {
                 ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Escape));
             } else if self.viewport.dismiss_other_menu(ctx) {
                 ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Escape));
+            } else if egui::Popup::is_any_open(ctx) {
+                egui::Popup::close_all(ctx);
+                ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Escape));
             } else if self.measurement_escape() {
                 ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Escape));
             } else if self.unavailable() {

@@ -621,3 +621,6 @@ mod select_other_reply_tests;
 
 #[path = "fit_tree_selection_tests.rs"]
 mod fit_tree_selection_tests;
+
+#[path = "popup_ownership_tests.rs"]
+mod popup_ownership_tests;
