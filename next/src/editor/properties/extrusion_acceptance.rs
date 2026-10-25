@@ -2,6 +2,9 @@ use super::super::*;
 use super::*;
 use std::{fs, path::PathBuf, thread::JoinHandle};
 
+#[path = "hole_acceptance.rs"]
+mod hole_acceptance;
+
 fn acceptance_dir() -> PathBuf {
     PathBuf::from(
         std::env::var_os("CAD_EDITOR_ACCEPTANCE_OUTPUT").expect("set CAD_EDITOR_ACCEPTANCE_OUTPUT"),
@@ -37,7 +40,11 @@ impl NativeEditor {
         .unwrap();
         let mut config = WorkerConfig::new(
             runtime["executable"].as_str().unwrap(),
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("backend/freecad_worker.py"),
+            std::env::var_os("CAD_EDITOR_ACCEPTANCE_WORKER")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("backend/freecad_worker.py")
+                }),
         );
         config.args = runtime["args"]
             .as_array()
@@ -68,6 +75,7 @@ impl NativeEditor {
             exchange_ui: super::super::exchange::ExchangeUi::default(),
             draft: None,
             measurement_ui: super::super::measurements::MeasurementUi::default(),
+            units_ui: Default::default(),
             sequence: 0,
             error: None,
             status: String::new(),
@@ -120,6 +128,11 @@ impl NativeEditor {
     }
     fn preview(&mut self, accepted: bool) {
         self.editor.preview();
+        assert!(
+            self.editor.busy,
+            "preview did not queue native work: {:?}",
+            self.editor.error
+        );
         self.receive("preview", accepted);
     }
     fn properties(&mut self, properties: Value, expressions: Value) {
@@ -608,3 +621,6 @@ fn extrusion_editor_pocket() {
 
 #[path = "reference_selection_native.rs"]
 mod reference_selection;
+
+#[path = "suppression_editor.rs"]
+mod suppression;

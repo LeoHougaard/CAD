@@ -138,6 +138,17 @@ def main():
                   "cache_dir": str(args.cache_dir.resolve()), **manifest["assets"][key]}
     else:
         result = setup(args.cache_dir.resolve(), manifest, key)
+        if key.startswith("linux-"):
+            # Build only the small native checkpoint adapter with the bundled
+            # interpreter whose loaded ELF objects will be pinned. Diagnostics
+            # go to stderr; stdout remains one launcher JSON as before.
+            build = NEXT.parent / ".tools" / ("checkpoint-adapter-" + key)
+            build.parent.mkdir(parents=True, exist_ok=True)
+            # A unique receipt directory preserves earlier build/failure evidence.
+            build = Path(tempfile.mkdtemp(prefix=build.name + "-", dir=build.parent)) / "build"
+            command = [result["executable"], *result["args"],
+                       str(NEXT / "tools" / "build_checkpoint_linux.py"), "--output", str(build)]
+            subprocess.run(command, check=True, stdout=sys.stderr, stderr=sys.stderr)
     encoded = json.dumps(result)
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)

@@ -1,5 +1,8 @@
 # FreeCAD-based replacement
 
+[Sketch Copy, Clone, Move and arrays](SKETCH-COPY.md) documents the typed native
+tasks, input domains, history behavior and remaining pointer-gesture differences.
+
 This is the replacement foundation. The earlier Rust/Brepkit application stays
 available while this implementation is verified. It is not the modeling engine
 for this version.
@@ -32,6 +35,10 @@ to `15703c5`; later verified changes are recorded in [VERIFICATION.md](VERIFICAT
 The checklist records remaining work and acceptance gates. It does not establish
 full feature coverage or Rust modeling parity.
 
+Document-local unit settings and current quantity input routes are described in
+[Native document units](DOCUMENT-UNITS.md). This access remains a bounded bundle;
+it does not close the historical full-parity gates.
+
 ## Run the editor
 
 Build the optional desktop target and use the same pinned runtime configuration:
@@ -50,6 +57,9 @@ Run this as a separate application; it does not replace `dist/CAD.exe`.
 maps the audited UI routes and missing operations. Its evidence stays pinned to
 the stated commit; it does not certify complete functionality in the current build.
 Opening Help preserves the active modeling task. Escape dismisses Help first.
+
+The [suppression workflow](SUPPRESSION.md) describes the development tree action,
+native persistence repair, unavailable legacy states and remaining acceptance gates.
 
 Assembly tools create native local component instances, grounds and joints in the
 same document. Measure reads native geometry and units without accepting or
@@ -100,6 +110,11 @@ a right-to-left box also selects crossing curves. Shift adds a box to the curren
 selection. Drag endpoints, centers or curve handles to edit through native
 Sketcher. Delete removes selected geometry; Trim uses the native picked-segment
 operation. Edit tools adds native sketch fillet/chamfer, split, line/arc extension,
+and [Mirror](SKETCH-MIRROR.md) with native axis/line/point references, delete
+originals or symmetry constraints. Mirror uses the same task preview, action
+history and session boundary. Its constrained copy calls a small pinned Windows
+C++ adapter because the native Python binding omits that command option.
+Edit tools also provides
 Carbon Copy and B-spline degree, knot, pole and weight tasks. Select an internal
 curve or corner first; Split curve uses the picked position. Task Apply accepts
 one sketch action and Cancel restores its baseline. Carbon Copy keeps native
@@ -235,7 +250,9 @@ Python 3 and Cargo are needed for setup and the Rust host. Runtime setup downloa
 the official portable FreeCAD distribution and verifies its pinned SHA256 before
 extracting it into the checkout's ignored `.tools` directory. It does not install
 anything globally or require FUSE. Supported runtime platforms are Windows x64,
-Linux x64 and Linux ARM64.
+Linux x64 and Linux ARM64. Linux setup also builds the small
+[native checkpoint adapter](CHECKPOINT-LINUX.md); a C++ compiler, `nm` and
+`c++filt` must be installed. This does not rebuild FreeCAD or its dependencies.
 
 ```sh
 cargo build --manifest-path next/Cargo.toml --locked

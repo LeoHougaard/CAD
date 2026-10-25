@@ -163,3 +163,8 @@ intersection profile copies use the native geometry serialization adapter, with
 bounded circular and legacy-identity acceptance. This extends functional UI
 access; it is not a Rust kernel replacement. See VERIFICATION.md for the matched
 native gates and remaining GUI scope.
+
+The [document-unit access bundle](DOCUMENT-UNITS.md) retains FreeCAD Units and
+Quantity, native geometry and native settings history semantics. Rust quantity
+text presentation is not a quantity engine port. Its documented bounded checks
+and remaining gates do not establish complete UI/native parity.

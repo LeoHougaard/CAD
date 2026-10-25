@@ -48,7 +48,8 @@ fn token(request: &Value, sketch: bool) -> Result<&str, Failure> {
 fn writable(op: &str) -> bool {
     matches!(
         op,
-        "new"
+        "document_settings"
+            | "new"
             | "open"
             | "transaction"
             | "undo"
@@ -260,6 +261,11 @@ impl Leases {
                             | "spline_knot"
                             | "spline_pole"
                             | "spline_weight"
+                            | "mirror_geometry"
+                            | "copy_geometry"
+                            | "clone_geometry"
+                            | "move_geometries"
+                            | "rectangular_array"
                     ) {
                         return Err(denied);
                     }
@@ -806,6 +812,11 @@ mod tests {
             "spline_knot",
             "spline_pole",
             "spline_weight",
+            "mirror_geometry",
+            "copy_geometry",
+            "clone_geometry",
+            "move_geometries",
+            "rectangular_array",
         ] {
             ok(
                 &mut s,

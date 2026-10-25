@@ -55,6 +55,7 @@ impl Native {
             body_ui: BodyUi::default(),
             property_ui: properties::PropertyUi::default(),
             measurement_ui: measurements::MeasurementUi::default(),
+            units_ui: Default::default(),
             transform_ui: transforms::TransformUi::default(),
             exchange_ui: exchange::ExchangeUi::default(),
             draft: None,
@@ -193,8 +194,8 @@ fn attachment_editor_cancel_create_and_restore_native_session() {
     n.click("Unattached");
     let task = n.editor.sketch_creation.as_mut().unwrap();
     assert!(task.reversed && task.detach);
-    task.position = [1., 2., 3.];
-    task.angle = 30.;
+    task.quantity_offset = Some(json!({"position":[1.,2.,3.],"rotation":[0.,0.,0.,1.],
+        "axis_angle":{"axis":[0.,0.,1.],"angle":30.}}));
     let name = task.request["name"].as_str().unwrap().to_owned();
     n.click("Create sketch");
     n.receive("transaction", true);
@@ -923,6 +924,7 @@ fn gesture_help_actual_extend_task_pending_reply_apply_and_history() {
     n.click("Edit tools");
     n.click("Extend");
     assert!(n.editor.sketch_ui.task.is_some());
+    n.receive("quantities", true);
     std::thread::sleep(Duration::from_millis(170));
     n.frame(vec![]);
     assert!(n.editor.busy);

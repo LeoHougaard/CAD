@@ -9,6 +9,9 @@ use std::{
 mod gl_renderer;
 mod navigation;
 mod references;
+mod select_other;
+#[cfg(test)]
+mod select_other_ui_tests;
 pub use navigation::{DisplayMode, SelectionMode, StandardView};
 mod sketch;
 mod sketch_curves;
@@ -78,6 +81,8 @@ pub struct Viewport {
     /// Pick native solid subelements during the external-reference tool.
     pub solid_select_in_sketch: bool,
     dimension_hits: Vec<sketch::DimensionHit>,
+    other_picker: Option<select_other::Picker>,
+    other_hover: Option<Selection>,
 }
 
 impl Default for Viewport {
@@ -110,6 +115,8 @@ impl Default for Viewport {
             sketch_select_enabled: true,
             solid_select_in_sketch: false,
             dimension_hits: vec![],
+            other_picker: None,
+            other_hover: None,
         };
         result.iso();
         result
@@ -154,6 +161,7 @@ impl Viewport {
         }
     }
     pub fn clear_selection(&mut self) {
+        self.cancel_other_picker();
         self.selected = None;
         self.selections.clear();
     }
@@ -189,6 +197,7 @@ impl Viewport {
     /// Display every supplied native object in one depth-tested scene. Omitted objects
     /// are neither displayed nor pickable. Revisions scope all native element names.
     pub fn set_scenes(&mut self, scenes: Vec<(Value, Value)>) {
+        self.cancel_other_picker();
         let revisions: BTreeMap<String, Option<u64>> = scenes
             .iter()
             .filter_map(|(mesh, _)| {
@@ -345,6 +354,7 @@ impl Viewport {
     }
 
     pub fn set_sketch(&mut self, sketch: Option<Value>) {
+        self.cancel_other_picker();
         if self.sketch != sketch {
             self.sketch_pick_positions.clear();
             self.last_sketch_pick = None;
@@ -645,6 +655,7 @@ impl Viewport {
     pub fn ui(&mut self, ui: &mut egui::Ui) -> Option<Selection> {
         let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         self.rect = rect;
+        self.validate_other_picker(ui.is_enabled());
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 0., Color32::from_rgb(8, 10, 12));
         let delta = ui.input(|i| i.pointer.delta());
@@ -759,6 +770,7 @@ impl Viewport {
         self.draw_references(&painter, &triangles, &depth_index);
         self.draw_sketch(&painter);
         self.draw_dimensions(&painter);
+        self.draw_other_hover(&painter);
         let origin = rect.left_bottom() + Vec2::new(36., -36.);
         for (axis, label, color) in [
             (Vec3::X, "X", Color32::from_rgb(184, 94, 104)),
@@ -804,6 +816,9 @@ impl Viewport {
                 self.select_native_element(hit, toggle);
                 selection = self.selected.clone();
             }
+        }
+        if let Some(hit) = self.select_other_menu(ui, &response, &triangles) {
+            selection = Some(hit);
         }
         self.response = Some(response);
         selection

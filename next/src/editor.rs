@@ -17,6 +17,7 @@ mod sketch_tools;
 #[cfg(test)]
 mod tests;
 mod transforms;
+mod units;
 mod view;
 mod workflow_guide;
 
@@ -89,7 +90,7 @@ fn model_thread(
         // Preserve the old document until a replacement loads successfully.
         // Opening the same path twice returns the worker's already_open error.
         let result = call(&mut worker, &job.op, job.parameters);
-        if matches!(job.op.as_str(), "feature_schema" | "measure") {
+        if matches!(job.op.as_str(), "feature_schema" | "measure" | "quantities") {
             let (accepted, data, error) = match result {
                 Ok(data) => (true, data, None),
                 Err(error) => (false, Value::Null, Some(error)),
@@ -195,13 +196,16 @@ fn model_thread(
     }
 }
 
-fn feature_edits(registry: &Registry, draft: &Draft) -> Result<Vec<Value>, String> {
+fn feature_edits(registry: &Registry, draft: &Draft, schema: &Value) -> Result<Vec<Value>, String> {
     if draft.id == "native.assembly" {
         crate::assembly_commands::build(&draft.parameters["state"], &draft.parameters["request"])
     } else if draft.id == "native.history" {
         crate::history_commands::build(&draft.parameters["state"], &draft.parameters["request"])
     } else if draft.id == "native.properties" {
-        crate::property_commands::build(&draft.parameters)
+        crate::property_commands::build(&crate::hole_commands::active_parameters(
+            schema,
+            &draft.parameters,
+        ))
     } else if draft.id == "native.property" {
         Ok(vec![
             json!({"op":"set","object":draft.parameters["object"],"property":draft.parameters["property"],"value":draft.parameters["value"]}),
@@ -275,6 +279,7 @@ pub struct Editor {
     body_ui: BodyUi,
     property_ui: properties::PropertyUi,
     measurement_ui: measurements::MeasurementUi,
+    units_ui: units::UnitsUi,
     transform_ui: transforms::TransformUi,
     exchange_ui: exchange::ExchangeUi,
     draft: Option<Draft>,
@@ -328,6 +333,7 @@ impl Editor {
             body_ui: BodyUi::default(),
             property_ui: properties::PropertyUi::default(),
             measurement_ui: measurements::MeasurementUi::default(),
+            units_ui: Default::default(),
             transform_ui: transforms::TransformUi::default(),
             exchange_ui: exchange::ExchangeUi::default(),
             draft: None,
@@ -356,10 +362,10 @@ impl Editor {
     }
 
     fn send(&mut self, op: &str, mut parameters: Value) {
-        if self.busy {
+        if self.busy || self.units_ui.active() && op != "document_settings" {
             return;
         }
-        if op != "feature_schema" {
+        if !matches!(op, "feature_schema" | "quantities") {
             self.measurement_invalidate();
         }
         if !matches!(op, "new" | "open") {
@@ -452,6 +458,16 @@ impl Editor {
                 }
                 continue;
             }
+            if reply.op == "quantities" {
+                self.error = reply.error;
+                if success {
+                    self.quantity_reply(&reply.data);
+                } else {
+                    self.units_ui.quantity_failed();
+                }
+                continue;
+            }
+            let units_changed = self.state["units"]["index"] != reply.state["units"]["index"];
             self.error = reply.error;
             self.state = reply.state;
             self.viewport.set_scenes(reply.scenes);
@@ -483,6 +499,10 @@ impl Editor {
                         } else if !self.file_input.is_empty() {
                             self.path = self.file_input.clone();
                         }
+                    }
+                    "document_settings" => {
+                        self.dirty |= units_changed;
+                        self.units_ui = units::UnitsUi::default();
                     }
                     "save" => {
                         self.dirty = false;
@@ -546,10 +566,18 @@ impl Editor {
         });
     }
     fn preview(&mut self) {
+        if self.package_quantities(true) {
+            return;
+        }
         if let Some(draft) = &self.draft
             && let Some(type_id) = self.transform_ui.schema_request(&draft.parameters)
         {
-            self.send("feature_schema", json!({"type":type_id}));
+            let values = draft.parameters["transformations"]
+                .as_array()
+                .and_then(|steps| steps.iter().find(|step| step["type"] == type_id))
+                .map(|step| step["properties"].clone())
+                .unwrap_or_default();
+            self.send("feature_schema", json!({"type":type_id,"values":values}));
             return;
         }
         if self.transform_ui.awaiting_schema() {
@@ -559,7 +587,7 @@ impl Editor {
             return;
         };
         d.changed = None;
-        let edits = feature_edits(&self.registry, d);
+        let edits = feature_edits(&self.registry, d, &self.property_ui.schema);
         match edits {
             Ok(edits) => {
                 if d.deferred {
@@ -637,6 +665,7 @@ impl Editor {
                 parameters.insert("index".into(), snapshot["sketch"]["geometry_count"].clone());
             }
         }
+        self.units_ui.fields.clear();
         self.draft = Some(Draft {
             id: id.into(),
             name: package.label.clone(),
@@ -650,6 +679,7 @@ impl Editor {
         });
         self.sketch_ui.tool = Draw::Select;
         self.sketch_ui.clear_points();
+        self.package_quantities(false);
     }
     fn file_dialog(&mut self, save: bool) {
         self.file_input = self.path.clone();
@@ -680,7 +710,7 @@ impl Editor {
                 self.draft = None;
                 return;
             }
-            let edits = feature_edits(&self.registry, d);
+            let edits = feature_edits(&self.registry, d, &self.property_ui.schema);
             match edits {
                 Ok(edits) => {
                     d.committing = true;
@@ -807,6 +837,7 @@ impl Editor {
                         workflow_guide::open(ctx);
                     }
                     self.measurement_controls(ui);
+                    self.units_controls(ui);
                 });
             });
             ui.horizontal_wrapped(|ui| {
@@ -879,6 +910,7 @@ impl Editor {
     }
 
     fn panels(&mut self, ctx: &egui::Context) {
+        self.units_dialog(ctx);
         self.body_tree(ctx);
         self.sketch_panel(ctx);
         if self.draft.is_some() {
@@ -999,6 +1031,15 @@ impl Editor {
                                     if changed {
                                         *current = json!(value);
                                     }
+                                } else if self
+                                    .registry
+                                    .get(&draft.id)
+                                    .and_then(|p| p.parameters.get(&field))
+                                    .is_some_and(|p| p.unit.is_some())
+                                {
+                                    let meta =
+                                        self.units_ui.fields.get(&field).unwrap_or(&Value::Null);
+                                    changed = units::quantity_field(ui, current, meta);
                                 } else if let Some(mut value) = current.as_f64() {
                                     changed = ui
                                         .add(egui::DragValue::new(&mut value).speed(0.2))
@@ -1054,7 +1095,7 @@ impl Editor {
             && !self.sketch_ui.split
             && self.sketch_ui.task.is_none();
         let before = self.viewport.selected.clone();
-        self.viewport.ui(ui);
+        let picked = self.viewport.ui(ui).is_some();
         if self.viewport.selected != before {
             if !self.measurement_keeps_selection(ui.input(|i| i.modifiers.shift)) {
                 self.body_ui.selected.clear();
@@ -1066,7 +1107,7 @@ impl Editor {
                 .map(|selection| selection.object.clone());
         }
         if !self.unavailable() {
-            self.sketch_canvas(ui);
+            self.sketch_canvas(ui, picked);
         }
     }
 }
@@ -1102,9 +1143,16 @@ impl eframe::App for Editor {
         if self.allow_close {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
-        if ctx.input(|i| i.key_pressed(Key::Escape)) {
+        if (workflow_guide::active(ctx) || !self.units_ui.active())
+            && ctx.input(|i| i.key_pressed(Key::Escape))
+        {
             if workflow_guide::active(ctx) {
                 workflow_guide::close(ctx);
+                ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Escape));
+            } else if self.viewport.dismiss_other_menu(ctx) {
+                ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Escape));
+            } else if egui::Popup::is_any_open(ctx) {
+                egui::Popup::close_all(ctx);
                 ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Escape));
             } else if self.measurement_escape() {
                 ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Escape));

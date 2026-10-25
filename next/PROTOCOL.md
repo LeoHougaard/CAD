@@ -1,5 +1,74 @@
 # Local modeling boundary, version 1
 
+Hole task metadata is an additive version-1 snapshot extension. For
+`PartDesign::Hole`, `property_metadata.ThreadType` includes
+`hole_task_version:1`, `hole_task_enumerations` and `hole_task_cut_angles`.
+The first map is keyed by native ThreadType and supplies exact native
+ThreadSize, ThreadClass, ThreadFit and HoleCutType enum lists. The second maps
+native ThreadType and HoleCutType to custom countersink-angle input availability.
+The worker collects these JSON facts during its existing startup schema pass,
+before accepting requests. It retains no schema document. No task request creates
+a native document, feature or transaction to discover choices.
+
+Rust applies this metadata only to a Hole schema with the matching task version.
+Its bounded task presentation keeps conditional input fields reachable after a
+failed preview and during deferred Redo editing. It does not change native write
+admission. Computed Shape and ThreadDiameter, standard-derived Diameter and
+preset dimensions retain the ordinary native protection. All model values,
+presets, quantities and expressions remain native. Hole controller expressions
+are ordered with literal controllers before dependent values; the client never
+evaluates an expression. Editor candidates omit stale literal overrides for
+explicitly inactive Hole task inputs, such as Depth after selecting ThroughAll.
+An enabled Hole input widget records bounded literal provenance in the private
+draft parameter `hole_task_literals: {version:1, fields:{property:true}}`.
+Only the named conditional TaskHole input whitelist participates. This lets a
+controller round trip omit a formerly enabled literal even when that input was
+inactive in the initial native snapshot. Dormant values and unit-text buffers
+remain in the draft for switching back; they are excluded only from the current
+candidate's literal writes. This marker is not native document data or a worker
+protocol field and grants no write permission. Unknown marker versions have no
+effect. Shape, ThreadDiameter and unlisted fields cannot acquire provenance.
+Expressions and unlisted computed properties still pass through native write
+admission unchanged. After a Hole controller expression is bound or cleared,
+the adapter asks that same native Hole to recompute inside the existing
+transaction. This evaluates native expressions and updates native enum domains
+and editor locks before dependent setters. Interim invalid feature results are
+not published; the final whole-document recompute, validation and ordinary
+rollback still decide acceptance. No additional document or transaction is
+created. The authoritative snapshot, revision, native document,
+preview lease and failure rollback contract are unchanged. Unknown task versions
+use the original native form metadata.
+
+Guarded Open also preserves the serialized Hole inputs that pinned FreeCAD 1.1.4
+can normalize incorrectly while restoring: ThreadSize and custom cut values.
+The adapter reads their native XML scalar/enum representations without changing
+the archive, then reapplies changed user inputs through native setters. Quantity
+floats retain native serialization's internal units; this path does not parse
+user unit strings. Property types, native enum membership, finite values and
+native readonly state are checked. Shape, computed ThreadDiameter, expression
+bindings, object links and property status flags are never assigned by this
+repair. After all Hole inputs have been restored, every restored Hole is
+explicitly touched through native invalidation, including those whose saved
+inputs already match. The existing whole-document native recompute then orders
+dependencies and regenerates all affected geometry before validation and
+publication. Thus a stale cached BRep is not accepted as evidence of valid Hole
+inputs: an invalid depth fails Open, and a valid changed depth regenerates its
+Hole and downstream features. This intentionally tightens Hole Open admission;
+it does not alter serialization or readonly policy. Exceptions remain inside the existing
+failed-Open cleanup guard, which closes newly created documents and preserves
+the previous document. No extra document, transaction, revision or history entry
+is created by the repair.
+
+When a missing native preset entry forces HoleCutCustomValues true and readonly,
+the form retains that computed protection. A complete candidate's identical
+literal true is accepted as an exact no-op; false and expression changes still
+use normal native readonly admission. No property status is changed.
+
+Editing ModelThread follows pinned TaskHoleParameters::holeTypeChanged by
+refreshing the current Threaded value through its native setter first. This
+updates a stale restored editor flag through native callbacks. Native readonly
+admission then runs normally; no readonly/status flag is relaxed directly.
+
 The Rust host starts a configured executable and argument list with the worker
 script as an argument. Keep that process alive between requests. One UTF-8 JSON
 object per line goes in and one response comes out. Diagnostics use stderr.
@@ -8,11 +77,12 @@ system locale, including portable Windows Python and Unicode file paths.
 
 The native worker can exchange private `cad-next-sketch-journal`,
 `cad-next-revisions` and `cad-next-leases` callback frames with `WorkerSession`
-while a public request is pending. Rust owns accepted sketch actions, replay order, the worker-local
+while a public request is pending. Rust owns accepted sketch actions, opaque native
+checkpoints and their history cursor, the worker-local
 revision registry, missing/stale revision checks and worker-wide gesture ownership.
 Rust also owns preview/sketch tokens, active-sketch edit scope, staged preview metadata, native-redo
 admission and poison state. Python supplies native transaction/redo facts and
-retains opaque replay payloads without an authorization token store. Python chooses when native
+retains the active preview's native checkpoint without an authorization token store. Python chooses when native
 acceptance or recovery requires publication. The native worker owns document mutations. These
 frames never reach public NDJSON clients. Version, outer request ID and a
 session-wide monotonic sequence correlate each callback. Callback replies and
@@ -30,7 +100,7 @@ parameters. Responses repeat version and id, contain `ok`, and contain either
 
 The initial operations are `capabilities`, `new`, `open`, `inspect`, `transaction`,
 `preview`, `preview_commit`, `preview_cancel`, `undo`, `redo`, `save`, `mesh`,
-`topology`, `measure`, `sketch_begin`, `sketch_finish`, `sketch_cancel` and `close`.
+`topology`, `measure`, `quantities`, `document_settings`, `sketch_begin`, `sketch_finish`, `sketch_cancel` and `close`.
 `new` takes a document `name`; `open`
 and `save` take a native file `path`; other document operations take `document`.
 `mesh` and `topology` also take the result object's `object` name and optional
@@ -166,6 +236,22 @@ owns recomputation and topology.
 
 ## Sketch editing sessions
 
+`mirror_geometry` is a sketch edit with native source `indices`,
+`reference:{index,point}`, and optional boolean `delete_original` and
+`create_symmetry_constraints`. The options are mutually exclusive. It shares
+sketch tokens, preview baselines, action replay, document history and native
+validation. See [Mirror](SKETCH-MIRROR.md) for selection semantics, the pinned
+Windows adapter and native constraint/expression behavior.
+
+`capabilities.sketch_tasks.mirror` and each sketch object's
+`sketch.task_capabilities.mirror` report `default_copy` and
+`create_symmetry_constraints`, each with `available` and `reason`. The task
+disables constrained mode and displays its reason when unavailable. The worker
+preflights that mode before opening a transaction or changing a revision,
+returning `sketch_mode_unavailable`. Default Python copy remains available
+without an adapter. Availability is checked once per worker, including platform,
+artifact/runtime hashes and successful synchronous adapter loading.
+
 `sketch_begin` takes `document`, `expected_revision`, native sketch `object` and
 a nonempty session `token` of at most 256 characters. Its response is a snapshot
 with `sketch_edit: {token, object}`. Beginning a session advances the revision but
@@ -184,8 +270,21 @@ is editable even when a Pad consumes it.
 
 The first edit opens one native transaction for the complete session. A small
 Rust-owned command journal groups accepted sketch actions. Session Undo/Redo
-abort and replay the selected action prefix against the same native document;
-they do not alter a frontend geometry/history graph. This also avoids FreeCAD's
+abort the current native transaction and restore the selected accepted action's
+opaque `SketchObject.dumpContent()` checkpoint through the same native
+`Persistence::restoreFromStream` engine, using the pinned adapter described in
+[native checkpoint restore](CHECKPOINT-RESTORE.md). The leaking Python
+`restoreContent` buffer binding is bypassed. Restoration remains
+against the same object and document. The private journal `checkpoint` callback
+returns only that cursor's payload, including a staged move or acceptance. Native
+checkpoint bytes are base64 encoded for transport; Rust does not interpret them.
+Missing checkpoint metadata is a protocol failure, never a silent fallback to
+re-running geometry creation. New candidate edits run after native restoration;
+failed replacements restore the last accepted preview checkpoint itself. Thus
+accepted geometry does not acquire new IDs merely because a later task is canceled.
+The complete native object serialization carries geometry extensions, constraints,
+expressions, link properties and native Shape/ElementMap data together. These operations
+do not alter a frontend geometry/history graph. This also avoids FreeCAD's
 20-entry native undo limit discarding a long session's cancellation baseline.
 Snapshot `undo_count` and `redo_count` describe session actions until it ends.
 Drag previews replace a temporary final group; committing adds one action and
@@ -788,3 +887,35 @@ Preview label validation precedes native redo admission. Rust requests the
 native RedoCount fact only for a first feature preview or unopened sketch
 transaction. Existing candidates and open sketch transactions skip that getter
 for admission. The demand and fact callbacks share the original request deadline.
+
+## Document settings and quantity text
+
+See [Native document units](DOCUMENT-UNITS.md) for the additive revision-checked
+`document_settings` and read-only `quantities` operations, metadata, text wrappers
+and default-unit rules. UnitSystem is explicitly outside native transaction
+Undo/Redo. It uses guarded assignment, preparation and explicit failure
+restoration. Numeric protocol values and native expressions retain their existing
+meanings. Sketch attachment offsets additionally accept native `axis_angle` with
+unitless `axis` and a native angle input, alongside the existing quaternion.
+
+## Native suppression persistence
+
+`capabilities.suppression` declares persistent state version 1 and native map
+seeding. A Part Design feature snapshot's `suppression` field reports its native
+state, tree-action availability and a reason when unavailable. The shared history
+builder accepts `feature_suppression` with `object` and boolean `suppressed` and
+emits the existing native property edit. Revisions, leases and transactions apply.
+
+While suppressed, hidden read-only native properties on the same feature retain
+its original local placement and native shape with element map. Unsuppression
+restores them through native setters, removes both temporary properties and
+touches the feature. Native document recomputation must succeed using current
+parameters before publication. The saved shape supplies the native naming map;
+it never substitutes for that recomputation. Native history restores the entire
+property state without authoring new observer changes. Callback failures abort
+through the existing guarded transaction boundary.
+
+Expression-driven changes use the same native before/after callbacks. Formula
+suppression is edited in Properties rather than the tree toggle. Legacy files
+already lacking original suppression state reject unsuppression atomically;
+placement and topology are not inferred. Downstream native errors remain errors.

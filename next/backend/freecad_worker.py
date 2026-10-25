@@ -27,18 +27,23 @@ import profile_references as ProfileReferences
 import expression_links as ExpressionLinks
 import assembly as AssemblyAuthoring
 import exchange as Exchange
+import document_units as DocumentUnits
 import measurements as Measurements
+import hole_task as HoleTask
+import suppression as Suppression
 import sketch_journal as SketchJournal
+import sketch_checkpoints as SketchCheckpoints
 import session_callbacks as SessionCallbacks
 
 SketchJournal.configure(_protocol)
+_native_suppression = Suppression.register()
 
 
 VERSION = 1
 OPERATIONS = ["capabilities", "new", "open", "inspect", "transaction", "undo",
               "redo", "save", "mesh", "topology", "close", "preview",
               "preview_commit", "preview_cancel", "sketch_begin", "sketch_finish", "sketch_cancel", "feature_schema", "export_exchange"]
-OPERATIONS.append("measure")
+OPERATIONS += ["measure", "document_settings", "quantities"]
 EDIT_OPERATIONS = ["add_object", "set", "expression", "geometry", "constraint",
                    "datum", "move_geometry", "construction", "delete_geometry", "delete_constraint", "refraction", "via_point",
                    "constraint_state", "trim_geometry", "remove_object", "binder_support",
@@ -96,7 +101,7 @@ def number(value):
 def vector(value):
     if not isinstance(value, list) or len(value) != 3:
         fail("invalid_request", "Expected a three-number vector")
-    return App.Vector(*(number(v) for v in value))
+    return App.Vector(*(DocumentUnits.value(v, "mm") for v in value))
 
 
 def sketch_index(value, count):
@@ -127,6 +132,12 @@ def document(request, writable=False):
         lease("local", key, request=request)
         if request.get("op") not in ("close", "preview_cancel", "sketch_cancel"):
             validate_assembly_proxies(doc)
+        # FreeCAD 1.1 transactions are app-wide. A change to an inactive
+        # document also enrolls the active document in its native history.
+        # Select the owner only after the existing write guards have admitted
+        # the request. Reads, export, and close retain their activation.
+        if request.get("op") not in ("close", "export_exchange"):
+            App.setActiveDocument(doc.Name)
     return doc
 
 
@@ -143,7 +154,18 @@ def property_type(obj, prop):
     return obj.getTypeIdOfProperty(prop)
 
 
-def decode_property(doc, type_id, value):
+def decode_property(doc, type_id, value, current=None):
+    if isinstance(value, dict) and "quantity_input" in value:
+        if not hasattr(current, "Unit"):
+            fail("dimension_mismatch", "This native property is not a quantity")
+        try:
+            return DocumentUnits.property_input(value, current.Unit)
+        except (ValueError, TypeError, KeyError) as error:
+            fail("dimension_mismatch", str(error))
+    if type_id == "App::PropertyVector" and isinstance(value, list):
+        if len(value) != 3:
+            fail("invalid_request", "Expected a three-number vector")
+        return App.Vector(*(number(v) for v in value))
     if type_id in ("App::PropertyLink", "App::PropertyLinkChild", "App::PropertyLinkGlobal", "App::PropertyXLink", "App::PropertyLinkHidden"):
         return None if value is None else object_in(doc, value["link"])
     if type_id in ("App::PropertyLinkSub", "App::PropertyLinkSubChild", "App::PropertyLinkSubGlobal", "App::PropertyXLinkSub"):
@@ -169,12 +191,20 @@ def decode_property(doc, type_id, value):
     if type_id == "Part::PropertyFilletEdges" and isinstance(value, list):
         if any(not isinstance(item, list) or len(item) != 3 or type(item[0]) is not int for item in value):
             fail("invalid_request", "Fillet edges require [edge index, radius1, radius2] triples")
-        return [(item[0], number(item[1]), number(item[2])) for item in value]
+        return [(item[0], DocumentUnits.value(item[1], "mm"), DocumentUnits.value(item[2], "mm")) for item in value]
     if type_id == "App::PropertyPlacement":
         rotation = value.get("rotation", [0, 0, 0, 1])
         if not isinstance(rotation, list) or len(rotation) != 4:
             fail("invalid_request", "Placement rotation requires quaternion [x,y,z,w]")
-        return App.Placement(vector(value["position"]), App.Rotation(*(number(v) for v in rotation)))
+        if "axis_angle" in value:
+            aa = value["axis_angle"]
+            axis = App.Vector(*(number(v) for v in aa["axis"]))
+            if axis.Length == 0:
+                fail("invalid_request", "Choose a nonzero rotation axis")
+            rotation = App.Rotation(axis, DocumentUnits.value(aa["angle"], "deg"))
+        else:
+            rotation = App.Rotation(*(number(v) for v in rotation))
+        return App.Placement(vector(value["position"]), rotation)
     scalars = {"String", "UUID", "Bool", "Integer", "IntegerConstraint", "Float", "FloatConstraint",
                "Enumeration", "Length", "Distance", "Angle", "Area", "Volume", "Quantity",
                "QuantityConstraint", "Percent", "Precision", "Speed", "Acceleration"}
@@ -234,6 +264,10 @@ def property_metadata(obj, prop):
               "hidden": "Hidden" in mode or "Hidden" in status, "editor_mode": mode}
     if type_id == "App::PropertyEnumeration":
         result["enumerations"] = list(obj.getEnumerationsOfProperty(prop))
+        if obj.TypeId == "PartDesign::Hole" and prop == "ThreadType":
+            result["hole_task_version"] = 1
+            result["hole_task_enumerations"] = HoleTask.enumerations()
+            result["hole_task_cut_angles"] = HoleTask.cut_angles()
     if prop == "Support" and obj.TypeId in {"PartDesign::ShapeBinder", "PartDesign::SubShapeBinder"}:
         result["task_editable"] = True
     # Native TaskExtrudeParameters writes these even when a previous successful
@@ -255,6 +289,14 @@ def property_snapshot(obj):
         result["property_types"][prop] = type_id
         result["property_metadata"][prop] = property_metadata(obj, prop)
         try:
+            quantity = DocumentUnits.metadata(type_id, getattr(obj, prop), DocumentUnits.index(obj.Document))
+            if quantity is not None:
+                result["property_metadata"][prop]["quantity"] = quantity
+            if type_id == "Part::PropertyFilletEdges":
+                result["property_metadata"][prop]["quantity_default"] = DocumentUnits.describe(DocumentUnits.native(1, "mm"), DocumentUnits.index(obj.Document))
+        except (TypeError, AttributeError):
+            pass
+        try:
             result["properties"][prop] = encode_property(type_id, getattr(obj, prop))
         except (TypeError, AttributeError):
             pass
@@ -263,6 +305,7 @@ def property_snapshot(obj):
 
 def writable_property(obj, prop, expression=False):
     type_id = property_type(obj, prop)
+    HoleTask.prepare_input(obj, prop)
     if expression and obj.isDerivedFrom("Sketcher::SketchObject") and prop == "Constraints":
         return type_id
     metadata = property_metadata(obj, prop)
@@ -275,13 +318,19 @@ def writable_property(obj, prop, expression=False):
 def initialize_feature_schemas():
     # Native object creation can interfere with application-wide transactions.
     # Build the JSON cache before accepting requests, then retain no native doc.
-    for type_id in sorted(OBJECT_TYPES):
-        doc = App.newDocument("FeatureSchema")
-        try:
+    doc = App.newDocument("FeatureSchema")
+    try:
+        for type_id in sorted(OBJECT_TYPES):
             obj = doc.addObject(type_id, "Feature")
             _feature_schemas[type_id] = {"type": type_id, **property_snapshot(obj)}
-        finally:
-            App.closeDocument(doc.Name)
+            if type_id == "PartDesign::Hole":
+                HoleTask.initialize(obj)
+            # Include native children such as Body origins. The next template
+            # must start empty, with the same object names and native defaults.
+            for item in reversed(doc.Objects):
+                doc.removeObject(item.Name)
+    finally:
+        App.closeDocument(doc.Name)
 
 
 def bounds(shape):
@@ -450,7 +499,8 @@ def snapshot(doc, revision=None):
         entry = {"name": obj.Name, "type": obj.TypeId, "label": obj.Label,
                  "effective_visibility": effective_visibility(obj),
                  "valid": obj.isValid(), "status": obj.getStatusString(),
-                 "state": list(obj.State), **property_snapshot(obj), **AssemblyAuthoring.metadata(obj)}
+                 "state": list(obj.State), **property_snapshot(obj), **AssemblyAuthoring.metadata(obj),
+                 **Suppression.metadata(obj)}
         owner = owner_body(obj)
         entry["body"] = owner.Name if owner else None
         entry["history_flags"] = FeatureHistory.flags(obj, owner)
@@ -473,6 +523,7 @@ def snapshot(doc, revision=None):
                               "bounds": None if empty else bounds(shape)}
         if obj.isDerivedFrom("Sketcher::SketchObject"):
             entry["sketch"] = {"geometry_count": obj.GeometryCount, "constraint_count": obj.ConstraintCount,
+                               "task_capabilities": SketchOperations.capabilities(),
                                "degrees_of_freedom": obj.DoF,
                                "conflicting_constraints": list(obj.ConflictingConstraints),
                                "redundant_constraints": list(obj.RedundantConstraints),
@@ -484,12 +535,14 @@ def snapshot(doc, revision=None):
                                                 "first_pos": c.FirstPos, "second": c.Second,
                                                 "second_pos": c.SecondPos, "third": c.Third,
                                                 "third_pos": c.ThirdPos, "value": c.Value,
+                                                **DocumentUnits.constraint(obj, c),
                                                 "name": c.Name, "driving": c.Driving,
                                                 "virtual": c.InVirtualSpace, "active": c.IsActive,
                                                 **SketchGeometry.angle_witness(obj, c)}
                                                for i, c in enumerate(obj.Constraints)]}
         objects.append(entry)
     return {"document": doc.Name, "revision": revision_request("current", doc.Name) if revision is None else revision, "objects": objects,
+            "units": DocumentUnits.settings(doc),
             **history_counts(doc), "sketch_edit": sketch_metadata(doc),
             "available": lease("metadata", doc.Name)["available"], "preview": preview_metadata(doc)}
 
@@ -515,9 +568,27 @@ def validate_assembly_proxies(doc):
         fail(error.code, str(error))
 
 
+def check_suppression():
+    try:
+        _native_suppression.check()
+    except RuntimeError as error:
+        fail("suppression_state_unavailable", str(error))
+
+
+def abort_transaction(doc):
+    with _native_suppression.history():
+        doc.abortTransaction()
+
+
+def native_history(doc, operation):
+    with _native_suppression.history():
+        getattr(doc, operation)()
+
+
 def recompute_document(doc):
     validate_assembly_proxies(doc)
     result = doc.recompute()
+    check_suppression()
     if result is not False and not _native_sketch_sessions.get(doc.Name):
         try:
             result = AssemblyAuthoring.solve_document(doc)
@@ -544,11 +615,12 @@ def validate(doc, whole=False):
                     fail("invalid_model", obj.Name + ": " + diagnostic)
         if hasattr(obj, "Shape") and not obj.Shape.isNull() and not obj.Shape.isValid():
             fail("invalid_model", obj.Name + ": native shape is invalid")
-        if obj.isDerivedFrom("PartDesign::Boolean") and len(obj.Shape.Solids) == 0:
+        if obj.isDerivedFrom("PartDesign::Boolean") and not obj.Suppressed and len(obj.Shape.Solids) == 0:
             fail("invalid_model", obj.Name + ": native Boolean result contains no solid")
         transformation_step = any(parent.isDerivedFrom("PartDesign::MultiTransform") and
                                   obj in parent.Transformations for parent in obj.InList)
-        if not transformation_step and obj.TypeId in OBJECT_TYPES and obj.TypeId not in {
+        suppressed = obj.isDerivedFrom("PartDesign::Feature") and obj.Suppressed
+        if not suppressed and not transformation_step and obj.TypeId in OBJECT_TYPES and obj.TypeId not in {
             "App::Part", "PartDesign::Body", "Sketcher::SketchObject",
             "PartDesign::Plane", "PartDesign::Line", "PartDesign::Point", "PartDesign::CoordinateSystem",
             "PartDesign::ShapeBinder", "PartDesign::SubShapeBinder",
@@ -576,6 +648,12 @@ def set_boolean_tools(feature, tools):
 
 
 def apply_edit(doc, edit):
+    result = apply_native_edit(doc, edit)
+    check_suppression()
+    return result
+
+
+def apply_native_edit(doc, edit):
     op = edit.get("op", edit.get("kind"))
     if op in AssemblyAuthoring.OPERATIONS:
         try:
@@ -660,8 +738,10 @@ def apply_edit(doc, edit):
                 previous.Visibility = True
     elif op == "set":
         prop = edit["property"]
+        if HoleTask.unchanged_forced_input(obj, prop, edit["value"]):
+            return {"object": obj.Name}
         type_id = writable_property(obj, prop)
-        value = decode_property(doc, type_id, edit["value"])
+        value = decode_property(doc, type_id, edit["value"], getattr(obj, prop))
         if obj.isDerivedFrom("PartDesign::Boolean") and prop == "Group":
             set_boolean_tools(obj, value)
         elif obj.isDerivedFrom("PartDesign::Boolean") and prop == "BaseFeature":
@@ -689,6 +769,7 @@ def apply_edit(doc, edit):
         if expression is not None and not isinstance(expression, str):
             fail("invalid_request", "Expression must be a string or null")
         obj.setExpression(prop, expression)
+        HoleTask.resolve_controller(obj, prop)
     elif op in {"external_geometry", "external_state", "delete_external"}:
         if not obj.isDerivedFrom("Sketcher::SketchObject"):
             fail("invalid_request", "External geometry requires a native SketchObject")
@@ -751,6 +832,14 @@ def apply_edit(doc, edit):
         index = sketch_index(edit["index"], obj.ConstraintCount if constraint else obj.GeometryCount)
         if op == "datum":
             value = edit["value"]
+            if "input_default_unit" in edit:
+                kind = obj.Constraints[index].Type
+                unit = "rad" if kind == "Angle" else "" if kind in {"Weight", "SnellsLaw"} else "mm"
+                try:
+                    parsed = DocumentUnits.parse(value, unit, edit["input_default_unit"])
+                    value = DocumentUnits.describe(DocumentUnits.native(parsed, unit), DocumentUnits.index(doc))["input"]
+                except (ValueError, TypeError) as error:
+                    fail("dimension_mismatch", str(error))
             if not isinstance(value, str):
                 number(value)
             quantity = App.Units.Quantity(value)
@@ -816,7 +905,7 @@ def transaction(doc, request):
         doc.commitTransaction()
     except Exception:
         try:
-            doc.abortTransaction()
+            abort_transaction(doc)
             recompute_document(doc)
             validate(doc)
         except Exception:
@@ -833,6 +922,10 @@ def transaction(doc, request):
 
 def preflight_constraints(edits):
     for edit in edits:
+        try:
+            SketchOperations.preflight(edit)
+        except SketchOperations.OperationError as error:
+            fail(error.code, str(error))
         if isinstance(edit, dict) and edit.get("op") in {"constraint", "refraction", "via_point"}:
             try:
                 if edit.get("op") == "via_point" and edit.get("kind") not in {"TangentViaPoint", "PerpendicularViaPoint", "AngleViaPoint"}:
@@ -864,17 +957,25 @@ def journal(doc, action, **parameters):
 
 def replay_sketch(doc, session, candidate=None):
     if session["opened"]:
-        doc.abortTransaction()
+        abort_transaction(doc)
         session["opened"] = False
-    groups = journal(doc, "replay")
-    if groups or candidate:
+    checkpoint = journal(doc, "checkpoint")
+    if checkpoint or candidate:
         doc.openTransaction(session["label"])
         session["opened"] = True
-        for group in groups:
-            for edit in group["edits"]:
-                apply_edit(doc, edit)
-            solve_sketch(doc, session)
-        results = [apply_edit(doc, edit) for edit in candidate["edits"]] if candidate else []
+        sketch = object_in(doc, session["object"])
+        if candidate and candidate.get("native_checkpoint"):
+            with _native_suppression.history():
+                SketchCheckpoints.restore(sketch, candidate["native_checkpoint"])
+            check_suppression()
+            results = []
+        else:
+            if checkpoint:
+                with _native_suppression.history():
+                    SketchCheckpoints.restore(sketch, checkpoint)
+                check_suppression()
+                solve_sketch(doc, session)
+            results = [apply_edit(doc, edit) for edit in candidate["edits"]] if candidate else []
     else:
         results = []
     solve_sketch(doc, session)
@@ -901,7 +1002,9 @@ def sketch_transaction(doc, request):
             session["opened"] = True
         results = [apply_edit(doc, edit) for edit in edits]
         solve_sketch(doc, session)
-        journal(doc, "stage_accept", group={"label": request.get("label", "Edit sketch"), "edits": edits})
+        checkpoint = SketchCheckpoints.capture(object_in(doc, session["object"]))
+        journal(doc, "stage_accept", group={"label": request.get("label", "Edit sketch"), "edits": edits,
+                                            "native_checkpoint": checkpoint})
         staged = True
         state = prepare_state(doc)
         json.dumps(results, allow_nan=False)
@@ -932,6 +1035,10 @@ def sketch_history(doc, op):
 def sketch_session(doc, request):
     lease("sketch_validate", doc.Name, request=request)
     if request["op"] == "sketch_begin":
+        try:
+            SketchCheckpoints.require_runtime()
+        except SketchCheckpoints.checkpoint_native.CheckpointUnavailable as error:
+            fail("native_checkpoint_unavailable", str(error))
         obj = object_in(doc, request["object"])
         if not obj.isDerivedFrom("Sketcher::SketchObject"):
             fail("invalid_request", "Sketch editing requires a native SketchObject")
@@ -953,7 +1060,7 @@ def sketch_session(doc, request):
     if request["op"] == "sketch_cancel":
         try:
             if session["opened"]:
-                doc.abortTransaction()
+                abort_transaction(doc)
                 session["opened"] = False
             recompute_document(doc)
             validate(doc, whole=True)
@@ -1020,6 +1127,7 @@ def sketch_preview(doc, request, active):
     staged = False
     try:
         results = replay_sketch(doc, session, candidate)
+        candidate["native_checkpoint"] = SketchCheckpoints.capture(object_in(doc, session["object"]))
         _native_previews[doc.Name] = candidate
         lease("preview_stage", doc.Name, request=request, label=label)
         staged = True
@@ -1058,7 +1166,7 @@ def preview(doc, request):
                 raise
         else:
             try:
-                doc.abortTransaction()
+                abort_transaction(doc)
                 recompute_document(doc)
                 validate(doc)
                 state = prepare_state(doc)
@@ -1079,7 +1187,7 @@ def preview(doc, request):
     label = preview_ready(doc, request)
     if active:
         try:
-            doc.abortTransaction()
+            abort_transaction(doc)
             recompute_document(doc)
             validate(doc)
         except Exception:
@@ -1101,7 +1209,7 @@ def preview(doc, request):
         if staged:
             lease("preview_resolve", doc.Name, accepted=False)
         try:
-            doc.abortTransaction()
+            abort_transaction(doc)
             recompute_document(doc)
             if active:
                 doc.openTransaction(active["label"])
@@ -1141,7 +1249,11 @@ def dispatch(request):
                 "object_types": sorted(OBJECT_TYPES), "geometry_kinds": ["line", "circle", "arc", "point",
                     "ellipse", "ellipse_arc", "bspline", "hyperbola_arc", "parabola_arc"],
                 "constraint_signatures": SketchGeometry.CONSTRAINT_SIGNATURES,
+                "sketch_tasks": SketchOperations.capabilities(),
+                "sketch_checkpoints": SketchCheckpoints.capabilities(),
                 "edit_operations": EDIT_OPERATIONS,
+                "suppression": {"persistent_state_version": 1, "native_map_seed": True,
+                                "legacy_requires_original_state": True},
                 "assembly": {"container_type": "Assembly::AssemblyObject", "instance_type": "App::Link",
                              "joint_types": list(AssemblyAuthoring.JOINT_TYPES),
                              "component_sources": ["local_document"], "external_file_insertion": False}}
@@ -1149,6 +1261,11 @@ def dispatch(request):
         type_id = request.get("type")
         if type_id not in _feature_schemas:
             fail("unsupported_object_type", "Unsupported native object type: " + str(type_id))
+        if request.get("document") is not None:
+            doc = document(request)
+            lease("read_guard", doc.Name)
+            revision_request("check", doc.Name, expected_revision=request.get("expected_revision"))
+            return DocumentUnits.schema(_feature_schemas[type_id], doc, request.get("values", {}))
         return _feature_schemas[type_id]
     lease("global", request=request)
     if op in ("new", "open"):
@@ -1167,7 +1284,10 @@ def dispatch(request):
                 if any(os.path.normcase(d.FileName) == os.path.normcase(path) for d in App.listDocuments().values()):
                     fail("already_open", "Native document is already open")
                 doc = App.openDocument(path)
+            _native_suppression.attach(doc)
             doc.UndoMode = 1
+            if op == "open":
+                HoleTask.restore_inputs(doc, path)
             recompute_document(doc)
             # Untouched restored sketches can retain the Python DoF default 0
             # until their solver runs, even when they are underconstrained.
@@ -1181,6 +1301,7 @@ def dispatch(request):
         except Exception:
             for key in set(App.listDocuments()) - before:
                 App.closeDocument(key)
+                _native_suppression.detach(key)
             if active is not None and active.Name in App.listDocuments():
                 App.setActiveDocument(active.Name)
             raise
@@ -1189,7 +1310,43 @@ def dispatch(request):
         fail("unsupported_operation", "Unsupported operation: " + str(op))
     doc = document(request, writable=op in ("transaction", "undo", "redo", "save", "close",
                                            "preview", "preview_commit", "preview_cancel",
-                                           "sketch_begin", "sketch_finish", "sketch_cancel", "export_exchange"))
+                                           "sketch_begin", "sketch_finish", "sketch_cancel", "export_exchange", "document_settings"))
+    if op == "quantities":
+        lease("read_guard", doc.Name)
+        revision_request("check", doc.Name, expected_revision=request.get("expected_revision"))
+        try:
+            items = DocumentUnits.query(doc, request.get("items"))
+        except (ValueError, TypeError, KeyError) as error:
+            fail("invalid_quantity", str(error))
+        return {"document": doc.Name, "revision": revision_request("current", doc.Name), "items": items}
+    if op == "document_settings":
+        selected = request.get("unit_system")
+        choices = list(doc.getEnumerationsOfProperty("UnitSystem"))
+        if type(selected) is not int or not 0 <= selected < len(choices):
+            fail("invalid_request", "Choose a native document unit system")
+        previous = doc.UnitSystem
+        if previous == choices[selected]:
+            return snapshot(doc)
+        history = (doc.UndoCount, doc.RedoCount)
+        try:
+            # UnitSystem is NOT transaction undoable. No transaction is opened,
+            # aborted, committed or synthesized for this document setting.
+            doc.UnitSystem = selected
+            state = prepare_state(doc)
+            if doc.UnitSystem != choices[selected] or history != (doc.UndoCount, doc.RedoCount):
+                fail("settings_state", "Native setting or history changed unexpectedly")
+            state["revision"] = bump(doc)
+            return state
+        except Exception:
+            try:
+                doc.UnitSystem = previous
+                prepare_state(doc)
+                if doc.UnitSystem != previous or history != (doc.UndoCount, doc.RedoCount):
+                    raise RuntimeError("Native settings restoration did not match its baseline")
+            except Exception:
+                lease("poison", doc.Name)
+                traceback.print_exc(file=sys.stderr)
+            raise
     if op == "measure":
         lease("read_guard", doc.Name)
         revision_request("check", doc.Name, expected_revision=request.get("expected_revision"))
@@ -1222,7 +1379,7 @@ def dispatch(request):
         if getattr(doc, "UndoCount" if op == "undo" else "RedoCount") == 0:
             fail("nothing_to_" + op, "No native transaction to " + op)
         names_before = {obj.Name for obj in doc.Objects}
-        getattr(doc, op)()
+        native_history(doc, op)
         try:
             ExpressionLinks.repair_new(doc, names_before)
             recompute_document(doc)
@@ -1231,7 +1388,7 @@ def dispatch(request):
         except Exception:
             try:
                 names_before = {obj.Name for obj in doc.Objects}
-                getattr(doc, "redo" if op == "undo" else "undo")()
+                native_history(doc, "redo" if op == "undo" else "undo")
                 ExpressionLinks.repair_new(doc, names_before)
                 recompute_document(doc)
                 validate(doc)
@@ -1249,6 +1406,7 @@ def dispatch(request):
     if op == "close":
         key = doc.Name
         App.closeDocument(key)
+        _native_suppression.detach(key)
         revision_request("close", key)
         lease("close", key)
         _native_previews.pop(key, None)

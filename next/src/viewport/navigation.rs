@@ -1,5 +1,5 @@
 //! Camera and display choices are presentation state; native visibility lives in the document.
-use super::Viewport;
+use super::{Selection, Viewport};
 use glam::{Mat3, Quat, Vec3};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,7 +60,99 @@ impl Viewport {
     pub fn has_vertices(&self) -> bool {
         !self.vertices.is_empty()
     }
+
+    /// Frame only current native display elements. This is camera state, not a
+    /// native geometry edit or a request to reveal hidden objects.
+    pub fn can_fit_selection(&self, fallback: Option<&str>) -> bool {
+        self.can_fit_objects(&fallback.map(str::to_owned).into_iter().collect::<Vec<_>>())
+    }
+
+    pub fn fit_selection(&mut self, fallback: Option<&str>) -> bool {
+        self.fit_objects(&fallback.map(str::to_owned).into_iter().collect::<Vec<_>>())
+    }
+
+    pub fn can_fit_objects(&self, fallback: &[String]) -> bool {
+        !self.selection_points(fallback).is_empty()
+    }
+
+    pub fn fit_objects(&mut self, fallback: &[String]) -> bool {
+        let points = self.selection_points(fallback);
+        if points.is_empty() || !self.rect.is_positive() || !self.rect.is_finite() {
+            return false;
+        }
+        let min = points
+            .iter()
+            .fold(Vec3::splat(f32::INFINITY), |a, b| a.min(*b));
+        let max = points
+            .iter()
+            .fold(Vec3::splat(f32::NEG_INFINITY), |a, b| a.max(*b));
+        let center = min * 0.5 + max * 0.5;
+        let extent = points.iter().fold(Vec3::ZERO, |a, b| {
+            a.max((self.rotation.conjugate() * (*b - center)).abs())
+        });
+        if !center.is_finite() || !extent.is_finite() {
+            return false;
+        }
+        let scale = if extent.max_element() < 1e-6 {
+            8.
+        } else {
+            ((self.rect.width() / (extent.x * 2.).max(1.))
+                .min(self.rect.height() / (extent.y * 2.).max(1.))
+                * 0.78)
+                .clamp(0.0001, 100000.)
+        };
+        self.center = center;
+        self.scale = scale;
+        true
+    }
+
+    fn selection_points(&self, fallback: &[String]) -> Vec<Vec3> {
+        let selections = if !self.selections.is_empty() {
+            self.selections.clone()
+        } else if let Some(selection) = &self.selected {
+            vec![selection.clone()]
+        } else {
+            fallback
+                .iter()
+                .map(|object| Selection {
+                    object: object.clone(),
+                    subelement: String::new(),
+                })
+                .collect()
+        };
+        let matches = |object: &str, subelement: &str| {
+            selections.iter().any(|s| {
+                s.object == object && (s.subelement.is_empty() || s.subelement == subelement)
+            })
+        };
+        self.triangles
+            .iter()
+            .filter(|t| matches(&t.object, &t.face))
+            .flat_map(|t| t.points)
+            .chain(
+                self.edges
+                    .iter()
+                    .filter(|e| matches(&e.object, &e.name))
+                    .flat_map(|e| e.points.iter().copied()),
+            )
+            .chain(
+                self.vertices
+                    .iter()
+                    .filter(|v| matches(&v.object, &v.name))
+                    .map(|v| v.point),
+            )
+            .chain(
+                self.references
+                    .iter()
+                    .flat_map(|reference| reference.selected_bounds(&selections)),
+            )
+            .filter(|point| point.is_finite())
+            .collect()
+    }
 }
+
+#[cfg(test)]
+mod fit_tests;
 
 #[cfg(test)]
 mod tests {

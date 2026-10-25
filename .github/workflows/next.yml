@@ -38,7 +38,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libgl1 libegl1 libglu1-mesa libxkbcommon-dev libwayland-dev
+          sudo apt-get install -y --no-install-recommends libgl1 libegl1 libglu1-mesa libxkbcommon-dev libwayland-dev g++ binutils
       - name: Rust toolchain
         run: rustup toolchain install 1.99.1 --profile minimal --component clippy --component rustfmt
       - name: Cache pinned runtime
@@ -58,6 +58,156 @@ jobs:
           python -B next/tests/workflow_ledger_tests.py
       - name: Verified native runtime
         run: python next/tools/setup_runtime.py --output next/target/runtime.json
+      - name: Linux x64 native checkpoint promotion gate
+        if: runner.os == 'Linux'
+        env:
+          FREECAD_USER_HOME: ${{ github.workspace }}/next/target/checkpoint-linux-x64-config
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          test "$RUNNER_ARCH" = X64
+          mkdir -p "$FREECAD_USER_HOME"
+          python -B next/tools/check_checkpoint_linux.py --runtime next/target/runtime.json --host next/target/debug/cad-next --expected-arch x86_64 --output next/target/checkpoint-linux-x64
+      - name: Startup schemas preserve first model and native histories
+        env:
+          FREECAD_USER_HOME: ${{ github.workspace }}/next/target/schema-startup-config
+          PYTHONDONTWRITEBYTECODE: '1'
+          PYTHONUTF8: '1'
+        run: |
+          mkdir -p "$FREECAD_USER_HOME"
+          host=next/target/debug/cad-next
+          if [ "$RUNNER_OS" = Windows ]; then host="$host.exe"; fi
+          python -B next/tests/feature_schema_startup_workflows.py --host "$host" --runtime next/target/runtime.json --output next/target/schema-startup
+      - name: Windows native checkpoint regression gate
+        if: runner.os == 'Windows'
+        env:
+          FREECAD_USER_HOME: ${{ github.workspace }}/next/target/checkpoint-windows-config
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          mkdir -p "$FREECAD_USER_HOME"
+          python -B next/tests/checkpoint_restore_workflows.py --runtime next/target/runtime.json --host next/target/debug/cad-next.exe --output next/target/checkpoint-windows
+          python -B next/tests/checkpoint_linux_workflows.py --runtime next/target/runtime.json --host next/target/debug/cad-next.exe --output next/target/checkpoint-windows-public
+      - name: Native document ownership and Editor save-path regressions
+        env:
+          CAD_LIFECYCLE_RUNTIME: ${{ github.workspace }}/next/target/runtime.json
+          CAD_LIFECYCLE_OUTPUT: ${{ github.workspace }}/next/target/document-ownership/editor
+          FREECAD_USER_HOME: ${{ github.workspace }}/next/target/document-ownership-config
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          host=next/target/debug/cad-next
+          compiler=next/target/debug/cad-next-packages
+          if [ "$RUNNER_OS" = Windows ]; then host="$host.exe"; compiler="$compiler.exe"; fi
+          python -B next/tools/check_document_ownership.py --runtime next/target/runtime.json --host "$host" --compiler "$compiler" --output next/target/document-ownership
+          mkdir -p "$CAD_LIFECYCLE_OUTPUT"
+          for case in document_switch_preserves_dirty_confirmation_and_each_save_path ordinary_failed_open_keeps_dirty_content_and_save_retry_path; do
+            cargo test --manifest-path next/Cargo.toml --all-features --locked "editor::sketch::lifecycle_tests::$case" -- --exact --ignored --test-threads=1 > "next/target/document-ownership/$case.log" 2>&1
+          done
+      - name: Native document units, settings restoration and Editor regressions
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+          PYTHONUTF8: '1'
+        run: |
+          cargo test --manifest-path next/Cargo.toml --all-features --lib --locked --no-run --message-format=json > next/target/units-test-artifacts.jsonl
+          python -B - <<'PY'
+          import json, os, pathlib, subprocess, sys
+          root = pathlib.Path.cwd()
+          artifacts = [json.loads(line) for line in (root/'next/target/units-test-artifacts.jsonl').read_text().splitlines() if line.startswith('{')]
+          tests = next(a['executable'] for a in artifacts if a.get('reason') == 'compiler-artifact' and a.get('executable') and 'lib' in a['target']['kind'] and a['profile']['test'])
+          suffix = '.exe' if os.name == 'nt' else ''
+          subprocess.run([sys.executable, '-B', 'next/tools/check_document_units.py', '--runtime', 'next/target/runtime.json', '--host', str(root/'next/target/debug'/('cad-next'+suffix)), '--compiler', str(root/'next/target/debug'/('cad-next-packages'+suffix)), '--editor-tests', tests, '--output', 'next/target/document-units'], check=True)
+          PY
+      - name: Native Hole controllers, guarded Open and units integration
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+          PYTHONUTF8: '1'
+        run: |
+          python -B - <<'PY'
+          import json, pathlib, subprocess, sys
+          root = pathlib.Path.cwd()
+          artifacts = [json.loads(line) for line in (root/'next/target/units-test-artifacts.jsonl').read_text().splitlines() if line.startswith('{')]
+          tests = next(a['executable'] for a in artifacts if a.get('reason') == 'compiler-artifact' and a.get('executable') and 'lib' in a['target']['kind'] and a['profile']['test'])
+          subprocess.run([sys.executable, '-B', 'next/tools/check_hole.py', '--runtime', 'next/target/runtime.json', '--editor-tests', tests, '--output', 'next/target/hole-integration'], check=True)
+          PY
+      - name: Native suppression persistence, tree and checkpoint interactions
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+          PYTHONUTF8: '1'
+          FREECAD_USER_HOME: ${{ github.workspace }}/next/target/suppression/config
+        run: |
+          python -B - <<'PY'
+          import json, os, pathlib, subprocess, sys, tarfile
+          root = pathlib.Path.cwd(); out = root/'next/target/suppression'; (out/'config').mkdir(parents=True)
+          runtime_path = root/'next/target/runtime.json'; runtime = json.loads(runtime_path.read_text())
+          prefix = [runtime['executable'], *runtime['args']]
+          def run(command, **extra):
+              subprocess.run(list(map(str,command)), env=dict(os.environ,**extra), check=True)
+          for name in ['references','boundaries','observer']:
+              run([*prefix, root/('next/tests/suppression_native_'+name+'.py'), out/name])
+          run([*prefix, root/'next/tests/suppression_native_controls.py', '--references', out/'references', '--output', out/'controls'])
+          suffix = '.exe' if os.name == 'nt' else ''
+          host = root/'next/target/debug'/('cad-next'+suffix); compiler = root/'next/target/debug'/('cad-next-packages'+suffix)
+          run([sys.executable,'-B',root/'next/tests/suppression_workflows.py','--host',host,'--compiler',compiler,'--runtime',runtime_path,'--output',out/'public','--legacy',out/'controls/legacy.FCStd'])
+          artifacts = [json.loads(s) for s in (root/'next/target/units-test-artifacts.jsonl').read_text().splitlines() if s.startswith('{')]
+          tests = next(a['executable'] for a in artifacts if a.get('reason')=='compiler-artifact' and a.get('executable') and 'lib' in a['target']['kind'] and a['profile']['test'])
+          (out/'editor').mkdir()
+          run([tests,'editor::properties::acceptance_probe::suppression::','--ignored','--test-threads=1'], CAD_EDITOR_ACCEPTANCE_RUNTIME=str(runtime_path), CAD_EDITOR_ACCEPTANCE_WORKER=str(root/'next/backend/freecad_worker.py'), CAD_EDITOR_ACCEPTANCE_OUTPUT=str(out/'editor'), CAD_SUPPRESSION_LEGACY=str(out/'controls/legacy.FCStd'))
+          observed = dict(runtime,script=str(root/'next/tests/fixtures/suppression_checkpoint_worker.py'))
+          observed_path = out/'observed-runtime.json'; observed_path.write_text(json.dumps(observed))
+          run([sys.executable,'-B',root/'next/tests/suppression_checkpoint_workflows.py','--host',host,'--runtime',observed_path,'--output',out/'checkpoint'], CAD_SUPPRESSION_TRACE=str(out/'checkpoint-native.jsonl'))
+          with tarfile.open(root/'next/tests/fixtures/hole_native_fixtures.tar.gz') as archive:
+              (out/'hole-input.FCStd').write_bytes(archive.extractfile('fixtures/input.FCStd').read())
+          run([sys.executable,'-B',root/'next/tests/suppression_current_inputs.py','--host',host,'--runtime',runtime_path,'--fillet',out/'references/Fillet.FCStd','--hole',out/'hole-input.FCStd','--output',out/'current-inputs'])
+          run([*prefix,root/'next/tests/suppression_units_native.py','--input',out/'current-inputs'])
+          PY
+      - name: Native sketch Copy, Clone, Move, array and combined checkpoints
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+          PYTHONUTF8: '1'
+        run: |
+          python -B - <<'PY'
+          import json, os, pathlib, subprocess, sys
+          root = pathlib.Path.cwd()
+          artifacts = [json.loads(line) for line in (root/'next/target/units-test-artifacts.jsonl').read_text().splitlines() if line.startswith('{')]
+          tests = next(a['executable'] for a in artifacts if a.get('reason') == 'compiler-artifact' and a.get('executable') and 'lib' in a['target']['kind'] and a['profile']['test'])
+          suffix = '.exe' if os.name == 'nt' else ''
+          subprocess.run([sys.executable, '-B', 'next/tools/check_sketch_copy.py', '--runtime', 'next/target/runtime.json', '--host', str(root/'next/target/debug'/('cad-next'+suffix)), '--compiler', str(root/'next/target/debug'/('cad-next-sketch'+suffix)), '--editor-tests', tests, '--output', 'next/target/sketch-copy'], check=True)
+          PY
+      - name: Record checkpoint gate provenance
+        if: always()
+        run: |
+          python -B - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          root = pathlib.Path.cwd()
+          files = [root/'.github/workflows/next.yml', root/'next/target/runtime.json']
+          for pattern in ['next/src/**/*.rs', 'next/backend/**/*.py', 'next/backend/native/*', 'next/tools/*.py', 'next/tests/checkpoint*', 'next/tests/fixtures/checkpoint*', 'next/tests/document_ownership*', 'next/tests/fixtures/document_ownership*']:
+              files.extend(path for path in root.glob(pattern) if path.is_file())
+          files.extend(root/'next/target/debug'/name for name in ['cad-next', 'cad-next.exe', 'cad-next-packages', 'cad-next-packages.exe'])
+          hashes = {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest() for path in files if path.is_file()}
+          target = root/'next/target/checkpoint-gate-provenance.json'
+          target.parent.mkdir(parents=True, exist_ok=True)
+          target.write_text(json.dumps({'head': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(), 'run_id': os.environ.get('GITHUB_RUN_ID'), 'os': os.environ.get('RUNNER_OS'), 'architecture': os.environ.get('RUNNER_ARCH'), 'files': hashes}, indent=2) + '\n')
+          PY
+      - name: Preserve checkpoint gate evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: checkpoint-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            next/target/checkpoint-gate-provenance.json
+            next/target/runtime.json
+            next/target/checkpoint-linux-x64/
+            next/target/checkpoint-windows/
+            next/target/checkpoint-windows-public/
+            next/target/document-ownership/
+            next/target/document-units/
+            next/target/hole-integration/
+            next/target/suppression/
+            next/target/schema-startup/
+            next/target/sketch-copy/
+            next/backend/native/checkpoint_restore*.json
+            next/backend/native/checkpoint_restore*.so
+            next/backend/native/checkpoint_restore.dll
       - name: Native sketch editing, attachment, fillets, Bodies and history
         run: |
           host=next/target/debug/cad-next
@@ -120,7 +270,30 @@ jobs:
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
           mkdir -p "$CAD_LIFECYCLE_OUTPUT" "$FREECAD_USER_HOME"
-          cargo test --manifest-path next/Cargo.toml --all-features --locked editor::sketch::lifecycle_tests:: -- --ignored --test-threads=1
+          skip=(--skip mirror_editor_unavailable_constraints_preserves_default_and_redo --skip document_switch_preserves_dirty_confirmation_and_each_save_path --skip ordinary_failed_open_keeps_dirty_content_and_save_retry_path)
+          if [ "$RUNNER_OS" != Windows ]; then
+            skip+=(--skip mirror_editor_apply_cancel_action_history_and_reopen --skip mirror_editor_invalid_selection_native_failure_and_session_cancel --skip mirror_editor_accepted_native_ids_survive_later_tasks_and_history)
+          fi
+          cargo test --manifest-path next/Cargo.toml --all-features --locked editor::sketch::lifecycle_tests:: -- --ignored --test-threads=1 "${skip[@]}"
+      - name: Windows editor unavailable Mirror mode preserves default and Redo
+        if: runner.os == 'Windows'
+        env:
+          CAD_LIFECYCLE_OUTPUT: ${{ github.workspace }}/next/target/mirror-unavailable-editor-documents
+          FREECAD_USER_HOME: ${{ github.workspace }}/next/target/mirror-unavailable-editor-config
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          mkdir -p "$CAD_LIFECYCLE_OUTPUT" "$FREECAD_USER_HOME"
+          python -B - <<'PY'
+          import json, pathlib, shutil
+          root = pathlib.Path.cwd()
+          target = root/'next/target/mirror-unavailable-source'
+          shutil.copytree(root/'next/backend', target/'backend', ignore=shutil.ignore_patterns('sketch_mirror.dll'))
+          shutil.copytree(root/'next/tests/fixtures', target/'tests/fixtures')
+          runtime = json.loads((root/'next/target/runtime.json').read_text())
+          runtime['test_worker'] = str(target/'tests/fixtures/lifecycle_fault_worker.py')
+          (root/'next/target/mirror-unavailable-runtime.json').write_text(json.dumps(runtime))
+          PY
+          CAD_LIFECYCLE_RUNTIME="$GITHUB_WORKSPACE/next/target/mirror-unavailable-runtime.json" cargo test --manifest-path next/Cargo.toml --all-features --locked mirror_editor_unavailable_constraints_preserves_default_and_redo -- --ignored --test-threads=1
       - name: Native assembly, measurement, attachment and reference editor workflows
         env:
           FREECAD_USER_HOME: ${{ github.workspace }}/next/target/parity-editor-config

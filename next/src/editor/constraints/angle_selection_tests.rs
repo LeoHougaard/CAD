@@ -38,6 +38,7 @@ impl Harness {
             exchange_ui: exchange::ExchangeUi::default(),
             draft: None,
             measurement_ui: super::super::measurements::MeasurementUi::default(),
+            units_ui: Default::default(),
             sequence: 0,
             error: None,
             status: String::new(),
@@ -715,6 +716,11 @@ fn ordinary_new_dimension_failure_retains_literal_for_retry_or_local_cancel() {
         let mut h = Harness::new(&native["creation_base"]);
         h.editor
             .begin_dimension("Angle", vec![SketchElement { index: 0, point: 0 }]);
+        let seed = h.input.try_recv().unwrap();
+        assert_eq!(seed.op, "quantities");
+        h.editor.busy = false;
+        h.editor
+            .quantity_reply(&json!({"items":[{"input":"10 mm","default_unit":"mm"}]}));
         assert!(h.input.try_recv().is_err());
         h.apply("10 mm", false);
         let request = h.request("transaction");

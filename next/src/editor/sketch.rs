@@ -612,7 +612,7 @@ impl Editor {
         }
         self.transaction("Draw sketch geometry", edits);
     }
-    pub(super) fn sketch_canvas(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn sketch_canvas(&mut self, ui: &mut egui::Ui, native_pick: bool) {
         if !ui.is_enabled() || self.sketch_ui.session.is_none() || self.draft.is_some() {
             return;
         }
@@ -636,7 +636,7 @@ impl Editor {
             return;
         }
         if self.sketch_ui.external {
-            if response.clicked() && !self.busy {
+            if (response.clicked() || native_pick) && !self.busy {
                 self.project_external_selection();
             }
             return;

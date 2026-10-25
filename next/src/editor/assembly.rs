@@ -45,17 +45,30 @@ fn choose(ui: &mut egui::Ui, id: &str, value: &mut Value, choices: &[Value]) {
     });
 }
 
-fn placement_fields(ui: &mut egui::Ui, title: &str, value: &mut Value) {
+fn placement_fields(
+    ui: &mut egui::Ui,
+    title: &str,
+    value: &mut Value,
+    metadata: &Value,
+    defaults: &Value,
+) {
     ui.push_id(title, |ui| {
         ui.label(title);
         for (field, names) in [
-            ("position", &["X mm", "Y mm", "Z mm"][..]),
+            ("position", &["X", "Y", "Z"][..]),
             ("rotation", &["Qx", "Qy", "Qz", "Qw"][..]),
         ] {
             ui.horizontal(|ui| {
                 for (index, name) in names.iter().enumerate() {
-                    let mut number = value[field][index].as_f64().unwrap_or_default();
                     ui.label(*name);
+                    if field == "position" {
+                        let quantity = metadata["position"].get(index).unwrap_or(&defaults["mm"]);
+                        ui.push_id(index, |ui| {
+                            super::units::quantity_field(ui, &mut value[field][index], quantity);
+                        });
+                        continue;
+                    }
+                    let mut number = value[field][index].as_f64().unwrap_or_default();
                     if ui
                         .add(egui::DragValue::new(&mut number).speed(0.1))
                         .changed()
@@ -224,11 +237,15 @@ impl Editor {
                     choose(ui, "Component source", &mut request["source"], &sources);
                     let mut name = request["name"].as_str().unwrap_or_default().to_owned();
                     ui.horizontal(|ui| { ui.label("Instance name"); if ui.text_edit_singleline(&mut name).changed() { request["name"] = json!(name); } });
-                    placement_fields(ui, "Instance placement", &mut request["placement"]);
+                    let meta = objects(baseline).iter().find(|o| o["name"] == request["object"])
+                        .map(|o| &o["property_metadata"]["Placement"]["quantity"]).unwrap_or(&Value::Null);
+                    placement_fields(ui, "Instance placement", &mut request["placement"], meta, &baseline["units"]["defaults"]);
                     ui.weak("Links reuse local editable source geometry. Hide the source in Features when needed.");
                 } else if op == "assembly_placement" {
                     ui.label(request["object"].as_str().unwrap_or_default());
-                    placement_fields(ui, "Instance placement", &mut request["placement"]);
+                    let meta = objects(baseline).iter().find(|o| o["name"] == request["object"])
+                        .map(|o| &o["property_metadata"]["Placement"]["quantity"]).unwrap_or(&Value::Null);
+                    placement_fields(ui, "Instance placement", &mut request["placement"], meta, &baseline["units"]["defaults"]);
                     ui.weak("Native constraints determine the final solved placement.");
                 } else if op == "assembly_ground" {
                     ui.label(request["object"].as_str().unwrap_or_default());
@@ -273,12 +290,14 @@ impl Editor {
                                     } else { discard_joint_override(&mut request, prop); }
                                 }
                                 if !enabled { return; }
-                                if prop.starts_with("Offset") { placement_fields(ui, prop, &mut request["properties"][prop]); }
+                                if prop.starts_with("Offset") { placement_fields(ui, prop, &mut request["properties"][prop], &existing.map(|o| o["property_metadata"][prop]["quantity"].clone()).unwrap_or_default(), &baseline["units"]["defaults"]); }
                                 else if let Some(mut value) = request["properties"][prop].as_bool() {
                                     if ui.checkbox(&mut value, "Enabled").changed() { request["properties"][prop] = json!(value); }
                                 } else {
-                                    let mut text = request["properties"][prop].as_str().map(str::to_owned).unwrap_or_else(|| request["properties"][prop].to_string());
-                                    if ui.text_edit_singleline(&mut text).changed() { request["properties"][prop] = json!(text); }
+                                    let unit = if prop.contains("Angle") { "deg" } else { "mm" };
+                                    let meta = existing.map(|o| &o["property_metadata"][prop]["quantity"])
+                                        .filter(|m| !m.is_null()).unwrap_or(&baseline["units"]["defaults"][unit]);
+                                    super::units::quantity_field(ui, &mut request["properties"][prop], meta);
                                     let mut expression = request["expressions"].get(prop)
                                         .or_else(|| existing.and_then(|o| o["expressions"].get(prop)))
                                         .and_then(Value::as_str).unwrap_or_default().to_owned();

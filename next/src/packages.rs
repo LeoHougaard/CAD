@@ -23,9 +23,12 @@ pub struct FeaturePackage {
     pub edits: Vec<Value>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Parameter {
+    /// Optional native unit for UI text; numeric package inputs stay base values.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
     #[serde(rename = "type")]
     pub kind: ParameterType,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -38,7 +41,7 @@ pub struct Parameter {
     pub choices: Option<Vec<Value>>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum ParameterType {
     Identifier,
@@ -53,6 +56,15 @@ pub enum ParameterType {
 pub struct Registry {
     entries: Vec<FeaturePackage>,
 }
+
+const BUILTIN_SOURCES: [&str; 6] = [
+    include_str!("../packages/sketch.rectangle.json"),
+    include_str!("../packages/sketch.circle.json"),
+    include_str!("../packages/feature.pad.json"),
+    include_str!("../packages/feature.pocket.json"),
+    include_str!("../packages/feature.fillet.json"),
+    include_str!("../packages/body-boolean.json"),
+];
 
 impl Registry {
     /// Read only immediate JSON files in a caller-selected local directory.
@@ -77,18 +89,34 @@ impl Registry {
     }
 
     pub fn builtin() -> Result<Self, String> {
-        let sources = [
-            include_str!("../packages/sketch.rectangle.json"),
-            include_str!("../packages/sketch.circle.json"),
-            include_str!("../packages/feature.pad.json"),
-            include_str!("../packages/feature.pocket.json"),
-            include_str!("../packages/feature.fillet.json"),
-            include_str!("../packages/body-boolean.json"),
-        ];
-        Self::from_entries(sources.into_iter().map(parse).collect::<Result<_, _>>()?)
+        Self::from_entries(
+            BUILTIN_SOURCES
+                .into_iter()
+                .map(parse)
+                .collect::<Result<_, _>>()?,
+        )
     }
 
     fn from_entries(mut entries: Vec<FeaturePackage>) -> Result<Self, String> {
+        // The frozen built-in templates use native mm for every Number field.
+        // Attach UI metadata without changing their audited package contracts.
+        // A loaded/custom package qualifies only when its ID, complete numeric
+        // schema and native edit template match the built-in exactly.
+        let builtins = BUILTIN_SOURCES
+            .into_iter()
+            .map(parse)
+            .collect::<Result<Vec<_>, _>>()?;
+        for entry in &mut entries {
+            if builtins.iter().any(|b| {
+                b.id == entry.id && b.parameters == entry.parameters && b.edits == entry.edits
+            }) {
+                for parameter in entry.parameters.values_mut() {
+                    if matches!(parameter.kind, ParameterType::Number) {
+                        parameter.unit = Some("mm".into());
+                    }
+                }
+            }
+        }
         entries.sort_by(|left, right| left.id.cmp(&right.id));
         let mut ids = BTreeSet::new();
         for entry in &entries {

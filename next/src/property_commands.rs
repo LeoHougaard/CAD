@@ -137,6 +137,7 @@ pub fn build(parameters: &Value) -> Result<Vec<Value>, String> {
     }
     // Native links must exist before dimensional properties and expressions use
     // them. Map order is otherwise irrelevant to native recomputation.
+    let value_start = edits.len();
     let mut fields: Vec<_> = properties.iter().collect();
     fields.sort_by_key(|(property, value)| {
         let controllers = [
@@ -146,9 +147,12 @@ pub fn build(parameters: &Value) -> Result<Vec<Value>, String> {
             "ThreadClass",
             "DepthType",
             "ThreadDepthType",
+            "ModelThread",
+            "UseCustomThreadClearance",
             "HoleCutType",
             "HoleCutCustomValues",
             "DrillPoint",
+            "Tapered",
             "SideType",
             "Type",
             "Type2",
@@ -195,6 +199,35 @@ pub fn build(parameters: &Value) -> Result<Vec<Value>, String> {
         if !expression.is_null() {
             edits.push(json!({"op":"expression","object":name,"property":property,"expression":expression}));
         }
+    }
+    if parameters["type"] == "PartDesign::Hole" {
+        // Native controller expressions can change editor locks and enum
+        // domains too. Assemble them before dependent values, in the same
+        // order as literal controllers. FreeCAD evaluates every expression.
+        edits[value_start..].sort_by_key(|edit| {
+            let property = edit["property"].as_str().unwrap_or_default();
+            let property = property
+                .trim_start_matches('.')
+                .split(['.', '['])
+                .next()
+                .unwrap_or_default();
+            match property {
+                "Profile" => 0,
+                "ThreadType" => 1,
+                "Threaded" => 2,
+                "ThreadSize" => 3,
+                "ThreadClass" => 4,
+                "DepthType" => 5,
+                "ThreadDepthType" => 6,
+                "ModelThread" => 7,
+                "UseCustomThreadClearance" => 8,
+                "HoleCutType" => 9,
+                "HoleCutCustomValues" => 10,
+                "DrillPoint" => 11,
+                "Tapered" => 12,
+                _ => 13,
+            }
+        });
     }
     // Native profile/original/transform link setters can move the Body tip.
     // Creation publishes the new solid feature; editing preserves the tip

@@ -1,9 +1,20 @@
 //! Actual Editor/update/model_thread with a native worker. Run ignored tests with
 //! CAD_LIFECYCLE_RUNTIME pointing to a runtime manifest and CAD_LIFECYCLE_OUTPUT
 //! pointing to a fresh writable directory. No desktop application is launched.
+#[path = "fit_selection_tests.rs"]
+mod fit_selection_tests;
 use super::super::*;
 use super::*;
 use std::{fs, thread::JoinHandle};
+
+#[path = "mirror_tests.rs"]
+mod mirror_tests;
+
+#[path = "copy_tests.rs"]
+mod copy_tests;
+
+#[path = "select_other_tests.rs"]
+mod select_other_tests;
 
 fn test_output() -> PathBuf {
     PathBuf::from(std::env::var_os("CAD_LIFECYCLE_OUTPUT").expect("CAD_LIFECYCLE_OUTPUT"))
@@ -34,8 +45,13 @@ impl Native {
         .unwrap();
         let mut config = WorkerConfig::new(
             runtime["executable"].as_str().unwrap(),
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("tests/fixtures/lifecycle_fault_worker.py"),
+            runtime["test_worker"]
+                .as_str()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                        .join("tests/fixtures/lifecycle_fault_worker.py")
+                }),
         );
         config.args = runtime["args"]
             .as_array()
@@ -67,6 +83,7 @@ impl Native {
             exchange_ui: exchange::ExchangeUi::default(),
             draft: None,
             measurement_ui: super::super::measurements::MeasurementUi::default(),
+            units_ui: Default::default(),
             sequence: 0,
             error: None,
             status: String::new(),
@@ -189,11 +206,21 @@ impl Native {
         .unwrap();
         // Scope confirmation actions to the actual modal area, not an
         // identically labelled disabled control in the sketch toolbar.
-        let modal = self.editor.pending_file.map(|_| {
-            self.ctx
-                .memory(|memory| memory.area_rect(egui::Id::new("unsaved")))
-                .expect("file-action confirmation must have a modal area")
-        });
+        let modal = if self.editor.pending_file.is_some() {
+            Some(
+                self.ctx
+                    .memory(|memory| memory.area_rect(egui::Id::new("unsaved")))
+                    .expect("file-action confirmation must have a modal area"),
+            )
+        } else if self.editor.sketch_ui.task.is_some() && matches!(label, "Apply" | "Cancel") {
+            Some(
+                self.ctx
+                    .memory(|memory| memory.area_rect(egui::Id::new("native_sketch_task")))
+                    .expect("sketch task must have a modal area"),
+            )
+        } else {
+            None
+        };
         let matches: Vec<_> = texts
             .iter()
             .filter(|(text, rect)| {
@@ -474,6 +501,7 @@ fn poisoned_sketch(owner: &str) {
         n.editor.viewport.sketch_selection = vec![selected];
         n.editor.new_dimension("Distance");
         assert!(n.editor.sketch_ui.dimension.is_some());
+        n.receive("quantities", true);
     }
     if owner == "task" {
         n.editor.begin_sketch_task(
@@ -484,6 +512,7 @@ fn poisoned_sketch(owner: &str) {
             }]),
         );
         assert!(n.editor.sketch_ui.task.is_some());
+        n.receive("quantities", true);
     }
     n.send("transaction",json!({"label":"Poison sketch","edits":[{"op":"construction","object":"Sketch","index":0}],"lifecycle_fault":"validate_twice"}),false);
     assert_eq!(n.editor.state["available"], false);
@@ -546,3 +575,52 @@ fn ordinary_failed_open_keeps_dirty_content_and_save_retry_path() {
     n.send("open", json!({"path":path}), true);
     assert_eq!(object(&n.editor.state, "Box")["properties"]["Width"], 17.0);
 }
+
+#[test]
+#[ignore = "requires CAD_LIFECYCLE_RUNTIME and CAD_LIFECYCLE_OUTPUT"]
+fn document_switch_preserves_dirty_confirmation_and_each_save_path() {
+    let mut n = Native::new("document-switch");
+    n.send("new", json!({"name":"FirstModel"}), true);
+    n.transaction(json!([{"op":"add_object","type":"Part::Box","name":"Box"}]));
+    let first_path = n.save("First.FCStd");
+    n.transaction(set_width(17.));
+    n.assert_discard_guards();
+    assert_eq!(n.editor.path, first_path.to_string_lossy());
+    n.editor.save();
+    n.receive("save", true);
+    let first_bytes = fs::read(&first_path).unwrap();
+    n.editor.request_file(FileAction::New);
+    n.receive("new", true);
+    assert!(!n.editor.dirty && n.editor.path.is_empty());
+    n.transaction(json!([{"op":"add_object","type":"Part::Box","name":"Box"}]));
+    let second_path = n.save("Second.FCStd");
+    n.transaction(set_width(23.));
+    n.assert_discard_guards();
+    assert_eq!(n.editor.path, second_path.to_string_lossy());
+    n.editor.save();
+    n.receive("save", true);
+    assert_eq!(fs::read(&first_path).unwrap(), first_bytes);
+    n.editor.file_input = first_path.to_string_lossy().into_owned();
+    n.send("open", json!({"path":first_path}), true);
+    assert!(!n.editor.dirty);
+    assert_eq!(n.editor.path, first_path.to_string_lossy());
+    assert_eq!(object(&n.editor.state, "Box")["properties"]["Width"], 17.0);
+    n.editor.file_input = second_path.to_string_lossy().into_owned();
+    n.send("open", json!({"path":second_path}), true);
+    assert!(!n.editor.dirty);
+    assert_eq!(n.editor.path, second_path.to_string_lossy());
+    assert_eq!(object(&n.editor.state, "Box")["properties"]["Width"], 23.0);
+    assert_eq!(fs::read(&first_path).unwrap(), first_bytes);
+}
+
+#[path = "select_other_ownership_tests.rs"]
+mod select_other_ownership_tests;
+
+#[path = "select_other_reply_tests.rs"]
+mod select_other_reply_tests;
+
+#[path = "fit_tree_selection_tests.rs"]
+mod fit_tree_selection_tests;
+
+#[path = "popup_ownership_tests.rs"]
+mod popup_ownership_tests;

@@ -2,6 +2,7 @@
 import math
 import re
 import FreeCAD as App
+import document_units as DocumentUnits
 import Assembly
 import UtilsAssembly
 
@@ -117,6 +118,10 @@ def placement(value):
     p, q = value["position"], value["rotation"]
     if not isinstance(p, list) or len(p) != 3 or not isinstance(q, list) or len(q) != 4:
         reject("Placement requires three position and four quaternion values")
+    try:
+        p = [DocumentUnits.value(v, "mm") for v in p]
+    except (ValueError, TypeError) as error:
+        reject(str(error))
     if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in p + q):
         reject("Placement values must be finite")
     if sum(v * v for v in q) < 1e-24:
@@ -271,6 +276,8 @@ def apply(doc, edit):
         # Assign both native references before task properties so offsets are live.
         joint.Proxy.setJointConnectors(joint, refs)
         for prop, value in properties.items():
+            if not prop.startswith("Offset") and isinstance(value, dict) and "quantity_input" in value:
+                value = DocumentUnits.property_input(value, getattr(joint, prop).Unit)
             setattr(joint, prop, placement(value) if prop.startswith("Offset") else value)
         for prop, expression in edit.get("expressions", {}).items():
             if prop.split(".")[0] not in JOINT_PROPERTIES:

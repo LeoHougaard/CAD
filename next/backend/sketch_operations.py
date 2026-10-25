@@ -9,18 +9,31 @@ import math
 import xml.etree.ElementTree as ET
 
 import FreeCAD as App
+import document_units as DocumentUnits
 import Part
 import Sketcher
 
 
 OPERATIONS = ("fillet_geometry", "split_geometry", "extend_geometry", "carbon_copy",
-              "spline_degree", "spline_knot", "spline_pole", "spline_weight")
+              "spline_degree", "spline_knot", "spline_pole", "spline_weight", "mirror_geometry",
+              "copy_geometry", "clone_geometry", "move_geometries", "rectangular_array")
 
 
 class OperationError(ValueError):
     def __init__(self, message, code="invalid_request"):
         super().__init__(message)
         self.code = code
+
+
+def capabilities():
+    import sketch_mirror
+    return {"mirror": sketch_mirror.capabilities()}
+
+
+def preflight(edit):
+    if isinstance(edit, dict) and edit.get("op") == "mirror_geometry":
+        import sketch_mirror
+        sketch_mirror.preflight(edit)
 
 
 def integer(value, minimum, maximum, label):
@@ -36,6 +49,8 @@ def finite(value):
 
 
 def quantity(value, unit):
+    if isinstance(value, dict) and "quantity_input" in value:
+        return DocumentUnits.value(value, unit)
     if not isinstance(value, str):
         return finite(value)
     result = App.Units.Quantity(value)
@@ -50,7 +65,7 @@ def quantity(value, unit):
 def vector(value):
     if not isinstance(value, list) or len(value) != 3:
         raise OperationError("Expected three sketch-local coordinates")
-    return App.Vector(*(finite(component) for component in value))
+    return App.Vector(*(DocumentUnits.value(component, "mm") for component in value))
 
 
 def flag(edit, key, default):
@@ -109,6 +124,12 @@ def _apply(sketch, edit):
     op = edit.get("op")
     if op not in OPERATIONS:
         raise OperationError("Unsupported native sketch operation: " + str(op))
+    if op == "mirror_geometry":
+        import sketch_mirror
+        return sketch_mirror.apply(sketch, edit)
+    if op in ("copy_geometry", "clone_geometry", "move_geometries", "rectangular_array"):
+        import sketch_copy
+        return sketch_copy.apply(sketch, edit)
     if op == "carbon_copy":
         source = sketch.Document.getObject(edit.get("source", ""))
         if source is None or source == sketch or not source.isDerivedFrom("Sketcher::SketchObject"):

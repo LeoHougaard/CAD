@@ -12,6 +12,7 @@ pub(super) struct SketchCreation {
     reversed: bool,
     detach: bool,
     position: [f64; 3],
+    quantity_offset: Option<Value>,
     axis: [f64; 3],
     angle: f64,
     expression: bool,
@@ -34,22 +35,13 @@ impl SketchCreation {
             {
                 return Err("Enter finite sketch offset and rotation values".into());
             }
-            let mut rotation = [0., 0., 0., 1.];
-            if self.angle != 0. {
-                let length = self.axis.iter().fold(0_f64, |n, v| n.hypot(*v));
-                let half = self.angle.to_radians() * 0.5;
-                if length == 0. || !length.is_finite() || !half.is_finite() {
-                    return Err("Choose a nonzero rotation axis and a finite angle".into());
-                }
-                let (sin, cos) = half.sin_cos();
-                rotation = [
-                    self.axis[0] / length * sin,
-                    self.axis[1] / length * sin,
-                    self.axis[2] / length * sin,
-                    cos,
-                ];
+            if self.angle != 0. && self.axis.iter().all(|v| *v == 0.) {
+                return Err("Choose a nonzero rotation axis".into());
             }
-            request["offset"] = json!({"position":self.position,"rotation":rotation});
+            request["offset"] = json!({"position":self.position,"rotation":[0.,0.,0.,1.],"axis_angle":{"axis":self.axis,"angle":self.angle}});
+        }
+        if let Some(offset) = &self.quantity_offset {
+            request["offset"] = offset.clone();
         }
         if self.expression {
             request["offset_expression"] = json!(self.offset_expression);
@@ -150,6 +142,7 @@ impl Editor {
             reversed: false,
             detach: false,
             position: [0.; 3],
+            quantity_offset: None,
             axis: [0., 0., 1.],
             angle: 0.,
             expression: false,
@@ -276,8 +269,10 @@ impl Editor {
                         ui.horizontal(|ui| {
                             for (i, label) in ["X", "Y", "Z"].iter().enumerate() {
                                 ui.label(*label);
-                                ui.add_enabled(!task.expression || i != 2,
-                                    egui::DragValue::new(&mut task.position[i]).speed(0.1).suffix(" mm"));
+                                let offset = task.quantity_offset.get_or_insert_with(|| json!({"position":[0.,0.,0.],"rotation":[0.,0.,0.,1.],"axis_angle":{"axis":[0.,0.,1.],"angle":0.}}));
+                                ui.add_enabled_ui(!task.expression || i != 2, |ui| {
+                                    super::units::quantity_field(ui, &mut offset["position"][i], &task.state["units"]["defaults"]["mm"]);
+                                });
                             }
                         });
                         ui.checkbox(&mut task.expression, "Normal offset expression");
@@ -289,12 +284,14 @@ impl Editor {
                         ui.horizontal(|ui| {
                             for (i, label) in ["X", "Y", "Z"].iter().enumerate() {
                                 ui.label(*label);
-                                ui.add(egui::DragValue::new(&mut task.axis[i]).speed(0.05));
+                                if ui.add(egui::DragValue::new(&mut task.axis[i]).speed(0.05)).changed()
+                                    && let Some(offset) = &mut task.quantity_offset { offset["axis_angle"]["axis"] = json!(task.axis); }
                             }
                         });
                         ui.horizontal(|ui| {
                             ui.label("Angle");
-                            ui.add(egui::DragValue::new(&mut task.angle).speed(1.).suffix(" deg"));
+                            let offset = task.quantity_offset.get_or_insert_with(|| json!({"position":[0.,0.,0.],"rotation":[0.,0.,0.,1.],"axis_angle":{"axis":task.axis,"angle":0.}}));
+                            super::units::quantity_field(ui, &mut offset["axis_angle"]["angle"], &task.state["units"]["defaults"]["deg"]);
                         });
                     });
                 ui.horizontal(|ui| {
@@ -325,6 +322,7 @@ mod tests {
             reversed: false,
             detach: false,
             position: [0.; 3],
+            quantity_offset: None,
             axis: [0., 0., 1.],
             angle: 0.,
             expression: false,
@@ -350,13 +348,9 @@ mod tests {
         creation.detach = true;
         let request = creation.native_request().unwrap();
         assert_eq!(request["offset"]["position"], json!([1., 2., 3.]));
-        let rotation: Vec<f64> =
-            serde_json::from_value(request["offset"]["rotation"].clone()).unwrap();
-        assert!(
-            rotation[0].abs() < 1e-12
-                && (rotation[1] - 1.).abs() < 1e-12
-                && rotation[2].abs() < 1e-12
-                && rotation[3].abs() < 1e-12
+        assert_eq!(
+            request["offset"]["axis_angle"],
+            json!({"axis":[0.,2.,0.],"angle":180.})
         );
         assert_eq!(request["offset_expression"], "Base.Height / 2");
         assert_eq!(request["reversed"], true);

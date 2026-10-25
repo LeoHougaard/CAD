@@ -1,4 +1,5 @@
-//! Accepted sketch actions and replay order. No native document or geometry lives here.
+//! Accepted sketch actions, history cursor and opaque native object checkpoints.
+//! Rust retains checkpoint bytes without interpreting or constructing geometry.
 //!
 //! A staged action/history move is visible to snapshot counts and replay planning.
 //! Native success commits it; native failure rejects it before restoration replay.
@@ -53,6 +54,27 @@ impl Journal {
         }
         json!(groups)
     }
+
+    fn checkpoint(&self) -> Result<Value, Failure> {
+        let group = if let Some(Change::Accept(group)) = &self.pending {
+            Some(group)
+        } else {
+            self.cursor()
+                .checked_sub(1)
+                .and_then(|index| self.groups.get(index))
+        };
+        match group {
+            None => Ok(Value::Null),
+            Some(group) => group["native_checkpoint"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .map(|s| Value::String(s.into()))
+                .ok_or((
+                    "journal_protocol",
+                    "Accepted action has no native checkpoint",
+                )),
+        }
+    }
 }
 
 type Failure = (&'static str, &'static str);
@@ -97,6 +119,7 @@ impl Journals {
         match action {
             "counts" => Ok(journal.counts()),
             "replay" => Ok(journal.replay()),
+            "checkpoint" => journal.checkpoint(),
             "stage_accept" | "stage_undo" | "stage_redo" => {
                 if journal.pending.is_some() {
                     return Err(("journal_state", "A sketch journal change is already staged"));
@@ -173,6 +196,57 @@ mod tests {
         );
     }
 
+    #[test]
+    fn native_checkpoint_follows_staged_history_and_failed_branches() {
+        let mut journals = Journals::default();
+        call(&mut journals, "begin", json!({}));
+        assert!(call(&mut journals, "checkpoint", json!({}))["result"].is_null());
+        for payload in ["opaque-native-A", "opaque-native-B"] {
+            call(
+                &mut journals,
+                "stage_accept",
+                json!({"group":{"edits":[1],"native_checkpoint":payload}}),
+            );
+            assert_eq!(
+                call(&mut journals, "checkpoint", json!({}))["result"],
+                payload
+            );
+            call(&mut journals, "resolve", json!({"accepted":true}));
+        }
+        call(&mut journals, "stage_undo", json!({}));
+        assert_eq!(
+            call(&mut journals, "checkpoint", json!({}))["result"],
+            "opaque-native-A"
+        );
+        call(&mut journals, "resolve", json!({"accepted":false}));
+        assert_eq!(
+            call(&mut journals, "checkpoint", json!({}))["result"],
+            "opaque-native-B"
+        );
+        call(&mut journals, "stage_undo", json!({}));
+        call(&mut journals, "resolve", json!({"accepted":true}));
+        call(
+            &mut journals,
+            "stage_accept",
+            json!({"group":{"edits":[2],"native_checkpoint":"rejected"}}),
+        );
+        call(&mut journals, "resolve", json!({"accepted":false}));
+        call(&mut journals, "stage_redo", json!({}));
+        assert_eq!(
+            call(&mut journals, "checkpoint", json!({}))["result"],
+            "opaque-native-B"
+        );
+    }
+    #[test]
+    fn missing_checkpoint_cannot_silently_restore_the_session_baseline() {
+        let mut journals = Journals::default();
+        call(&mut journals, "begin", json!({}));
+        accept(&mut journals, 1);
+        assert_eq!(
+            call(&mut journals, "checkpoint", json!({}))["error"]["code"],
+            "journal_protocol"
+        );
+    }
     #[test]
     fn branch_and_rejected_branch_preserve_the_right_replay() {
         let mut journals = Journals::default();

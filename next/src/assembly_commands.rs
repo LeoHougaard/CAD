@@ -74,9 +74,8 @@ fn placement(value: &Value) -> Result<(), String> {
         .as_array()
         .filter(|p| p.len() == 4)
         .ok_or("Placement requires four quaternion values")?;
-    if p.iter()
-        .chain(q)
-        .any(|v| !v.as_f64().is_some_and(f64::is_finite))
+    if p.iter().any(|v| !crate::document_units::scalar(v))
+        || q.iter().any(|v| !v.as_f64().is_some_and(f64::is_finite))
         || q.iter().map(|v| v.as_f64().unwrap().powi(2)).sum::<f64>() < 1e-24
     {
         return Err("Placement requires finite values and a nonzero quaternion".into());

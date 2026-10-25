@@ -570,9 +570,15 @@ impl Viewport {
                     position,
                     (position - origin).normalized(),
                     if kind == "Angle" {
-                        format!("{:.1}\u{00b0}", value.to_degrees())
+                        constraint["quantity"]["display"]
+                            .as_str()
+                            .unwrap_or("Angle")
+                            .to_owned()
                     } else {
-                        format!("?{value:.2} mm")
+                        constraint["quantity"]["display"]
+                            .as_str()
+                            .unwrap_or("Distance")
+                            .to_owned()
                     },
                 ));
             } else if matches!(kind, "Distance" | "DistanceX" | "DistanceY") {
@@ -678,7 +684,10 @@ impl Viewport {
                         label = Some((
                             dimension_a.lerp(dimension_b, 0.5),
                             normal,
-                            format!("{value:.2} mm"),
+                            constraint["quantity"]["display"]
+                                .as_str()
+                                .unwrap_or("Distance")
+                                .to_owned(),
                         ));
                     }
                 }
@@ -711,8 +720,11 @@ impl Viewport {
                             leader + direction * 28.,
                             direction,
                             format!(
-                                "{}{value:.2} mm",
-                                if kind == "Diameter" { "\u{2300}" } else { "R" }
+                                "{}{}",
+                                if kind == "Diameter" { "\u{2300}" } else { "R" },
+                                constraint["quantity"]["display"]
+                                    .as_str()
+                                    .unwrap_or("Radius")
                             ),
                         ));
                     }
@@ -829,7 +841,10 @@ impl Viewport {
                         label = Some((
                             position,
                             (position - center).normalized(),
-                            format!("{:.1}\u{00b0}", value.to_degrees()),
+                            constraint["quantity"]["display"]
+                                .as_str()
+                                .unwrap_or("Angle")
+                                .to_owned(),
                         ));
                     }
                 }
