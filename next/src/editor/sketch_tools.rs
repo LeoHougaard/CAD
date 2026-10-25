@@ -105,6 +105,10 @@ fn label(kind: &str) -> &str {
         "extend" => "Extend curve",
         "carbon_copy" => "Carbon Copy",
         "mirror" => "Mirror",
+        "copy" => "Copy",
+        "clone" => "Clone",
+        "move" => "Move",
+        "rectangular_array" => "Rectangular array",
         "spline_degree" => "Spline degree",
         "spline_knot" => "Spline knots",
         "spline_pole" => "Spline pole position",
@@ -122,6 +126,12 @@ fn defaults(kind: &str, snapshot: &Value, selection: &[SketchElement]) -> Value 
         "fillet" | "chamfer" => json!({"radius":"1 mm","trim":true,"preserve_corner":true}),
         "extend" => json!({"increment":if geo["kind"]=="arc" {"10 deg"}else{"1 mm"}}),
         "carbon_copy" => json!({"source":"","construction":false}),
+        "copy" | "clone" | "move" => {
+            json!({"displacement":["10 mm","0 mm",0],"all_geometry":selection.is_empty()})
+        }
+        "rectangular_array" => json!({"displacement":["10 mm","0 mm",0],
+            "all_geometry":selection.is_empty(),"columns":2,"rows":1,"clone":false,
+            "constrain_displacement":true,"perpendicular_scale":0.5}),
         "mirror" => {
             json!({"reference":{"index":-1,"point":0},"delete_original":false,"create_symmetry_constraints":false})
         }
@@ -142,6 +152,15 @@ impl Editor {
         };
         let mut fields = Vec::new();
         match task.kind.as_str() {
+            "copy" | "clone" | "move" | "rectangular_array" => {
+                for axis in 0..2 {
+                    fields.push((
+                        format!("/displacement/{axis}"),
+                        task.parameters["displacement"][axis].clone(),
+                        "mm".into(),
+                    ));
+                }
+            }
             "fillet" | "chamfer" => {
                 fields.push((
                     "/radius".into(),
@@ -209,6 +228,10 @@ impl Editor {
                 ("extend", "Extend"),
                 ("carbon_copy", "Carbon Copy"),
                 ("mirror", "Mirror"),
+                ("copy", "Copy"),
+                ("clone", "Clone"),
+                ("move", "Move"),
+                ("rectangular_array", "Rectangular array"),
                 ("spline_degree", "Spline degree"),
                 ("spline_knot", "Spline knots"),
                 ("spline_pole", "Spline pole position"),
@@ -589,6 +612,69 @@ fn task_fields(
     let index = task.selection.first().map_or(-1, |s| s.index);
     let geo = curve(&task.baseline, index).cloned().unwrap_or_default();
     match task.kind.as_str() {
+        "copy" | "clone" | "move" | "rectangular_array" => {
+            let mut all = params["all_geometry"] == true;
+            if ui.checkbox(&mut all, "All internal geometry").changed() {
+                params["all_geometry"] = json!(all);
+                changed = true;
+            }
+            ui.label("Displacement in sketch plane");
+            changed |= point(
+                ui,
+                &mut params["displacement"],
+                defaults,
+                fields,
+                "/displacement",
+            );
+            if task.kind == "rectangular_array" {
+                for (key, name, minimum) in [("columns", "Columns", 2), ("rows", "Rows", 1)] {
+                    ui.label(name);
+                    let mut count = params[key].as_i64().unwrap_or(minimum);
+                    if ui
+                        .add(
+                            egui::DragValue::new(&mut count)
+                                .range(minimum..=99)
+                                .speed(0.1),
+                        )
+                        .changed()
+                    {
+                        params[key] = json!(count);
+                        changed = true;
+                    }
+                }
+                for (key, name) in [
+                    ("clone", "Clone"),
+                    (
+                        "constrain_displacement",
+                        "Constrain inter-element separation",
+                    ),
+                ] {
+                    let mut enabled = params[key] == true;
+                    if ui.checkbox(&mut enabled, name).changed() {
+                        params[key] = json!(enabled);
+                        changed = true;
+                    }
+                }
+                let mut equal =
+                    params["perpendicular_scale"] == 1 || params["perpendicular_scale"] == 1.0;
+                if ui
+                    .checkbox(&mut equal, "Equal vertical/horizontal spacing")
+                    .changed()
+                {
+                    params["perpendicular_scale"] = json!(if equal { 1.0 } else { 0.5 });
+                    changed = true;
+                }
+                changed |= number(
+                    ui,
+                    "Perpendicular spacing scale",
+                    &mut params["perpendicular_scale"],
+                    false,
+                );
+                ui.weak(
+                    "Rows follow the native clockwise perpendicular. Counts include the original.",
+                );
+            }
+        }
         "mirror" => {
             ui.label(format!(
                 "Source native IDs: {}",

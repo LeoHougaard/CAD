@@ -15,7 +15,8 @@ import Sketcher
 
 
 OPERATIONS = ("fillet_geometry", "split_geometry", "extend_geometry", "carbon_copy",
-              "spline_degree", "spline_knot", "spline_pole", "spline_weight", "mirror_geometry")
+              "spline_degree", "spline_knot", "spline_pole", "spline_weight", "mirror_geometry",
+              "copy_geometry", "clone_geometry", "move_geometries", "rectangular_array")
 
 
 class OperationError(ValueError):
@@ -126,6 +127,9 @@ def _apply(sketch, edit):
     if op == "mirror_geometry":
         import sketch_mirror
         return sketch_mirror.apply(sketch, edit)
+    if op in ("copy_geometry", "clone_geometry", "move_geometries", "rectangular_array"):
+        import sketch_copy
+        return sketch_copy.apply(sketch, edit)
     if op == "carbon_copy":
         source = sketch.Document.getObject(edit.get("source", ""))
         if source is None or source == sketch or not source.isDerivedFrom("Sketcher::SketchObject"):

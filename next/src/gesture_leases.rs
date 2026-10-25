@@ -262,6 +262,10 @@ impl Leases {
                             | "spline_pole"
                             | "spline_weight"
                             | "mirror_geometry"
+                            | "copy_geometry"
+                            | "clone_geometry"
+                            | "move_geometries"
+                            | "rectangular_array"
                     ) {
                         return Err(denied);
                     }
@@ -809,6 +813,10 @@ mod tests {
             "spline_pole",
             "spline_weight",
             "mirror_geometry",
+            "copy_geometry",
+            "clone_geometry",
+            "move_geometries",
+            "rectangular_array",
         ] {
             ok(
                 &mut s,

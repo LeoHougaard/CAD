@@ -1,5 +1,8 @@
 # FreeCAD-based replacement
 
+[Sketch Copy, Clone, Move and arrays](SKETCH-COPY.md) documents the typed native
+tasks, input domains, history behavior and remaining pointer-gesture differences.
+
 This is the replacement foundation. The earlier Rust/Brepkit application stays
 available while this implementation is verified. It is not the modeling engine
 for this version.

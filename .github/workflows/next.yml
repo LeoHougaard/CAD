@@ -158,6 +158,14 @@ jobs:
           run([sys.executable,'-B',root/'next/tests/suppression_current_inputs.py','--host',host,'--runtime',runtime_path,'--fillet',out/'references/Fillet.FCStd','--hole',out/'hole-input.FCStd','--output',out/'current-inputs'])
           run([*prefix,root/'next/tests/suppression_units_native.py','--input',out/'current-inputs'])
           PY
+      - name: Native sketch Copy, Clone, Move, array and combined checkpoints
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+          PYTHONUTF8: '1'
+        run: |
+          suffix=''
+          if [ "$RUNNER_OS" = Windows ]; then suffix='.exe'; fi
+          python -B next/tools/check_sketch_copy.py --runtime next/target/runtime.json --host "next/target/debug/cad-next$suffix" --compiler "next/target/debug/cad-next-sketch$suffix" --output next/target/sketch-copy
       - name: Record checkpoint gate provenance
         if: always()
         run: |
@@ -191,6 +199,7 @@ jobs:
             next/target/hole-integration/
             next/target/suppression/
             next/target/schema-startup/
+            next/target/sketch-copy/
             next/backend/native/checkpoint_restore*.json
             next/backend/native/checkpoint_restore*.so
             next/backend/native/checkpoint_restore.dll

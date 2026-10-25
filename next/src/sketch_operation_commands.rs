@@ -32,6 +32,16 @@ fn mirror_geometry(snapshot: &Value, index: i32) -> Option<&Value> {
     })
 }
 
+/// Legacy native Copy/Move/array use whole internal curves and standalone
+/// points. Endpoints may accompany curves but do not become source geometry.
+pub fn copy_sources(snapshot: &Value, selection: &[SketchElement]) -> Result<Vec<i32>, String> {
+    let sources = mirror_sources(snapshot, selection)?;
+    if sources.iter().any(|index| *index < 0) {
+        return Err("Copy, Clone, Move and arrays require internal native geometry".into());
+    }
+    Ok(sources)
+}
+
 /// Match the pinned command's selected-edge/standalone-point extraction.
 /// Endpoint and axis picks do not become source geometry when mixed with edges.
 pub fn mirror_sources(snapshot: &Value, selection: &[SketchElement]) -> Result<Vec<i32>, String> {
@@ -155,6 +165,16 @@ pub fn build(
             "delete_original",
             "create_symmetry_constraints",
         ],
+        "copy" | "clone" | "move" => &["displacement", "all_geometry"],
+        "rectangular_array" => &[
+            "displacement",
+            "all_geometry",
+            "columns",
+            "rows",
+            "clone",
+            "constrain_displacement",
+            "perpendicular_scale",
+        ],
         _ => return Err("Unsupported native sketch task".into()),
     };
     if params.keys().any(|key| !allowed.contains(&key.as_str())) {
@@ -165,11 +185,47 @@ pub fn build(
         "split" => "split_geometry",
         "extend" => "extend_geometry",
         "mirror" => "mirror_geometry",
+        "copy" => "copy_geometry",
+        "clone" => "clone_geometry",
+        "move" => "move_geometries",
         other => other,
     };
     let mut edit = json!({"op":native,"object":object});
     for (key, value) in params {
         edit[key] = value.clone();
+    }
+    if matches!(kind, "copy" | "clone" | "move" | "rectangular_array") {
+        if !finite_vector(&parameters["displacement"])
+            || parameters["displacement"][2].as_f64() != Some(0.)
+            || parameters
+                .get("all_geometry")
+                .is_some_and(|v| !v.is_boolean())
+        {
+            return Err("Enter a sketch-local displacement and geometry scope".into());
+        }
+        let sources = if parameters["all_geometry"] == true {
+            if snapshot["sketch"]["geometry"]
+                .as_array()
+                .is_none_or(Vec::is_empty)
+            {
+                return Err("The native sketch has no internal geometry".into());
+            }
+            Vec::new()
+        } else {
+            copy_sources(snapshot, selection)?
+        };
+        if kind == "rectangular_array"
+            && (!integer(&parameters["columns"], 2, 99)
+                || !integer(&parameters["rows"], 1, 99)
+                || !scalar(&parameters["perpendicular_scale"])
+                || ["clone", "constrain_displacement"]
+                    .iter()
+                    .any(|key| parameters.get(key).is_some_and(|v| !v.is_boolean())))
+        {
+            return Err("Enter native array columns 2..99, rows 1..99 and spacing options".into());
+        }
+        edit["indices"] = json!(sources);
+        return Ok(vec![edit]);
     }
     if kind == "mirror" {
         let sources = mirror_sources(snapshot, selection)?;
@@ -354,6 +410,46 @@ mod tests {
     }
     fn select(index: i32, point: i32) -> Vec<SketchElement> {
         vec![SketchElement { index, point }]
+    }
+    #[test]
+    fn copy_tasks_keep_native_inputs_and_reject_unsafe_sources() {
+        let s = snapshot();
+        let p = json!({"displacement":["1 in",{"quantity_input":"2","default_unit":"cm"},0]});
+        for (kind, op) in [
+            ("copy", "copy_geometry"),
+            ("clone", "clone_geometry"),
+            ("move", "move_geometries"),
+        ] {
+            let edits = build(&s, kind, &select(0, 0), &p).unwrap();
+            assert_eq!(edits[0]["op"], op);
+            assert_eq!(edits[0]["indices"], json!([0]));
+            assert_eq!(edits[0]["displacement"], p["displacement"]);
+            for pick in [select(-3, 0), select(999, 0), select(0, 1), vec![]] {
+                assert!(build(&s, kind, &pick, &p).is_err());
+            }
+        }
+        let all = json!({"displacement":[0,0,0],"all_geometry":true});
+        assert_eq!(
+            build(&s, "copy", &[], &all).unwrap()[0]["indices"],
+            json!([])
+        );
+        let mut a = json!({"displacement":[1,2,0],"columns":3,"rows":2,"clone":true,
+            "constrain_displacement":true,"perpendicular_scale":0.5});
+        assert!(build(&s, "rectangular_array", &select(0, 0), &a).is_ok());
+        for (key, value) in [
+            ("columns", json!(100)),
+            ("columns", json!(1)),
+            ("rows", json!(0)),
+            ("rows", json!(2147483648_i64)),
+            ("clone", json!(1)),
+            ("displacement", json!([0, 0, 1e-10])),
+        ] {
+            let mut invalid = a.clone();
+            invalid[key] = value;
+            assert!(build(&s, "rectangular_array", &select(0, 0), &invalid).is_err());
+        }
+        a["unknown"] = json!(1);
+        assert!(build(&s, "rectangular_array", &select(0, 0), &a).is_err());
     }
     #[test]
     fn mirror_compiles_supplied_ids_and_native_selection_filtering() {

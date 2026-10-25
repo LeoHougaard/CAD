@@ -8,6 +8,9 @@ use std::{fs, thread::JoinHandle};
 #[path = "mirror_tests.rs"]
 mod mirror_tests;
 
+#[path = "copy_tests.rs"]
+mod copy_tests;
+
 fn test_output() -> PathBuf {
     PathBuf::from(std::env::var_os("CAD_LIFECYCLE_OUTPUT").expect("CAD_LIFECYCLE_OUTPUT"))
 }

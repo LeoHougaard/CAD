@@ -113,6 +113,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!(
                 "Angle through a point: kind Angle with two whole curves and one exposed point, in any selection order. Optional value or expression strings and driving:false use native datum/formula/reference policy. Native axis curve IDs are -1/-2; the origin point is {{\"index\":-1,\"point\":1}}."
             );
+            println!(
+                "Copy/Clone/Move: Edit kind copy, clone or move; parameters {{\"displacement\":[\"10 mm\",\"0 mm\",0],\"all_geometry\":false}}. Select whole internal geometry or standalone points. Array kind rectangular_array adds columns:2..99, rows:1..99, clone:false, constrain_displacement:true, perpendicular_scale:0.5. Counts include the original; rows use the native clockwise perpendicular. all_geometry:true uses all internal geometry instead of selection. Native expressions and solving remain native."
+            );
             return Ok(());
         }
         return Err("Expected NDJSON on stdin; run --help for examples".into());
