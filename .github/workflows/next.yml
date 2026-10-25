@@ -67,6 +67,16 @@ jobs:
           test "$RUNNER_ARCH" = X64
           mkdir -p "$FREECAD_USER_HOME"
           python -B next/tools/check_checkpoint_linux.py --runtime next/target/runtime.json --host next/target/debug/cad-next --expected-arch x86_64 --output next/target/checkpoint-linux-x64
+      - name: Startup schemas preserve first model and native histories
+        env:
+          FREECAD_USER_HOME: ${{ github.workspace }}/next/target/schema-startup-config
+          PYTHONDONTWRITEBYTECODE: '1'
+          PYTHONUTF8: '1'
+        run: |
+          mkdir -p "$FREECAD_USER_HOME"
+          host=next/target/debug/cad-next
+          if [ "$RUNNER_OS" = Windows ]; then host="$host.exe"; fi
+          python -B next/tests/feature_schema_startup_workflows.py --host "$host" --runtime next/target/runtime.json --output next/target/schema-startup
       - name: Windows native checkpoint regression gate
         if: runner.os == 'Windows'
         env:
@@ -125,7 +135,7 @@ jobs:
         run: |
           python -B - <<'PY'
           import json, os, pathlib, subprocess, sys, tarfile
-          root = pathlib.Path.cwd(); out = root/'next/target/suppression'; out.mkdir(parents=True)
+          root = pathlib.Path.cwd(); out = root/'next/target/suppression'; (out/'config').mkdir(parents=True)
           runtime_path = root/'next/target/runtime.json'; runtime = json.loads(runtime_path.read_text())
           prefix = [runtime['executable'], *runtime['args']]
           def run(command, **extra):
@@ -180,6 +190,7 @@ jobs:
             next/target/document-units/
             next/target/hole-integration/
             next/target/suppression/
+            next/target/schema-startup/
             next/backend/native/checkpoint_restore*.json
             next/backend/native/checkpoint_restore*.so
             next/backend/native/checkpoint_restore.dll

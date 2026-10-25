@@ -318,15 +318,19 @@ def writable_property(obj, prop, expression=False):
 def initialize_feature_schemas():
     # Native object creation can interfere with application-wide transactions.
     # Build the JSON cache before accepting requests, then retain no native doc.
-    for type_id in sorted(OBJECT_TYPES):
-        doc = App.newDocument("FeatureSchema")
-        try:
+    doc = App.newDocument("FeatureSchema")
+    try:
+        for type_id in sorted(OBJECT_TYPES):
             obj = doc.addObject(type_id, "Feature")
             _feature_schemas[type_id] = {"type": type_id, **property_snapshot(obj)}
             if type_id == "PartDesign::Hole":
                 HoleTask.initialize(obj)
-        finally:
-            App.closeDocument(doc.Name)
+            # Include native children such as Body origins. The next template
+            # must start empty, with the same object names and native defaults.
+            for item in reversed(doc.Objects):
+                doc.removeObject(item.Name)
+    finally:
+        App.closeDocument(doc.Name)
 
 
 def bounds(shape):
