@@ -10,7 +10,7 @@ use std::{
 
 #[derive(Default)]
 pub(super) struct PropertyUi {
-    schema: Value,
+    pub(super) schema: Value,
     loading: bool,
     filter: String,
     advanced: bool,
@@ -42,10 +42,15 @@ impl Editor {
                 .find(|o| o["name"] == draft.parameters["name"])
         {
             let reference_profile = draft.parameters.get("reference_choice").is_some();
+            let inactive_literals =
+                crate::hole_commands::inactive_literals(object, &draft.parameters);
             if let Some(changes) = draft.parameters["properties"].as_object_mut() {
                 // Native options can lock dependent fields or normalize their
                 // values. Replay the accepted state, not stale form inputs.
                 changes.retain(|property, value| {
+                    if inactive_literals.contains(property) {
+                        return true;
+                    }
                     if !property_commands::writable(object, property) {
                         return false;
                     }
@@ -276,8 +281,10 @@ impl Editor {
             );
             ui.checkbox(&mut self.property_ui.advanced, "All properties");
         });
-        let task_schema =
-            crate::extrusion_commands::task_schema(&self.property_ui.schema, &draft.parameters);
+        let task_schema = crate::hole_commands::task_schema(
+            &crate::extrusion_commands::task_schema(&self.property_ui.schema, &draft.parameters),
+            &draft.parameters,
+        );
         let schema = &task_schema;
         let extrusion = crate::extrusion_commands::supported(
             draft.parameters["type"].as_str().unwrap_or_default(),
@@ -503,6 +510,11 @@ impl Editor {
                             ui.separator();
                         });
                         if value_changed {
+                            crate::hole_commands::remember_literal(
+                                schema,
+                                &mut draft.parameters,
+                                &property,
+                            );
                             draft.parameters["properties"][&property] = value;
                             changed = true;
                         }

@@ -9,6 +9,7 @@ pub mod extrusion_commands;
 pub mod feature_commands;
 mod gesture_leases;
 pub mod history_commands;
+pub mod hole_commands;
 pub mod measurement_commands;
 pub mod measurement_types;
 pub mod packages;

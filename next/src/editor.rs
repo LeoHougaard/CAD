@@ -196,13 +196,16 @@ fn model_thread(
     }
 }
 
-fn feature_edits(registry: &Registry, draft: &Draft) -> Result<Vec<Value>, String> {
+fn feature_edits(registry: &Registry, draft: &Draft, schema: &Value) -> Result<Vec<Value>, String> {
     if draft.id == "native.assembly" {
         crate::assembly_commands::build(&draft.parameters["state"], &draft.parameters["request"])
     } else if draft.id == "native.history" {
         crate::history_commands::build(&draft.parameters["state"], &draft.parameters["request"])
     } else if draft.id == "native.properties" {
-        crate::property_commands::build(&draft.parameters)
+        crate::property_commands::build(&crate::hole_commands::active_parameters(
+            schema,
+            &draft.parameters,
+        ))
     } else if draft.id == "native.property" {
         Ok(vec![
             json!({"op":"set","object":draft.parameters["object"],"property":draft.parameters["property"],"value":draft.parameters["value"]}),
@@ -584,7 +587,7 @@ impl Editor {
             return;
         };
         d.changed = None;
-        let edits = feature_edits(&self.registry, d);
+        let edits = feature_edits(&self.registry, d, &self.property_ui.schema);
         match edits {
             Ok(edits) => {
                 if d.deferred {
@@ -707,7 +710,7 @@ impl Editor {
                 self.draft = None;
                 return;
             }
-            let edits = feature_edits(&self.registry, d);
+            let edits = feature_edits(&self.registry, d, &self.property_ui.schema);
             match edits {
                 Ok(edits) => {
                     d.committing = true;

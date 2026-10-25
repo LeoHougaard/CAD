@@ -1,5 +1,74 @@
 # Local modeling boundary, version 1
 
+Hole task metadata is an additive version-1 snapshot extension. For
+`PartDesign::Hole`, `property_metadata.ThreadType` includes
+`hole_task_version:1`, `hole_task_enumerations` and `hole_task_cut_angles`.
+The first map is keyed by native ThreadType and supplies exact native
+ThreadSize, ThreadClass, ThreadFit and HoleCutType enum lists. The second maps
+native ThreadType and HoleCutType to custom countersink-angle input availability.
+The worker collects these JSON facts during its existing startup schema pass,
+before accepting requests. It retains no schema document. No task request creates
+a native document, feature or transaction to discover choices.
+
+Rust applies this metadata only to a Hole schema with the matching task version.
+Its bounded task presentation keeps conditional input fields reachable after a
+failed preview and during deferred Redo editing. It does not change native write
+admission. Computed Shape and ThreadDiameter, standard-derived Diameter and
+preset dimensions retain the ordinary native protection. All model values,
+presets, quantities and expressions remain native. Hole controller expressions
+are ordered with literal controllers before dependent values; the client never
+evaluates an expression. Editor candidates omit stale literal overrides for
+explicitly inactive Hole task inputs, such as Depth after selecting ThroughAll.
+An enabled Hole input widget records bounded literal provenance in the private
+draft parameter `hole_task_literals: {version:1, fields:{property:true}}`.
+Only the named conditional TaskHole input whitelist participates. This lets a
+controller round trip omit a formerly enabled literal even when that input was
+inactive in the initial native snapshot. Dormant values and unit-text buffers
+remain in the draft for switching back; they are excluded only from the current
+candidate's literal writes. This marker is not native document data or a worker
+protocol field and grants no write permission. Unknown marker versions have no
+effect. Shape, ThreadDiameter and unlisted fields cannot acquire provenance.
+Expressions and unlisted computed properties still pass through native write
+admission unchanged. After a Hole controller expression is bound or cleared,
+the adapter asks that same native Hole to recompute inside the existing
+transaction. This evaluates native expressions and updates native enum domains
+and editor locks before dependent setters. Interim invalid feature results are
+not published; the final whole-document recompute, validation and ordinary
+rollback still decide acceptance. No additional document or transaction is
+created. The authoritative snapshot, revision, native document,
+preview lease and failure rollback contract are unchanged. Unknown task versions
+use the original native form metadata.
+
+Guarded Open also preserves the serialized Hole inputs that pinned FreeCAD 1.1.4
+can normalize incorrectly while restoring: ThreadSize and custom cut values.
+The adapter reads their native XML scalar/enum representations without changing
+the archive, then reapplies changed user inputs through native setters. Quantity
+floats retain native serialization's internal units; this path does not parse
+user unit strings. Property types, native enum membership, finite values and
+native readonly state are checked. Shape, computed ThreadDiameter, expression
+bindings, object links and property status flags are never assigned by this
+repair. After all Hole inputs have been restored, every restored Hole is
+explicitly touched through native invalidation, including those whose saved
+inputs already match. The existing whole-document native recompute then orders
+dependencies and regenerates all affected geometry before validation and
+publication. Thus a stale cached BRep is not accepted as evidence of valid Hole
+inputs: an invalid depth fails Open, and a valid changed depth regenerates its
+Hole and downstream features. This intentionally tightens Hole Open admission;
+it does not alter serialization or readonly policy. Exceptions remain inside the existing
+failed-Open cleanup guard, which closes newly created documents and preserves
+the previous document. No extra document, transaction, revision or history entry
+is created by the repair.
+
+When a missing native preset entry forces HoleCutCustomValues true and readonly,
+the form retains that computed protection. A complete candidate's identical
+literal true is accepted as an exact no-op; false and expression changes still
+use normal native readonly admission. No property status is changed.
+
+Editing ModelThread follows pinned TaskHoleParameters::holeTypeChanged by
+refreshing the current Threaded value through its native setter first. This
+updates a stale restored editor flag through native callbacks. Native readonly
+admission then runs normally; no readonly/status flag is relaxed directly.
+
 The Rust host starts a configured executable and argument list with the worker
 script as an argument. Keep that process alive between requests. One UTF-8 JSON
 object per line goes in and one response comes out. Diagnostics use stderr.

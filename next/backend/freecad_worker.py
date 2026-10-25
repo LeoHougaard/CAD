@@ -29,6 +29,7 @@ import assembly as AssemblyAuthoring
 import exchange as Exchange
 import document_units as DocumentUnits
 import measurements as Measurements
+import hole_task as HoleTask
 import sketch_journal as SketchJournal
 import sketch_checkpoints as SketchCheckpoints
 import session_callbacks as SessionCallbacks
@@ -261,6 +262,10 @@ def property_metadata(obj, prop):
               "hidden": "Hidden" in mode or "Hidden" in status, "editor_mode": mode}
     if type_id == "App::PropertyEnumeration":
         result["enumerations"] = list(obj.getEnumerationsOfProperty(prop))
+        if obj.TypeId == "PartDesign::Hole" and prop == "ThreadType":
+            result["hole_task_version"] = 1
+            result["hole_task_enumerations"] = HoleTask.enumerations()
+            result["hole_task_cut_angles"] = HoleTask.cut_angles()
     if prop == "Support" and obj.TypeId in {"PartDesign::ShapeBinder", "PartDesign::SubShapeBinder"}:
         result["task_editable"] = True
     # Native TaskExtrudeParameters writes these even when a previous successful
@@ -298,6 +303,7 @@ def property_snapshot(obj):
 
 def writable_property(obj, prop, expression=False):
     type_id = property_type(obj, prop)
+    HoleTask.prepare_input(obj, prop)
     if expression and obj.isDerivedFrom("Sketcher::SketchObject") and prop == "Constraints":
         return type_id
     metadata = property_metadata(obj, prop)
@@ -315,6 +321,8 @@ def initialize_feature_schemas():
         try:
             obj = doc.addObject(type_id, "Feature")
             _feature_schemas[type_id] = {"type": type_id, **property_snapshot(obj)}
+            if type_id == "PartDesign::Hole":
+                HoleTask.initialize(obj)
         finally:
             App.closeDocument(doc.Name)
 
@@ -698,6 +706,8 @@ def apply_edit(doc, edit):
                 previous.Visibility = True
     elif op == "set":
         prop = edit["property"]
+        if HoleTask.unchanged_forced_input(obj, prop, edit["value"]):
+            return {"object": obj.Name}
         type_id = writable_property(obj, prop)
         value = decode_property(doc, type_id, edit["value"], getattr(obj, prop))
         if obj.isDerivedFrom("PartDesign::Boolean") and prop == "Group":
@@ -727,6 +737,7 @@ def apply_edit(doc, edit):
         if expression is not None and not isinstance(expression, str):
             fail("invalid_request", "Expression must be a string or null")
         obj.setExpression(prop, expression)
+        HoleTask.resolve_controller(obj, prop)
     elif op in {"external_geometry", "external_state", "delete_external"}:
         if not obj.isDerivedFrom("Sketcher::SketchObject"):
             fail("invalid_request", "External geometry requires a native SketchObject")
@@ -1236,6 +1247,8 @@ def dispatch(request):
                     fail("already_open", "Native document is already open")
                 doc = App.openDocument(path)
             doc.UndoMode = 1
+            if op == "open":
+                HoleTask.restore_inputs(doc, path)
             recompute_document(doc)
             # Untouched restored sketches can retain the Python DoF default 0
             # until their solver runs, even when they are underconstrained.
