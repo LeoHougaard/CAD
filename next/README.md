@@ -55,6 +55,9 @@ maps the audited UI routes and missing operations. Its evidence stays pinned to
 the stated commit; it does not certify complete functionality in the current build.
 Opening Help preserves the active modeling task. Escape dismisses Help first.
 
+The [suppression workflow](SUPPRESSION.md) describes the development tree action,
+native persistence repair, unavailable legacy states and remaining acceptance gates.
+
 Assembly tools create native local component instances, grounds and joints in the
 same document. Measure reads native geometry and units without accepting or
 canceling a modeling gesture. External-file insertion, nested assembly authoring,

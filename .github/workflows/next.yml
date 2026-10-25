@@ -117,6 +117,37 @@ jobs:
           tests = next(a['executable'] for a in artifacts if a.get('reason') == 'compiler-artifact' and a.get('executable') and 'lib' in a['target']['kind'] and a['profile']['test'])
           subprocess.run([sys.executable, '-B', 'next/tools/check_hole.py', '--runtime', 'next/target/runtime.json', '--editor-tests', tests, '--output', 'next/target/hole-integration'], check=True)
           PY
+      - name: Native suppression persistence, tree and checkpoint interactions
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+          PYTHONUTF8: '1'
+          FREECAD_USER_HOME: ${{ github.workspace }}/next/target/suppression/config
+        run: |
+          python -B - <<'PY'
+          import json, os, pathlib, subprocess, sys, tarfile
+          root = pathlib.Path.cwd(); out = root/'next/target/suppression'; out.mkdir(parents=True)
+          runtime_path = root/'next/target/runtime.json'; runtime = json.loads(runtime_path.read_text())
+          prefix = [runtime['executable'], *runtime['args']]
+          def run(command, **extra):
+              subprocess.run(list(map(str,command)), env=dict(os.environ,**extra), check=True)
+          for name in ['references','boundaries','observer']:
+              run([*prefix, root/('next/tests/suppression_native_'+name+'.py'), out/name])
+          run([*prefix, root/'next/tests/suppression_native_controls.py', '--references', out/'references', '--output', out/'controls'])
+          suffix = '.exe' if os.name == 'nt' else ''
+          host = root/'next/target/debug'/('cad-next'+suffix); compiler = root/'next/target/debug'/('cad-next-packages'+suffix)
+          run([sys.executable,'-B',root/'next/tests/suppression_workflows.py','--host',host,'--compiler',compiler,'--runtime',runtime_path,'--output',out/'public','--legacy',out/'controls/legacy.FCStd'])
+          artifacts = [json.loads(s) for s in (root/'next/target/units-test-artifacts.jsonl').read_text().splitlines() if s.startswith('{')]
+          tests = next(a['executable'] for a in artifacts if a.get('reason')=='compiler-artifact' and a.get('executable') and 'lib' in a['target']['kind'] and a['profile']['test'])
+          (out/'editor').mkdir()
+          run([tests,'editor::properties::acceptance_probe::suppression::','--ignored','--test-threads=1'], CAD_EDITOR_ACCEPTANCE_RUNTIME=str(runtime_path), CAD_EDITOR_ACCEPTANCE_WORKER=str(root/'next/backend/freecad_worker.py'), CAD_EDITOR_ACCEPTANCE_OUTPUT=str(out/'editor'), CAD_SUPPRESSION_LEGACY=str(out/'controls/legacy.FCStd'))
+          observed = dict(runtime,script=str(root/'next/tests/fixtures/suppression_checkpoint_worker.py'))
+          observed_path = out/'observed-runtime.json'; observed_path.write_text(json.dumps(observed))
+          run([sys.executable,'-B',root/'next/tests/suppression_checkpoint_workflows.py','--host',host,'--runtime',observed_path,'--output',out/'checkpoint'], CAD_SUPPRESSION_TRACE=str(out/'checkpoint-native.jsonl'))
+          with tarfile.open(root/'next/tests/fixtures/hole_native_fixtures.tar.gz') as archive:
+              (out/'hole-input.FCStd').write_bytes(archive.extractfile('fixtures/input.FCStd').read())
+          run([sys.executable,'-B',root/'next/tests/suppression_current_inputs.py','--host',host,'--runtime',runtime_path,'--fillet',out/'references/Fillet.FCStd','--hole',out/'hole-input.FCStd','--output',out/'current-inputs'])
+          run([*prefix,root/'next/tests/suppression_units_native.py','--input',out/'current-inputs'])
+          PY
       - name: Record checkpoint gate provenance
         if: always()
         run: |
@@ -148,6 +179,7 @@ jobs:
             next/target/document-ownership/
             next/target/document-units/
             next/target/hole-integration/
+            next/target/suppression/
             next/backend/native/checkpoint_restore*.json
             next/backend/native/checkpoint_restore*.so
             next/backend/native/checkpoint_restore.dll

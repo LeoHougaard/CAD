@@ -897,3 +897,25 @@ Undo/Redo. It uses guarded assignment, preparation and explicit failure
 restoration. Numeric protocol values and native expressions retain their existing
 meanings. Sketch attachment offsets additionally accept native `axis_angle` with
 unitless `axis` and a native angle input, alongside the existing quaternion.
+
+## Native suppression persistence
+
+`capabilities.suppression` declares persistent state version 1 and native map
+seeding. A Part Design feature snapshot's `suppression` field reports its native
+state, tree-action availability and a reason when unavailable. The shared history
+builder accepts `feature_suppression` with `object` and boolean `suppressed` and
+emits the existing native property edit. Revisions, leases and transactions apply.
+
+While suppressed, hidden read-only native properties on the same feature retain
+its original local placement and native shape with element map. Unsuppression
+restores them through native setters, removes both temporary properties and
+touches the feature. Native document recomputation must succeed using current
+parameters before publication. The saved shape supplies the native naming map;
+it never substitutes for that recomputation. Native history restores the entire
+property state without authoring new observer changes. Callback failures abort
+through the existing guarded transaction boundary.
+
+Expression-driven changes use the same native before/after callbacks. Formula
+suppression is edited in Properties rather than the tree toggle. Legacy files
+already lacking original suppression state reject unsuppression atomically;
+placement and topology are not inferred. Downstream native errors remain errors.

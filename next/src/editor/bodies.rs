@@ -448,6 +448,32 @@ impl Editor {
     fn tree_mutable(&self) -> bool {
         self.tree_selectable() && self.draft.is_none()
     }
+    pub(super) fn toggle_feature_suppression(&mut self, name: &str) {
+        if !self.tree_mutable() {
+            return;
+        }
+        let Some(suppressed) = objects(&self.state)
+            .iter()
+            .find(|object| object["name"] == name)
+            .and_then(|object| object["properties"]["Suppressed"].as_bool())
+        else {
+            return;
+        };
+        match crate::history_commands::build(
+            &self.state,
+            &json!({"op":"feature_suppression","object":name,"suppressed":!suppressed}),
+        ) {
+            Ok(edits) => self.transaction(
+                if suppressed {
+                    "Unsuppress feature"
+                } else {
+                    "Suppress feature"
+                },
+                edits,
+            ),
+            Err(error) => self.error = Some(error),
+        }
+    }
     fn select_tree_object(&mut self, name: &str, additive: bool) {
         select_tree_name(&mut self.body_ui.selected, name, additive);
         self.selected_object = self.tree_selections().last().cloned();
@@ -629,6 +655,28 @@ impl Editor {
                 {
                     self.start_reorder(name);
                     ui.close();
+                }
+                if object["suppression"].is_object() {
+                    let action = if object["properties"]["Suppressed"] == true {
+                        "Unsuppress"
+                    } else {
+                        "Suppress"
+                    };
+                    if ui
+                        .add_enabled(
+                            object["suppression"]["can_toggle"] == true,
+                            egui::Button::new(action),
+                        )
+                        .on_disabled_hover_text(
+                            object["suppression"]["reason"]
+                                .as_str()
+                                .unwrap_or("Native suppression is unavailable"),
+                        )
+                        .clicked()
+                    {
+                        self.toggle_feature_suppression(name);
+                        ui.close();
+                    }
                 }
                 if object["properties"]["Visibility"].is_boolean() {
                     let show = object["properties"]["Visibility"] == false;

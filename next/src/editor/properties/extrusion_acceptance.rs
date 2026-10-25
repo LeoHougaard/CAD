@@ -621,3 +621,6 @@ fn extrusion_editor_pocket() {
 
 #[path = "reference_selection_native.rs"]
 mod reference_selection;
+
+#[path = "suppression_editor.rs"]
+mod suppression;

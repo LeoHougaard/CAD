@@ -30,11 +30,13 @@ import exchange as Exchange
 import document_units as DocumentUnits
 import measurements as Measurements
 import hole_task as HoleTask
+import suppression as Suppression
 import sketch_journal as SketchJournal
 import sketch_checkpoints as SketchCheckpoints
 import session_callbacks as SessionCallbacks
 
 SketchJournal.configure(_protocol)
+_native_suppression = Suppression.register()
 
 
 VERSION = 1
@@ -493,7 +495,8 @@ def snapshot(doc, revision=None):
         entry = {"name": obj.Name, "type": obj.TypeId, "label": obj.Label,
                  "effective_visibility": effective_visibility(obj),
                  "valid": obj.isValid(), "status": obj.getStatusString(),
-                 "state": list(obj.State), **property_snapshot(obj), **AssemblyAuthoring.metadata(obj)}
+                 "state": list(obj.State), **property_snapshot(obj), **AssemblyAuthoring.metadata(obj),
+                 **Suppression.metadata(obj)}
         owner = owner_body(obj)
         entry["body"] = owner.Name if owner else None
         entry["history_flags"] = FeatureHistory.flags(obj, owner)
@@ -561,9 +564,27 @@ def validate_assembly_proxies(doc):
         fail(error.code, str(error))
 
 
+def check_suppression():
+    try:
+        _native_suppression.check()
+    except RuntimeError as error:
+        fail("suppression_state_unavailable", str(error))
+
+
+def abort_transaction(doc):
+    with _native_suppression.history():
+        doc.abortTransaction()
+
+
+def native_history(doc, operation):
+    with _native_suppression.history():
+        getattr(doc, operation)()
+
+
 def recompute_document(doc):
     validate_assembly_proxies(doc)
     result = doc.recompute()
+    check_suppression()
     if result is not False and not _native_sketch_sessions.get(doc.Name):
         try:
             result = AssemblyAuthoring.solve_document(doc)
@@ -590,11 +611,12 @@ def validate(doc, whole=False):
                     fail("invalid_model", obj.Name + ": " + diagnostic)
         if hasattr(obj, "Shape") and not obj.Shape.isNull() and not obj.Shape.isValid():
             fail("invalid_model", obj.Name + ": native shape is invalid")
-        if obj.isDerivedFrom("PartDesign::Boolean") and len(obj.Shape.Solids) == 0:
+        if obj.isDerivedFrom("PartDesign::Boolean") and not obj.Suppressed and len(obj.Shape.Solids) == 0:
             fail("invalid_model", obj.Name + ": native Boolean result contains no solid")
         transformation_step = any(parent.isDerivedFrom("PartDesign::MultiTransform") and
                                   obj in parent.Transformations for parent in obj.InList)
-        if not transformation_step and obj.TypeId in OBJECT_TYPES and obj.TypeId not in {
+        suppressed = obj.isDerivedFrom("PartDesign::Feature") and obj.Suppressed
+        if not suppressed and not transformation_step and obj.TypeId in OBJECT_TYPES and obj.TypeId not in {
             "App::Part", "PartDesign::Body", "Sketcher::SketchObject",
             "PartDesign::Plane", "PartDesign::Line", "PartDesign::Point", "PartDesign::CoordinateSystem",
             "PartDesign::ShapeBinder", "PartDesign::SubShapeBinder",
@@ -622,6 +644,12 @@ def set_boolean_tools(feature, tools):
 
 
 def apply_edit(doc, edit):
+    result = apply_native_edit(doc, edit)
+    check_suppression()
+    return result
+
+
+def apply_native_edit(doc, edit):
     op = edit.get("op", edit.get("kind"))
     if op in AssemblyAuthoring.OPERATIONS:
         try:
@@ -873,7 +901,7 @@ def transaction(doc, request):
         doc.commitTransaction()
     except Exception:
         try:
-            doc.abortTransaction()
+            abort_transaction(doc)
             recompute_document(doc)
             validate(doc)
         except Exception:
@@ -925,7 +953,7 @@ def journal(doc, action, **parameters):
 
 def replay_sketch(doc, session, candidate=None):
     if session["opened"]:
-        doc.abortTransaction()
+        abort_transaction(doc)
         session["opened"] = False
     checkpoint = journal(doc, "checkpoint")
     if checkpoint or candidate:
@@ -933,11 +961,15 @@ def replay_sketch(doc, session, candidate=None):
         session["opened"] = True
         sketch = object_in(doc, session["object"])
         if candidate and candidate.get("native_checkpoint"):
-            SketchCheckpoints.restore(sketch, candidate["native_checkpoint"])
+            with _native_suppression.history():
+                SketchCheckpoints.restore(sketch, candidate["native_checkpoint"])
+            check_suppression()
             results = []
         else:
             if checkpoint:
-                SketchCheckpoints.restore(sketch, checkpoint)
+                with _native_suppression.history():
+                    SketchCheckpoints.restore(sketch, checkpoint)
+                check_suppression()
                 solve_sketch(doc, session)
             results = [apply_edit(doc, edit) for edit in candidate["edits"]] if candidate else []
     else:
@@ -1024,7 +1056,7 @@ def sketch_session(doc, request):
     if request["op"] == "sketch_cancel":
         try:
             if session["opened"]:
-                doc.abortTransaction()
+                abort_transaction(doc)
                 session["opened"] = False
             recompute_document(doc)
             validate(doc, whole=True)
@@ -1130,7 +1162,7 @@ def preview(doc, request):
                 raise
         else:
             try:
-                doc.abortTransaction()
+                abort_transaction(doc)
                 recompute_document(doc)
                 validate(doc)
                 state = prepare_state(doc)
@@ -1151,7 +1183,7 @@ def preview(doc, request):
     label = preview_ready(doc, request)
     if active:
         try:
-            doc.abortTransaction()
+            abort_transaction(doc)
             recompute_document(doc)
             validate(doc)
         except Exception:
@@ -1173,7 +1205,7 @@ def preview(doc, request):
         if staged:
             lease("preview_resolve", doc.Name, accepted=False)
         try:
-            doc.abortTransaction()
+            abort_transaction(doc)
             recompute_document(doc)
             if active:
                 doc.openTransaction(active["label"])
@@ -1216,6 +1248,8 @@ def dispatch(request):
                 "sketch_tasks": SketchOperations.capabilities(),
                 "sketch_checkpoints": SketchCheckpoints.capabilities(),
                 "edit_operations": EDIT_OPERATIONS,
+                "suppression": {"persistent_state_version": 1, "native_map_seed": True,
+                                "legacy_requires_original_state": True},
                 "assembly": {"container_type": "Assembly::AssemblyObject", "instance_type": "App::Link",
                              "joint_types": list(AssemblyAuthoring.JOINT_TYPES),
                              "component_sources": ["local_document"], "external_file_insertion": False}}
@@ -1246,6 +1280,7 @@ def dispatch(request):
                 if any(os.path.normcase(d.FileName) == os.path.normcase(path) for d in App.listDocuments().values()):
                     fail("already_open", "Native document is already open")
                 doc = App.openDocument(path)
+            _native_suppression.attach(doc)
             doc.UndoMode = 1
             if op == "open":
                 HoleTask.restore_inputs(doc, path)
@@ -1262,6 +1297,7 @@ def dispatch(request):
         except Exception:
             for key in set(App.listDocuments()) - before:
                 App.closeDocument(key)
+                _native_suppression.detach(key)
             if active is not None and active.Name in App.listDocuments():
                 App.setActiveDocument(active.Name)
             raise
@@ -1339,7 +1375,7 @@ def dispatch(request):
         if getattr(doc, "UndoCount" if op == "undo" else "RedoCount") == 0:
             fail("nothing_to_" + op, "No native transaction to " + op)
         names_before = {obj.Name for obj in doc.Objects}
-        getattr(doc, op)()
+        native_history(doc, op)
         try:
             ExpressionLinks.repair_new(doc, names_before)
             recompute_document(doc)
@@ -1348,7 +1384,7 @@ def dispatch(request):
         except Exception:
             try:
                 names_before = {obj.Name for obj in doc.Objects}
-                getattr(doc, "redo" if op == "undo" else "undo")()
+                native_history(doc, "redo" if op == "undo" else "undo")
                 ExpressionLinks.repair_new(doc, names_before)
                 recompute_document(doc)
                 validate(doc)
@@ -1366,6 +1402,7 @@ def dispatch(request):
     if op == "close":
         key = doc.Name
         App.closeDocument(key)
+        _native_suppression.detach(key)
         revision_request("close", key)
         lease("close", key)
         _native_previews.pop(key, None)
