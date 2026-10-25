@@ -9,6 +9,7 @@ import math
 import xml.etree.ElementTree as ET
 
 import FreeCAD as App
+import document_units as DocumentUnits
 import Part
 import Sketcher
 
@@ -47,6 +48,8 @@ def finite(value):
 
 
 def quantity(value, unit):
+    if isinstance(value, dict) and "quantity_input" in value:
+        return DocumentUnits.value(value, unit)
     if not isinstance(value, str):
         return finite(value)
     result = App.Units.Quantity(value)
@@ -61,7 +64,7 @@ def quantity(value, unit):
 def vector(value):
     if not isinstance(value, list) or len(value) != 3:
         raise OperationError("Expected three sketch-local coordinates")
-    return App.Vector(*(finite(component) for component in value))
+    return App.Vector(*(DocumentUnits.value(component, "mm") for component in value))
 
 
 def flag(edit, key, default):

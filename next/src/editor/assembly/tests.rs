@@ -49,6 +49,7 @@ impl Native {
             body_ui: BodyUi::default(),
             property_ui: properties::PropertyUi::default(),
             measurement_ui: measurements::MeasurementUi::default(),
+            units_ui: Default::default(),
             transform_ui: transforms::TransformUi::default(),
             exchange_ui: exchange::ExchangeUi::default(),
             draft: None,

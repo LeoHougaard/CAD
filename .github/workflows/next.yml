@@ -91,6 +91,20 @@ jobs:
           for case in document_switch_preserves_dirty_confirmation_and_each_save_path ordinary_failed_open_keeps_dirty_content_and_save_retry_path; do
             cargo test --manifest-path next/Cargo.toml --all-features --locked "editor::sketch::lifecycle_tests::$case" -- --exact --ignored --test-threads=1 > "next/target/document-ownership/$case.log" 2>&1
           done
+      - name: Native document units, settings restoration and Editor regressions
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+          PYTHONUTF8: '1'
+        run: |
+          cargo test --manifest-path next/Cargo.toml --all-features --lib --locked --no-run --message-format=json > next/target/units-test-artifacts.jsonl
+          python -B - <<'PY'
+          import json, os, pathlib, subprocess, sys
+          root = pathlib.Path.cwd()
+          artifacts = [json.loads(line) for line in (root/'next/target/units-test-artifacts.jsonl').read_text().splitlines() if line.startswith('{')]
+          tests = next(a['executable'] for a in artifacts if a.get('reason') == 'compiler-artifact' and a.get('executable') and 'lib' in a['target']['kind'] and a['profile']['test'])
+          suffix = '.exe' if os.name == 'nt' else ''
+          subprocess.run([sys.executable, '-B', 'next/tools/check_document_units.py', '--runtime', 'next/target/runtime.json', '--host', str(root/'next/target/debug'/('cad-next'+suffix)), '--compiler', str(root/'next/target/debug'/('cad-next-packages'+suffix)), '--editor-tests', tests, '--output', 'next/target/document-units'], check=True)
+          PY
       - name: Record checkpoint gate provenance
         if: always()
         run: |
@@ -120,6 +134,7 @@ jobs:
             next/target/checkpoint-windows/
             next/target/checkpoint-windows-public/
             next/target/document-ownership/
+            next/target/document-units/
             next/backend/native/checkpoint_restore*.json
             next/backend/native/checkpoint_restore*.so
             next/backend/native/checkpoint_restore.dll

@@ -27,6 +27,7 @@ import profile_references as ProfileReferences
 import expression_links as ExpressionLinks
 import assembly as AssemblyAuthoring
 import exchange as Exchange
+import document_units as DocumentUnits
 import measurements as Measurements
 import sketch_journal as SketchJournal
 import sketch_checkpoints as SketchCheckpoints
@@ -39,7 +40,7 @@ VERSION = 1
 OPERATIONS = ["capabilities", "new", "open", "inspect", "transaction", "undo",
               "redo", "save", "mesh", "topology", "close", "preview",
               "preview_commit", "preview_cancel", "sketch_begin", "sketch_finish", "sketch_cancel", "feature_schema", "export_exchange"]
-OPERATIONS.append("measure")
+OPERATIONS += ["measure", "document_settings", "quantities"]
 EDIT_OPERATIONS = ["add_object", "set", "expression", "geometry", "constraint",
                    "datum", "move_geometry", "construction", "delete_geometry", "delete_constraint", "refraction", "via_point",
                    "constraint_state", "trim_geometry", "remove_object", "binder_support",
@@ -97,7 +98,7 @@ def number(value):
 def vector(value):
     if not isinstance(value, list) or len(value) != 3:
         fail("invalid_request", "Expected a three-number vector")
-    return App.Vector(*(number(v) for v in value))
+    return App.Vector(*(DocumentUnits.value(v, "mm") for v in value))
 
 
 def sketch_index(value, count):
@@ -150,7 +151,18 @@ def property_type(obj, prop):
     return obj.getTypeIdOfProperty(prop)
 
 
-def decode_property(doc, type_id, value):
+def decode_property(doc, type_id, value, current=None):
+    if isinstance(value, dict) and "quantity_input" in value:
+        if not hasattr(current, "Unit"):
+            fail("dimension_mismatch", "This native property is not a quantity")
+        try:
+            return DocumentUnits.property_input(value, current.Unit)
+        except (ValueError, TypeError, KeyError) as error:
+            fail("dimension_mismatch", str(error))
+    if type_id == "App::PropertyVector" and isinstance(value, list):
+        if len(value) != 3:
+            fail("invalid_request", "Expected a three-number vector")
+        return App.Vector(*(number(v) for v in value))
     if type_id in ("App::PropertyLink", "App::PropertyLinkChild", "App::PropertyLinkGlobal", "App::PropertyXLink", "App::PropertyLinkHidden"):
         return None if value is None else object_in(doc, value["link"])
     if type_id in ("App::PropertyLinkSub", "App::PropertyLinkSubChild", "App::PropertyLinkSubGlobal", "App::PropertyXLinkSub"):
@@ -176,12 +188,20 @@ def decode_property(doc, type_id, value):
     if type_id == "Part::PropertyFilletEdges" and isinstance(value, list):
         if any(not isinstance(item, list) or len(item) != 3 or type(item[0]) is not int for item in value):
             fail("invalid_request", "Fillet edges require [edge index, radius1, radius2] triples")
-        return [(item[0], number(item[1]), number(item[2])) for item in value]
+        return [(item[0], DocumentUnits.value(item[1], "mm"), DocumentUnits.value(item[2], "mm")) for item in value]
     if type_id == "App::PropertyPlacement":
         rotation = value.get("rotation", [0, 0, 0, 1])
         if not isinstance(rotation, list) or len(rotation) != 4:
             fail("invalid_request", "Placement rotation requires quaternion [x,y,z,w]")
-        return App.Placement(vector(value["position"]), App.Rotation(*(number(v) for v in rotation)))
+        if "axis_angle" in value:
+            aa = value["axis_angle"]
+            axis = App.Vector(*(number(v) for v in aa["axis"]))
+            if axis.Length == 0:
+                fail("invalid_request", "Choose a nonzero rotation axis")
+            rotation = App.Rotation(axis, DocumentUnits.value(aa["angle"], "deg"))
+        else:
+            rotation = App.Rotation(*(number(v) for v in rotation))
+        return App.Placement(vector(value["position"]), rotation)
     scalars = {"String", "UUID", "Bool", "Integer", "IntegerConstraint", "Float", "FloatConstraint",
                "Enumeration", "Length", "Distance", "Angle", "Area", "Volume", "Quantity",
                "QuantityConstraint", "Percent", "Precision", "Speed", "Acceleration"}
@@ -261,6 +281,14 @@ def property_snapshot(obj):
         type_id = obj.getTypeIdOfProperty(prop)
         result["property_types"][prop] = type_id
         result["property_metadata"][prop] = property_metadata(obj, prop)
+        try:
+            quantity = DocumentUnits.metadata(type_id, getattr(obj, prop), DocumentUnits.index(obj.Document))
+            if quantity is not None:
+                result["property_metadata"][prop]["quantity"] = quantity
+            if type_id == "Part::PropertyFilletEdges":
+                result["property_metadata"][prop]["quantity_default"] = DocumentUnits.describe(DocumentUnits.native(1, "mm"), DocumentUnits.index(obj.Document))
+        except (TypeError, AttributeError):
+            pass
         try:
             result["properties"][prop] = encode_property(type_id, getattr(obj, prop))
         except (TypeError, AttributeError):
@@ -492,12 +520,14 @@ def snapshot(doc, revision=None):
                                                 "first_pos": c.FirstPos, "second": c.Second,
                                                 "second_pos": c.SecondPos, "third": c.Third,
                                                 "third_pos": c.ThirdPos, "value": c.Value,
+                                                **DocumentUnits.constraint(obj, c),
                                                 "name": c.Name, "driving": c.Driving,
                                                 "virtual": c.InVirtualSpace, "active": c.IsActive,
                                                 **SketchGeometry.angle_witness(obj, c)}
                                                for i, c in enumerate(obj.Constraints)]}
         objects.append(entry)
     return {"document": doc.Name, "revision": revision_request("current", doc.Name) if revision is None else revision, "objects": objects,
+            "units": DocumentUnits.settings(doc),
             **history_counts(doc), "sketch_edit": sketch_metadata(doc),
             "available": lease("metadata", doc.Name)["available"], "preview": preview_metadata(doc)}
 
@@ -669,7 +699,7 @@ def apply_edit(doc, edit):
     elif op == "set":
         prop = edit["property"]
         type_id = writable_property(obj, prop)
-        value = decode_property(doc, type_id, edit["value"])
+        value = decode_property(doc, type_id, edit["value"], getattr(obj, prop))
         if obj.isDerivedFrom("PartDesign::Boolean") and prop == "Group":
             set_boolean_tools(obj, value)
         elif obj.isDerivedFrom("PartDesign::Boolean") and prop == "BaseFeature":
@@ -759,6 +789,14 @@ def apply_edit(doc, edit):
         index = sketch_index(edit["index"], obj.ConstraintCount if constraint else obj.GeometryCount)
         if op == "datum":
             value = edit["value"]
+            if "input_default_unit" in edit:
+                kind = obj.Constraints[index].Type
+                unit = "rad" if kind == "Angle" else "" if kind in {"Weight", "SnellsLaw"} else "mm"
+                try:
+                    parsed = DocumentUnits.parse(value, unit, edit["input_default_unit"])
+                    value = DocumentUnits.describe(DocumentUnits.native(parsed, unit), DocumentUnits.index(doc))["input"]
+                except (ValueError, TypeError) as error:
+                    fail("dimension_mismatch", str(error))
             if not isinstance(value, str):
                 number(value)
             quantity = App.Units.Quantity(value)
@@ -1174,6 +1212,11 @@ def dispatch(request):
         type_id = request.get("type")
         if type_id not in _feature_schemas:
             fail("unsupported_object_type", "Unsupported native object type: " + str(type_id))
+        if request.get("document") is not None:
+            doc = document(request)
+            lease("read_guard", doc.Name)
+            revision_request("check", doc.Name, expected_revision=request.get("expected_revision"))
+            return DocumentUnits.schema(_feature_schemas[type_id], doc, request.get("values", {}))
         return _feature_schemas[type_id]
     lease("global", request=request)
     if op in ("new", "open"):
@@ -1214,7 +1257,43 @@ def dispatch(request):
         fail("unsupported_operation", "Unsupported operation: " + str(op))
     doc = document(request, writable=op in ("transaction", "undo", "redo", "save", "close",
                                            "preview", "preview_commit", "preview_cancel",
-                                           "sketch_begin", "sketch_finish", "sketch_cancel", "export_exchange"))
+                                           "sketch_begin", "sketch_finish", "sketch_cancel", "export_exchange", "document_settings"))
+    if op == "quantities":
+        lease("read_guard", doc.Name)
+        revision_request("check", doc.Name, expected_revision=request.get("expected_revision"))
+        try:
+            items = DocumentUnits.query(doc, request.get("items"))
+        except (ValueError, TypeError, KeyError) as error:
+            fail("invalid_quantity", str(error))
+        return {"document": doc.Name, "revision": revision_request("current", doc.Name), "items": items}
+    if op == "document_settings":
+        selected = request.get("unit_system")
+        choices = list(doc.getEnumerationsOfProperty("UnitSystem"))
+        if type(selected) is not int or not 0 <= selected < len(choices):
+            fail("invalid_request", "Choose a native document unit system")
+        previous = doc.UnitSystem
+        if previous == choices[selected]:
+            return snapshot(doc)
+        history = (doc.UndoCount, doc.RedoCount)
+        try:
+            # UnitSystem is NOT transaction undoable. No transaction is opened,
+            # aborted, committed or synthesized for this document setting.
+            doc.UnitSystem = selected
+            state = prepare_state(doc)
+            if doc.UnitSystem != choices[selected] or history != (doc.UndoCount, doc.RedoCount):
+                fail("settings_state", "Native setting or history changed unexpectedly")
+            state["revision"] = bump(doc)
+            return state
+        except Exception:
+            try:
+                doc.UnitSystem = previous
+                prepare_state(doc)
+                if doc.UnitSystem != previous or history != (doc.UndoCount, doc.RedoCount):
+                    raise RuntimeError("Native settings restoration did not match its baseline")
+            except Exception:
+                lease("poison", doc.Name)
+                traceback.print_exc(file=sys.stderr)
+            raise
     if op == "measure":
         lease("read_guard", doc.Name)
         revision_request("check", doc.Name, expected_revision=request.get("expected_revision"))

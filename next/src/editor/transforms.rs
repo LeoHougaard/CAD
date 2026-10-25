@@ -402,12 +402,7 @@ fn step_fields(
                         let mut active = expression.is_string();
                         if ui.checkbox(&mut active, "Expression").changed() {
                             expression = if active {
-                                json!(
-                                    value
-                                        .as_str()
-                                        .map(str::to_owned)
-                                        .unwrap_or_else(|| value.to_string())
-                                )
+                                json!(super::properties::display(&value))
                             } else {
                                 Value::Null
                             };

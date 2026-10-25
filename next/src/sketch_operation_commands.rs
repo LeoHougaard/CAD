@@ -5,13 +5,12 @@ use serde_json::{Value, json};
 fn finite_vector(value: &Value) -> bool {
     value.as_array().is_some_and(|v| {
         v.len() == 3
-            && v.iter().all(|n| n.as_f64().is_some_and(f64::is_finite))
+            && v.iter().all(crate::document_units::scalar)
             && v[2].as_f64().is_some_and(|z| z.abs() < 1e-9)
     })
 }
 fn scalar(value: &Value) -> bool {
-    value.as_f64().is_some_and(f64::is_finite)
-        || value.as_str().is_some_and(|s| !s.trim().is_empty())
+    crate::document_units::scalar(value)
 }
 fn integer(value: &Value, min: i64, max: i64) -> bool {
     value.as_i64().is_some_and(|n| (min..=max).contains(&n))

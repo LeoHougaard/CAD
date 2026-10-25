@@ -75,6 +75,7 @@ impl Native {
             exchange_ui: exchange::ExchangeUi::default(),
             draft: None,
             measurement_ui: super::super::measurements::MeasurementUi::default(),
+            units_ui: Default::default(),
             sequence: 0,
             error: None,
             status: String::new(),
@@ -492,6 +493,7 @@ fn poisoned_sketch(owner: &str) {
         n.editor.viewport.sketch_selection = vec![selected];
         n.editor.new_dimension("Distance");
         assert!(n.editor.sketch_ui.dimension.is_some());
+        n.receive("quantities", true);
     }
     if owner == "task" {
         n.editor.begin_sketch_task(
@@ -502,6 +504,7 @@ fn poisoned_sketch(owner: &str) {
             }]),
         );
         assert!(n.editor.sketch_ui.task.is_some());
+        n.receive("quantities", true);
     }
     n.send("transaction",json!({"label":"Poison sketch","edits":[{"op":"construction","object":"Sketch","index":0}],"lifecycle_fault":"validate_twice"}),false);
     assert_eq!(n.editor.state["available"], false);

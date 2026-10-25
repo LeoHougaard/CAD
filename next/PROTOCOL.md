@@ -31,7 +31,7 @@ parameters. Responses repeat version and id, contain `ok`, and contain either
 
 The initial operations are `capabilities`, `new`, `open`, `inspect`, `transaction`,
 `preview`, `preview_commit`, `preview_cancel`, `undo`, `redo`, `save`, `mesh`,
-`topology`, `measure`, `sketch_begin`, `sketch_finish`, `sketch_cancel` and `close`.
+`topology`, `measure`, `quantities`, `document_settings`, `sketch_begin`, `sketch_finish`, `sketch_cancel` and `close`.
 `new` takes a document `name`; `open`
 and `save` take a native file `path`; other document operations take `document`.
 `mesh` and `topology` also take the result object's `object` name and optional
@@ -818,3 +818,13 @@ Preview label validation precedes native redo admission. Rust requests the
 native RedoCount fact only for a first feature preview or unopened sketch
 transaction. Existing candidates and open sketch transactions skip that getter
 for admission. The demand and fact callbacks share the original request deadline.
+
+## Document settings and quantity text
+
+See [Native document units](DOCUMENT-UNITS.md) for the additive revision-checked
+`document_settings` and read-only `quantities` operations, metadata, text wrappers
+and default-unit rules. UnitSystem is explicitly outside native transaction
+Undo/Redo. It uses guarded assignment, preparation and explicit failure
+restoration. Numeric protocol values and native expressions retain their existing
+meanings. Sketch attachment offsets additionally accept native `axis_angle` with
+unitless `axis` and a native angle input, alongside the existing quaternion.

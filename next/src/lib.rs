@@ -2,6 +2,7 @@
 
 pub mod assembly_commands;
 pub mod body_commands;
+pub mod document_units;
 #[cfg(feature = "desktop")]
 pub mod editor;
 pub mod extrusion_commands;

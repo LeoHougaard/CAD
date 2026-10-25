@@ -48,7 +48,8 @@ fn token(request: &Value, sketch: bool) -> Result<&str, Failure> {
 fn writable(op: &str) -> bool {
     matches!(
         op,
-        "new"
+        "document_settings"
+            | "new"
             | "open"
             | "transaction"
             | "undo"

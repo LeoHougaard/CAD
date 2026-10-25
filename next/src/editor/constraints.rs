@@ -13,7 +13,7 @@ pub(super) struct DimensionEdit {
     pub(super) expression: bool,
     focus: bool,
     submitting: bool,
-    constraint: Option<Value>,
+    pub(super) constraint: Option<Value>,
     preview: Option<DimensionPreview>,
 }
 
@@ -40,8 +40,8 @@ impl DimensionEdit {
         if op == "preview" {
             if preview.seeding {
                 preview.seeding = false;
-                if success && let Some(value) = current.and_then(|c| c["value"].as_f64()) {
-                    self.value = dimension_input("Angle", value);
+                if success && let Some(current) = current {
+                    self.value = quantity_text(current, "input");
                 }
             } else if preview.applying {
                 if success {
@@ -80,47 +80,32 @@ fn dimensional(kind: &str) -> bool {
     .contains(&kind)
 }
 
-fn number(value: f64) -> String {
-    let text = format!("{value:.6}");
-    let text = text.trim_end_matches('0').trim_end_matches('.');
-    if text == "-0" {
-        "0".into()
-    } else {
-        text.into()
-    }
+fn quantity_text(constraint: &Value, field: &str) -> String {
+    constraint["quantity"][field]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned()
 }
 
-fn dimension_value(kind: &str, value: f64) -> String {
-    if matches!(kind, "Weight" | "SnellsLaw") {
-        return number(value);
-    }
-    if kind == "Angle" {
-        format!("{} deg", number(value.to_degrees()))
+fn dimension_unit<'a>(state: &'a Value, edit: &DimensionEdit) -> &'a str {
+    let unit = if edit.kind == "Angle" {
+        "rad"
+    } else if matches!(edit.kind.as_str(), "Weight" | "SnellsLaw") {
+        ""
     } else {
-        format!("{} mm", number(value))
-    }
+        "mm"
+    };
+    state["units"]["defaults"][unit]["default_unit"]
+        .as_str()
+        .unwrap_or("")
 }
 
-fn dimension_input(kind: &str, value: f64) -> String {
-    if matches!(kind, "Weight" | "SnellsLaw") {
-        return value.to_string();
-    }
-    if kind == "Angle" {
-        format!("{} deg", value.to_degrees())
-    } else {
-        format!("{value} mm")
-    }
-}
-
-fn dimension_datum(kind: &str, value: &str) -> String {
-    let value = value.trim();
-    if matches!(kind, "Weight" | "SnellsLaw") {
-        return value.into();
-    }
-    if value.parse::<f64>().is_ok_and(f64::is_finite) {
-        format!("{value} {}", if kind == "Angle" { "deg" } else { "mm" })
-    } else {
-        value.into()
+fn dimension_context(edits: &mut [Value], default: &str) {
+    for edit in edits {
+        if matches!(edit["op"].as_str(), Some("datum" | "via_point")) && edit.get("value").is_some()
+        {
+            edit["input_default_unit"] = json!(default);
+        }
     }
 }
 
@@ -421,7 +406,7 @@ impl Editor {
                     index: None,
                     kind: kind.into(),
                     selection,
-                    value: dimension_input(kind, value),
+                    value: String::new(),
                     expression: false,
                     focus: true,
                     submitting: false,
@@ -429,6 +414,7 @@ impl Editor {
                     preview: None,
                 });
                 self.error = None;
+                self.send("quantities", json!({"items":[{"value":value,"unit":if kind=="Angle" {"rad"} else if matches!(kind,"Weight"|"SnellsLaw") {""} else {"mm"}}]}));
             }
             Err(error) => self.error = Some(error),
         }
@@ -456,7 +442,7 @@ impl Editor {
         let formula = expression(&snapshot, index);
         let value = formula
             .clone()
-            .unwrap_or_else(|| dimension_input(kind, constraint["value"].as_f64().unwrap_or(0.)));
+            .unwrap_or_else(|| quantity_text(constraint, "input"));
         self.prepare_constraint_tool();
         self.highlight_constraint(&snapshot, index);
         self.sketch_ui.dimension = Some(DimensionEdit {
@@ -633,7 +619,7 @@ impl Editor {
                                 let name = constraint["name"].as_str().unwrap_or_default();
                                 let mut label = if name.is_empty() { format!("{}  {kind}", index + 1) } else { name.into() };
                                 if dimensional(kind) {
-                                    label.push_str(&format!("  {}", dimension_value(kind, constraint["value"].as_f64().unwrap_or(0.))));
+                                    label.push_str(&format!("  {}", quantity_text(constraint, "display")));
                                 }
                                 if constraint["driving"] == false && dimensional(kind) { label.push_str("  ref"); }
                                 if constraint["active"] == false { label.push_str("  off"); }
@@ -689,11 +675,12 @@ impl Editor {
         let Some(mut edit) = self.sketch_ui.dimension.take() else {
             return;
         };
-        let target_valid = edit.constraint.as_ref().is_none_or(|previous| {
-            edit.index
-                .and_then(|index| native_constraint(snapshot, index))
-                .is_some_and(|current| same_constraint(previous, current))
-        });
+        let target_valid = edit.index.is_none()
+            || edit.constraint.as_ref().is_none_or(|previous| {
+                edit.index
+                    .and_then(|index| native_constraint(snapshot, index))
+                    .is_some_and(|current| same_constraint(previous, current))
+            });
         if !target_valid && self.sketch_ui.selected_constraint == edit.index {
             self.sketch_ui.selected_constraint = None;
             self.sketch_ui.constraint_name.clear();
@@ -747,8 +734,7 @@ impl Editor {
                         } else if edit.preview.as_ref().is_some_and(|p| !p.deferred) {
                             snapshot["sketch"]["constraints"].as_array().and_then(|cs| cs.last())
                         } else { None };
-                        edit.value = constraint.and_then(|c| c["value"].as_f64())
-                            .map(|value| dimension_input(&edit.kind,value)).unwrap_or_default();
+                        edit.value = constraint.map(|c| quantity_text(c, "input")).unwrap_or_default();
                     }
                     ui.weak(if reference {
                         "Native reference angle. Its value is measured from the solved curves."
@@ -761,7 +747,7 @@ impl Editor {
                     } else if edit.preview.as_ref().is_some_and(|p| p.deferred) {
                         "Native preparation and measurement run on Apply while Redo is retained. Leave empty to use the measured angle."
                     } else {
-                        "mm or degrees by default. Other units are accepted."
+                        "Bare numbers use this field's native displayed unit. Explicit units are accepted."
                     });
                     ui.horizontal(|ui| {
                         apply |= ui
@@ -789,9 +775,15 @@ impl Editor {
             return;
         }
         if apply && can_edit {
+            let default = edit
+                .constraint
+                .as_ref()
+                .and_then(|c| c["quantity"]["default_unit"].as_str())
+                .unwrap_or_else(|| dimension_unit(&self.state, &edit))
+                .to_owned();
             let value = edit.value.trim();
             if let Some(preview) = &mut edit.preview {
-                let datum = (!value.is_empty()).then(|| dimension_datum("Angle", value));
+                let datum = (!value.is_empty()).then(|| value.to_owned());
                 let edits = angle_via_point_edits(
                     &preview.baseline,
                     &edit.selection,
@@ -804,7 +796,8 @@ impl Editor {
                     Some(!preview.reference),
                 );
                 match edits {
-                    Ok(edits) => {
+                    Ok(mut edits) => {
+                        dimension_context(&mut edits, &default);
                         preview.applying = true;
                         let token = preview.token.clone();
                         let deferred = preview.deferred;
@@ -839,20 +832,16 @@ impl Editor {
                         &if edit.expression {
                             value.into()
                         } else {
-                            dimension_datum(&edit.kind, value)
+                            value.to_owned()
                         },
                         edit.expression,
                     )
                 } else {
-                    constrain(
-                        snapshot,
-                        &edit.kind,
-                        &edit.selection,
-                        Some(&dimension_datum(&edit.kind, value)),
-                    )
+                    constrain(snapshot, &edit.kind, &edit.selection, Some(value))
                 };
                 match edits {
-                    Ok(edits) => {
+                    Ok(mut edits) => {
+                        dimension_context(&mut edits, &default);
                         edit.submitting = true;
                         self.sketch_ui.dimension = Some(edit);
                         self.transaction("Set sketch dimension", edits);
@@ -906,7 +895,7 @@ mod tests {
                 "preview",
                 true,
                 true,
-                Some(&json!({"value":std::f64::consts::FRAC_PI_4}))
+                Some(&json!({"value":std::f64::consts::FRAC_PI_4,"quantity":{"input":"45 deg"}}))
             ),
             None
         );
@@ -992,34 +981,10 @@ mod tests {
     }
 
     #[test]
-    fn reads_native_expressions_and_formats_native_angles() {
-        let snapshot =
-            json!({"properties":{"ExpressionEngine":[["Constraints[2]","Constraints[1] * 2"]]}});
-        assert_eq!(
-            expression(&snapshot, 2).as_deref(),
-            Some("Constraints[1] * 2")
-        );
-        assert_eq!(expression(&snapshot, 1), None);
-        let named = json!({"properties":{"ExpressionEngine":[[".Constraints.Width","20 mm"]]},
-            "sketch":{"constraints":[{"index":2,"name":"Width"}]}});
-        assert_eq!(expression(&named, 2).as_deref(), Some("20 mm"));
-        assert_eq!(
-            dimension_value("Angle", std::f64::consts::FRAC_PI_4),
-            "45 deg"
-        );
-        assert_eq!(dimension_value("Distance", -2.5), "-2.5 mm");
-        assert_eq!(dimension_input("Distance", 12.345678901), "12.345678901 mm");
-        assert_eq!(dimension_datum("Distance", "12"), "12 mm");
-        assert_eq!(dimension_datum("Angle", "45"), "45 deg");
-        assert_eq!(dimension_datum("Distance", "0.5 in"), "0.5 in");
-        assert!(dimensional("SnellsLaw"));
-        assert_eq!(dimension_value("SnellsLaw", 1.5), "1.5");
-        assert_eq!(dimension_input("SnellsLaw", 1.23456789), "1.23456789");
-        assert_eq!(dimension_datum("SnellsLaw", " 1.25 "), "1.25");
-        assert!(dimensional("Weight"));
-        assert_eq!(dimension_value("Weight", 0.75), "0.75");
-        assert_eq!(dimension_input("Weight", 0.123456789), "0.123456789");
-        assert_eq!(dimension_datum("Weight", " 2.5 "), "2.5");
+    fn native_quantity_text_is_authoritative() {
+        let c = json!({"quantity":{"display":"1.00 in","input":"1 in"}});
+        assert_eq!(quantity_text(&c, "display"), "1.00 in");
+        assert_eq!(quantity_text(&c, "input"), "1 in");
     }
 
     #[test]

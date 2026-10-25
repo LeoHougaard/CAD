@@ -136,6 +136,59 @@ fn defaults(kind: &str, snapshot: &Value, selection: &[SketchElement]) -> Value 
 }
 
 impl Editor {
+    fn sketch_task_quantities(&mut self) {
+        let Some(task) = &self.sketch_ui.task else {
+            return;
+        };
+        let mut fields = Vec::new();
+        match task.kind.as_str() {
+            "fillet" | "chamfer" => {
+                fields.push((
+                    "/radius".into(),
+                    task.parameters["radius"].clone(),
+                    "mm".into(),
+                ));
+                if let Some(positions) = task.parameters["positions"].as_array() {
+                    for (i, point) in positions.iter().enumerate() {
+                        for axis in 0..2 {
+                            fields.push((
+                                format!("/positions/{i}/{axis}"),
+                                point[axis].clone(),
+                                "mm".into(),
+                            ));
+                        }
+                    }
+                }
+            }
+            "extend" => {
+                let unit = if curve(&task.baseline, task.selection[0].index)
+                    .is_some_and(|g| g["kind"] == "arc")
+                {
+                    "rad"
+                } else {
+                    "mm"
+                };
+                fields.push((
+                    "/increment".into(),
+                    task.parameters["increment"].clone(),
+                    unit.into(),
+                ));
+            }
+            "spline_pole" => {
+                for axis in 0..2 {
+                    fields.push((
+                        format!("/position/{axis}"),
+                        task.parameters["position"][axis].clone(),
+                        "mm".into(),
+                    ));
+                }
+            }
+            _ => (),
+        }
+        self.units_ui.fields.clear();
+        self.quantity_request(false, fields, false);
+    }
+
     pub(super) fn sketch_task_toolbar(&mut self, ui: &mut egui::Ui) {
         ui.menu_button("Edit tools", |ui| {
             if ui
@@ -241,6 +294,7 @@ impl Editor {
         self.sketch_ui.split = false;
         self.sketch_ui.selected_constraint = None;
         self.viewport.clear_sketch_selection();
+        self.sketch_task_quantities();
     }
     pub(super) fn begin_pole_weight(&mut self, control: i32) -> bool {
         let Some(snapshot) = self.sketch_snapshot() else {
@@ -427,7 +481,13 @@ impl Editor {
                     if task.exposing_controls {
                         ui.weak("Reading native spline controls for weight constraints...");
                     } else {
-                        changed |= task_fields(ui, &mut task, &choices);
+                        changed |= task_fields(
+                            ui,
+                            &mut task,
+                            &choices,
+                            &self.state["units"]["defaults"],
+                            &self.units_ui.fields,
+                        );
                     }
                     if task.deferred {
                         ui.weak("Apply branches native redo history. Cancel preserves it.");
@@ -454,6 +514,9 @@ impl Editor {
             task.valid = false;
         }
         self.sketch_ui.task = Some(task);
+        if changed {
+            self.sketch_task_quantities();
+        }
         if apply {
             self.finish_sketch_task(true);
         } else if cancel {
@@ -492,14 +555,35 @@ fn text(ui: &mut egui::Ui, label: &str, value: &mut Value) -> bool {
         false
     }
 }
-fn point(ui: &mut egui::Ui, value: &mut Value) -> bool {
+fn point(
+    ui: &mut egui::Ui,
+    value: &mut Value,
+    defaults: &Value,
+    fields: &std::collections::BTreeMap<String, Value>,
+    path: &str,
+) -> bool {
     let mut changed = false;
-    for (axis, name) in ["X (mm)", "Y (mm)"].into_iter().enumerate() {
-        changed |= number(ui, name, &mut value[axis], false);
+    for (axis, name) in ["X", "Y"].into_iter().enumerate() {
+        ui.label(name);
+        ui.push_id(axis, |ui| {
+            changed |= super::units::quantity_field(
+                ui,
+                &mut value[axis],
+                fields
+                    .get(&format!("{path}/{axis}"))
+                    .unwrap_or(&defaults["mm"]),
+            );
+        });
     }
     changed
 }
-fn task_fields(ui: &mut egui::Ui, task: &mut SketchTask, choices: &[String]) -> bool {
+fn task_fields(
+    ui: &mut egui::Ui,
+    task: &mut SketchTask,
+    choices: &[String],
+    defaults: &Value,
+    fields: &std::collections::BTreeMap<String, Value>,
+) -> bool {
     let mut changed = false;
     let params = &mut task.parameters;
     let index = task.selection.first().map_or(-1, |s| s.index);
@@ -567,14 +651,25 @@ fn task_fields(ui: &mut egui::Ui, task: &mut SketchTask, choices: &[String]) -> 
             }
         }
         "fillet" | "chamfer" => {
-            changed |= text(ui, "Radius", &mut params["radius"]);
+            ui.label("Radius");
+            changed |= super::units::quantity_field(
+                ui,
+                &mut params["radius"],
+                fields.get("/radius").unwrap_or(&defaults["mm"]),
+            );
             if task.selection.len() == 2 {
                 for pick in 0..2 {
                     ui.label(format!(
                         "Curve {} pick position",
                         task.selection[pick].index
                     ));
-                    changed |= point(ui, &mut params["positions"][pick]);
+                    changed |= point(
+                        ui,
+                        &mut params["positions"][pick],
+                        defaults,
+                        fields,
+                        &format!("/positions/{pick}"),
+                    );
                 }
             }
             for (key, name) in [
@@ -590,14 +685,17 @@ fn task_fields(ui: &mut egui::Ui, task: &mut SketchTask, choices: &[String]) -> 
             ui.weak("Constrain the generated arc to drive its radius.");
         }
         "extend" => {
-            changed |= text(
+            ui.label(if geo["kind"] == "arc" {
+                "Angular extension"
+            } else {
+                "Length extension"
+            });
+            changed |= super::units::quantity_field(
                 ui,
-                if geo["kind"] == "arc" {
-                    "Angular extension"
-                } else {
-                    "Length extension"
-                },
                 &mut params["increment"],
+                fields
+                    .get("/increment")
+                    .unwrap_or(&defaults[if geo["kind"] == "arc" { "rad" } else { "mm" }]),
             );
         }
         "carbon_copy" => {
@@ -664,7 +762,7 @@ fn task_fields(ui: &mut egui::Ui, task: &mut SketchTask, choices: &[String]) -> 
                 changed = true;
             }
             if task.kind == "spline_pole" {
-                changed |= point(ui, &mut params["position"]);
+                changed |= point(ui, &mut params["position"], defaults, fields, "/position");
             } else {
                 changed |= text(ui, "Dimensionless weight", &mut params["value"]);
                 let equal = task

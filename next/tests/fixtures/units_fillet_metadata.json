@@ -1,0 +1,61 @@
+{
+  "documentation": "",
+  "editor_mode": [],
+  "group": "",
+  "hidden": false,
+  "quantity": [
+    [
+      null,
+      {
+        "default_unit": "in",
+        "display": "0.10 in",
+        "input": "0.10000000000000001 in",
+        "signature": [
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "value": 2.54
+      },
+      {
+        "default_unit": "in",
+        "display": "0.10 in",
+        "input": "0.10000000000000001 in",
+        "signature": [
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "value": 2.54
+      }
+    ]
+  ],
+  "quantity_default": {
+    "default_unit": "in",
+    "display": "0.04 in",
+    "input": "0.03937007874015748 in",
+    "signature": [
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "value": 1.0
+  },
+  "read_only": false,
+  "status": []
+}

@@ -2989,3 +2989,11 @@ Current compatibility is a separate default check. It requires exact native stab
 
 `--historical-only` explicitly checks historical integrity without claiming current compatibility. It still requires authenticated pinned source. The normal command checks both. The public tests include the historical removed anchor, intentional label updates and negative ID/input/type/group/package/label/acceptance and verified-root cases.
 
+
+## Later document-unit bundle
+
+The separate [Native document units](DOCUMENT-UNITS.md) instructions cover the
+Units menu, Apply/Cancel, saved settings, quantity editing, shared agent access
+and the complete current-route inventory. The historical tables and acceptance
+records above remain pinned and unchanged. Current native/headless evidence
+does not certify desktop, cross-platform or all-app parity.

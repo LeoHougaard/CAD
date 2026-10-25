@@ -68,6 +68,7 @@ impl NativeEditor {
             exchange_ui: super::super::exchange::ExchangeUi::default(),
             draft: None,
             measurement_ui: super::super::measurements::MeasurementUi::default(),
+            units_ui: Default::default(),
             sequence: 0,
             error: None,
             status: String::new(),

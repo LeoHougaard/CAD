@@ -6,6 +6,7 @@ import zipfile
 import xml.etree.ElementTree as ET
 
 import FreeCAD as App
+import document_units as DocumentUnits
 import Part
 import Sketcher
 
@@ -426,6 +427,9 @@ def via_point(obj, edit):
             obj.setDriving(index, False)
         if "value" in edit:
             value = edit["value"]
+            if "input_default_unit" in edit:
+                base = DocumentUnits.parse(value, "rad", edit["input_default_unit"])
+                value = DocumentUnits.describe(DocumentUnits.native(base, "rad"), DocumentUnits.index(obj.Document))["input"]
             if not isinstance(value, str):
                 finite(value)
             quantity = App.Units.Quantity(value)

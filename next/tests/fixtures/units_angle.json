@@ -1,0 +1,54 @@
+{
+  "description": "Native radian numeric constraint contract",
+  "edits": [
+    {
+      "end": [
+        110,
+        110,
+        0
+      ],
+      "kind": "line",
+      "object": {
+        "$param": "object"
+      },
+      "op": "geometry",
+      "start": [
+        100,
+        100,
+        0
+      ]
+    },
+    {
+      "args": [
+        {
+          "$param": "index"
+        },
+        {
+          "$param": "angle"
+        }
+      ],
+      "kind": "Angle",
+      "object": {
+        "$param": "object"
+      },
+      "op": "constraint"
+    }
+  ],
+  "id": "review.angle",
+  "label": "Angle package",
+  "parameters": {
+    "angle": {
+      "default": 1.0,
+      "type": "number",
+      "unit": "rad"
+    },
+    "index": {
+      "default": 0,
+      "type": "integer"
+    },
+    "object": {
+      "type": "identifier"
+    }
+  },
+  "version": 1
+}

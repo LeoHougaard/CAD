@@ -32,6 +32,10 @@ to `15703c5`; later verified changes are recorded in [VERIFICATION.md](VERIFICAT
 The checklist records remaining work and acceptance gates. It does not establish
 full feature coverage or Rust modeling parity.
 
+Document-local unit settings and current quantity input routes are described in
+[Native document units](DOCUMENT-UNITS.md). This access remains a bounded bundle;
+it does not close the historical full-parity gates.
+
 ## Run the editor
 
 Build the optional desktop target and use the same pinned runtime configuration:

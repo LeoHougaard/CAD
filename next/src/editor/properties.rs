@@ -190,7 +190,7 @@ impl Editor {
         {
             self.transform_ui.begin(&mut draft.parameters, &self.state);
         }
-        self.send("feature_schema", json!({"type":type_id}));
+        self.send("feature_schema", json!({"type":type_id,"values":self.draft.as_ref().map(|d| d.parameters["properties"].clone()).unwrap_or_default()}));
     }
 
     pub(super) fn native_schema_reply(&mut self, schema: Value, success: bool) {
@@ -381,6 +381,8 @@ impl Editor {
                                             &selected,
                                             base,
                                             native_objects,
+                                            &metadata["quantity"],
+                                            &metadata["quantity_default"],
                                         );
                                         value_changed = value != before;
                                     } else {
@@ -568,9 +570,10 @@ impl Editor {
     }
 }
 
-fn display(value: &Value) -> String {
-    value
+pub(super) fn display(value: &Value) -> String {
+    value["quantity_input"]
         .as_str()
+        .or_else(|| value.as_str())
         .map(str::to_owned)
         .unwrap_or_else(|| value.to_string())
 }
@@ -634,13 +637,23 @@ fn property_widget_with_selection(
     let selected = selections.unwrap_or_default();
     let before = value.clone();
     let kind = type_id.strip_prefix("App::Property").unwrap_or_default();
-    if type_id == "Part::PropertyFilletEdges" {
+    if metadata["quantity"].get("signature").is_some() {
+        super::units::quantity_field(ui, value, &metadata["quantity"]);
+    } else if type_id == "Part::PropertyFilletEdges" {
         let base = objects
             .iter()
             .find(|object| object["name"] == own)
             .map(|object| &object["properties"]["Base"])
             .unwrap_or(&Value::Null);
-        fillet_edges_widget(ui, value, selected, base, objects);
+        fillet_edges_widget(
+            ui,
+            value,
+            selected,
+            base,
+            objects,
+            &metadata["quantity"],
+            &metadata["quantity_default"],
+        );
     } else if kind == "Map" {
         map_widget(ui, value);
     } else if kind == "Color" {
@@ -744,12 +757,18 @@ fn property_widget_with_selection(
         if (selections.is_err() || !selected.is_empty()) && selection.is_err() {
             ui.colored_label(egui::Color32::from_rgb(225, 142, 138), reason);
         }
-    } else if matches!(kind, "Vector" | "VectorDistance" | "Position") {
+    } else if matches!(kind, "VectorDistance" | "Position") {
+        physical_vector(ui, value, &metadata["quantity"]);
+    } else if kind == "Vector" {
         vector_widget(ui, value, 3);
     } else if kind == "Placement" {
         ui.vertical(|ui| {
             ui.label("Position");
-            vector_widget(ui, &mut value["position"], 3);
+            physical_vector(
+                ui,
+                &mut value["position"],
+                &metadata["quantity"]["position"],
+            );
             ui.label("Rotation quaternion x, y, z, w");
             vector_widget(ui, &mut value["rotation"], 4);
         });
@@ -845,6 +864,16 @@ fn link_widget(ui: &mut egui::Ui, value: &mut Value, sub: bool, objects: &[Value
         }
     }
 }
+fn physical_vector(ui: &mut egui::Ui, value: &mut Value, metadata: &Value) {
+    ui.horizontal(|ui| {
+        for i in 0..3 {
+            ui.push_id(i, |ui| {
+                super::units::quantity_field(ui, &mut value[i], &metadata[i]);
+            });
+        }
+    });
+}
+
 fn vector_widget(ui: &mut egui::Ui, value: &mut Value, count: usize) {
     let mut v = (0..count)
         .map(|i| value[i].as_f64().unwrap_or(if i == 3 { 1. } else { 0. }))
@@ -1025,6 +1054,8 @@ fn fillet_edges_widget(
     selected: &[(String, String)],
     base: &Value,
     objects: &[Value],
+    metadata: &Value,
+    default: &Value,
 ) {
     let mut edges = value.as_array().cloned().unwrap_or_default();
     let mut changed = false;
@@ -1043,14 +1074,28 @@ fn fillet_edges_widget(
                         changed = true;
                     }
                     for i in 1..3 {
-                        let mut radius = edge[i].as_f64().unwrap_or(1.);
-                        if ui
-                            .add(egui::DragValue::new(&mut radius).speed(0.1))
-                            .changed()
-                        {
-                            edge[i] = json!(radius);
-                            changed = true;
-                        }
+                        ui.push_id(i, |ui| {
+                            // Add/selection/removal can replace or move a row
+                            // before native preview refreshes its metadata.
+                            // Match unchanged numbers to native quantities by
+                            // value; new rows use the native default quantity.
+                            let quantity = if edge[i].is_number() {
+                                metadata
+                                    .as_array()
+                                    .into_iter()
+                                    .flatten()
+                                    .filter_map(Value::as_array)
+                                    .flatten()
+                                    .find(|q| q["value"] == edge[i])
+                                    .unwrap_or(default)
+                            } else {
+                                metadata
+                                    .get(index)
+                                    .and_then(|row| row.get(i))
+                                    .unwrap_or(default)
+                            };
+                            changed |= super::units::quantity_field(ui, &mut edge[i], quantity);
+                        });
                     }
                     if ui.small_button("Remove").clicked() {
                         remove = Some(index);
@@ -1164,7 +1209,15 @@ mod tests {
         let selected = picks(&[("Other", "Edge7")]);
         let output = context.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                fillet_edges_widget(ui, &mut value, &selected, &base, &[]);
+                fillet_edges_widget(
+                    ui,
+                    &mut value,
+                    &selected,
+                    &base,
+                    &[],
+                    &Value::Null,
+                    &Value::Null,
+                );
             });
         });
         assert_eq!(value, original);
