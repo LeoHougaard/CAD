@@ -1,6 +1,8 @@
 //! Actual Editor/update/model_thread with a native worker. Run ignored tests with
 //! CAD_LIFECYCLE_RUNTIME pointing to a runtime manifest and CAD_LIFECYCLE_OUTPUT
 //! pointing to a fresh writable directory. No desktop application is launched.
+#[path = "fit_selection_tests.rs"]
+mod fit_selection_tests;
 use super::super::*;
 use super::*;
 use std::{fs, thread::JoinHandle};
@@ -616,3 +618,6 @@ mod select_other_ownership_tests;
 
 #[path = "select_other_reply_tests.rs"]
 mod select_other_reply_tests;
+
+#[path = "fit_tree_selection_tests.rs"]
+mod fit_tree_selection_tests;

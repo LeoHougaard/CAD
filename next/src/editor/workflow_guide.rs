@@ -83,6 +83,11 @@ fn instructions(ui: &mut egui::Ui, ctx: &egui::Context) {
             None,
         ),
         ("Select other", include_str!("../../SELECT-OTHER.md"), None),
+        (
+            "Fit selection",
+            include_str!("../../FIT-SELECTION.md"),
+            None,
+        ),
     ];
     let mut page = ctx
         .data(|d| d.get_temp::<usize>(id().with("page")).unwrap_or(0))

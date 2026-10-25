@@ -55,6 +55,17 @@ impl Reference {
             self.lines().into_iter().flatten().collect()
         }
     }
+    pub(super) fn selected_bounds(&self, selections: &[Selection]) -> Vec<Vec3> {
+        if selections.iter().any(|selection| {
+            selection.object.as_str() == self.object.as_ref()
+                && (selection.subelement.is_empty()
+                    || self.native_subelements.contains(&selection.subelement))
+        }) {
+            self.bounds_points()
+        } else {
+            vec![]
+        }
+    }
     fn allowed(&self, mode: SelectionMode) -> bool {
         match mode {
             SelectionMode::All => true,

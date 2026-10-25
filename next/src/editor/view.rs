@@ -20,6 +20,19 @@ impl Editor {
             && self.pending_file.is_none()
             && self.file_dialog.is_none()
             && !self.overwrite;
+        let mut fit_objects = self.body_ui.selected.clone();
+        if fit_objects.is_empty() {
+            fit_objects.extend(self.selected_object.iter().cloned());
+        }
+        for name in &mut fit_objects {
+            if let Some(display) = objects(&self.state)
+                .iter()
+                .find(|object| object["name"] == name.as_str())
+                .and_then(|object| object["body_state"]["display_object"].as_str())
+            {
+                *name = display.to_owned();
+            }
+        }
         ui.menu_button("View", |ui| {
             for (label, view) in [
                 ("Front", StandardView::Front),
@@ -37,6 +50,16 @@ impl Editor {
             }
             if ui.button("Fit all").clicked() {
                 self.viewport.fit();
+                ui.close();
+            }
+            if ui
+                .add_enabled(
+                    self.viewport.can_fit_objects(&fit_objects),
+                    egui::Button::new("Fit selection"),
+                )
+                .clicked()
+            {
+                self.viewport.fit_objects(&fit_objects);
                 ui.close();
             }
             ui.separator();
