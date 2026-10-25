@@ -11,6 +11,9 @@ mod mirror_tests;
 #[path = "copy_tests.rs"]
 mod copy_tests;
 
+#[path = "select_other_tests.rs"]
+mod select_other_tests;
+
 fn test_output() -> PathBuf {
     PathBuf::from(std::env::var_os("CAD_LIFECYCLE_OUTPUT").expect("CAD_LIFECYCLE_OUTPUT"))
 }
@@ -607,3 +610,9 @@ fn document_switch_preserves_dirty_confirmation_and_each_save_path() {
     assert_eq!(object(&n.editor.state, "Box")["properties"]["Width"], 23.0);
     assert_eq!(fs::read(&first_path).unwrap(), first_bytes);
 }
+
+#[path = "select_other_ownership_tests.rs"]
+mod select_other_ownership_tests;
+
+#[path = "select_other_reply_tests.rs"]
+mod select_other_reply_tests;

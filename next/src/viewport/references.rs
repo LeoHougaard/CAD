@@ -70,6 +70,7 @@ impl Viewport {
     /// Refresh presentation-only native datums directly from the solved snapshot.
     /// Infinite reference Shapes are deliberately never tessellated for display.
     pub fn set_references(&mut self, state: &Value) {
+        self.cancel_other_picker();
         let revision = state["revision"].as_u64();
         let mut revisions = BTreeMap::new();
         let references = state["objects"]

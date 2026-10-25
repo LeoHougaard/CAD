@@ -1095,7 +1095,7 @@ impl Editor {
             && !self.sketch_ui.split
             && self.sketch_ui.task.is_none();
         let before = self.viewport.selected.clone();
-        self.viewport.ui(ui);
+        let picked = self.viewport.ui(ui).is_some();
         if self.viewport.selected != before {
             if !self.measurement_keeps_selection(ui.input(|i| i.modifiers.shift)) {
                 self.body_ui.selected.clear();
@@ -1107,7 +1107,7 @@ impl Editor {
                 .map(|selection| selection.object.clone());
         }
         if !self.unavailable() {
-            self.sketch_canvas(ui);
+            self.sketch_canvas(ui, picked);
         }
     }
 }
@@ -1148,6 +1148,8 @@ impl eframe::App for Editor {
         {
             if workflow_guide::active(ctx) {
                 workflow_guide::close(ctx);
+                ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Escape));
+            } else if self.viewport.dismiss_other_menu(ctx) {
                 ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Escape));
             } else if self.measurement_escape() {
                 ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Escape));

@@ -82,6 +82,7 @@ fn instructions(ui: &mut egui::Ui, ctx: &egui::Context) {
             include_str!("../../SKETCH-ATTACHMENT.md"),
             None,
         ),
+        ("Select other", include_str!("../../SELECT-OTHER.md"), None),
     ];
     let mut page = ctx
         .data(|d| d.get_temp::<usize>(id().with("page")).unwrap_or(0))
