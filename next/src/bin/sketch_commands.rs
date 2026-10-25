@@ -108,6 +108,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "cad-next-sketch\nCompile one local JSON request per stdin line into native sketch edits.\nDraw: {{\"op\":\"draw\",\"object\":\"Sketch\",\"tool\":\"line\",\"points\":[[0,0,0],[10,0,0]],\"index\":0,\"construction\":false}}\nConstraint: {{\"op\":\"constraint\",\"snapshot\":<native sketch object>,\"kind\":\"Distance\",\"selection\":[{{\"index\":0,\"point\":0}}],\"value\":\"10 mm\"}}\nEdit: {{\"op\":\"edit\",\"snapshot\":<native sketch object>,\"kind\":\"extend\",\"selection\":[{{\"index\":0,\"point\":2}}],\"parameters\":{{\"increment\":\"5 mm\"}}}}\nDraw may include snaps:[null,{{\"index\":0,\"point\":1}},null] paired with the input points.\nOutput: {{\"ok\":true,\"edits\":[...]}} or {{\"ok\":false,\"error\":{{\"code\":\"invalid_sketch_command\",\"message\":\"...\"}}}}\nDatum: {{\"op\":\"datum\",\"snapshot\":<native sketch object>,\"index\":0,\"value\":\"1.5\",\"expression\":false}}. Refraction creation uses kind SnellsLaw and two selected line endpoints in n1, n2 order plus one whole boundary.\nNo document is opened or changed. Submit returned edits with a native revision guard."
             );
             println!(
+                "Mirror: Edit kind mirror, whole geometry selections, parameters {{\"reference\":{{\"index\":-1,\"point\":0}},\"delete_original\":false,\"create_symmetry_constraints\":false}}. X/Y axes are -1/-2 point 0; origin is -1 point 1. Line/point references use captured native IDs and handles. Delete and symmetry constraints are mutually exclusive."
+            );
+            println!(
                 "Angle through a point: kind Angle with two whole curves and one exposed point, in any selection order. Optional value or expression strings and driving:false use native datum/formula/reference policy. Native axis curve IDs are -1/-2; the origin point is {{\"index\":-1,\"point\":1}}."
             );
             return Ok(());

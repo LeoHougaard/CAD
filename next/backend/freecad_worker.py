@@ -29,6 +29,7 @@ import assembly as AssemblyAuthoring
 import exchange as Exchange
 import measurements as Measurements
 import sketch_journal as SketchJournal
+import sketch_checkpoints as SketchCheckpoints
 import session_callbacks as SessionCallbacks
 
 SketchJournal.configure(_protocol)
@@ -473,6 +474,7 @@ def snapshot(doc, revision=None):
                               "bounds": None if empty else bounds(shape)}
         if obj.isDerivedFrom("Sketcher::SketchObject"):
             entry["sketch"] = {"geometry_count": obj.GeometryCount, "constraint_count": obj.ConstraintCount,
+                               "task_capabilities": SketchOperations.capabilities(),
                                "degrees_of_freedom": obj.DoF,
                                "conflicting_constraints": list(obj.ConflictingConstraints),
                                "redundant_constraints": list(obj.RedundantConstraints),
@@ -833,6 +835,10 @@ def transaction(doc, request):
 
 def preflight_constraints(edits):
     for edit in edits:
+        try:
+            SketchOperations.preflight(edit)
+        except SketchOperations.OperationError as error:
+            fail(error.code, str(error))
         if isinstance(edit, dict) and edit.get("op") in {"constraint", "refraction", "via_point"}:
             try:
                 if edit.get("op") == "via_point" and edit.get("kind") not in {"TangentViaPoint", "PerpendicularViaPoint", "AngleViaPoint"}:
@@ -866,15 +872,19 @@ def replay_sketch(doc, session, candidate=None):
     if session["opened"]:
         doc.abortTransaction()
         session["opened"] = False
-    groups = journal(doc, "replay")
-    if groups or candidate:
+    checkpoint = journal(doc, "checkpoint")
+    if checkpoint or candidate:
         doc.openTransaction(session["label"])
         session["opened"] = True
-        for group in groups:
-            for edit in group["edits"]:
-                apply_edit(doc, edit)
-            solve_sketch(doc, session)
-        results = [apply_edit(doc, edit) for edit in candidate["edits"]] if candidate else []
+        sketch = object_in(doc, session["object"])
+        if candidate and candidate.get("native_checkpoint"):
+            SketchCheckpoints.restore(sketch, candidate["native_checkpoint"])
+            results = []
+        else:
+            if checkpoint:
+                SketchCheckpoints.restore(sketch, checkpoint)
+                solve_sketch(doc, session)
+            results = [apply_edit(doc, edit) for edit in candidate["edits"]] if candidate else []
     else:
         results = []
     solve_sketch(doc, session)
@@ -901,7 +911,9 @@ def sketch_transaction(doc, request):
             session["opened"] = True
         results = [apply_edit(doc, edit) for edit in edits]
         solve_sketch(doc, session)
-        journal(doc, "stage_accept", group={"label": request.get("label", "Edit sketch"), "edits": edits})
+        checkpoint = SketchCheckpoints.capture(object_in(doc, session["object"]))
+        journal(doc, "stage_accept", group={"label": request.get("label", "Edit sketch"), "edits": edits,
+                                            "native_checkpoint": checkpoint})
         staged = True
         state = prepare_state(doc)
         json.dumps(results, allow_nan=False)
@@ -932,6 +944,10 @@ def sketch_history(doc, op):
 def sketch_session(doc, request):
     lease("sketch_validate", doc.Name, request=request)
     if request["op"] == "sketch_begin":
+        try:
+            SketchCheckpoints.require_runtime()
+        except SketchCheckpoints.checkpoint_native.CheckpointUnavailable as error:
+            fail("native_checkpoint_unavailable", str(error))
         obj = object_in(doc, request["object"])
         if not obj.isDerivedFrom("Sketcher::SketchObject"):
             fail("invalid_request", "Sketch editing requires a native SketchObject")
@@ -1020,6 +1036,7 @@ def sketch_preview(doc, request, active):
     staged = False
     try:
         results = replay_sketch(doc, session, candidate)
+        candidate["native_checkpoint"] = SketchCheckpoints.capture(object_in(doc, session["object"]))
         _native_previews[doc.Name] = candidate
         lease("preview_stage", doc.Name, request=request, label=label)
         staged = True
@@ -1141,6 +1158,8 @@ def dispatch(request):
                 "object_types": sorted(OBJECT_TYPES), "geometry_kinds": ["line", "circle", "arc", "point",
                     "ellipse", "ellipse_arc", "bspline", "hyperbola_arc", "parabola_arc"],
                 "constraint_signatures": SketchGeometry.CONSTRAINT_SIGNATURES,
+                "sketch_tasks": SketchOperations.capabilities(),
+                "sketch_checkpoints": SketchCheckpoints.capabilities(),
                 "edit_operations": EDIT_OPERATIONS,
                 "assembly": {"container_type": "Assembly::AssemblyObject", "instance_type": "App::Link",
                              "joint_types": list(AssemblyAuthoring.JOINT_TYPES),

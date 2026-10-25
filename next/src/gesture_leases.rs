@@ -260,6 +260,7 @@ impl Leases {
                             | "spline_knot"
                             | "spline_pole"
                             | "spline_weight"
+                            | "mirror_geometry"
                     ) {
                         return Err(denied);
                     }
@@ -806,6 +807,7 @@ mod tests {
             "spline_knot",
             "spline_pole",
             "spline_weight",
+            "mirror_geometry",
         ] {
             ok(
                 &mut s,

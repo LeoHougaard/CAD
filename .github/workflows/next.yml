@@ -38,7 +38,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libgl1 libegl1 libglu1-mesa libxkbcommon-dev libwayland-dev
+          sudo apt-get install -y --no-install-recommends libgl1 libegl1 libglu1-mesa libxkbcommon-dev libwayland-dev g++ binutils
       - name: Rust toolchain
         run: rustup toolchain install 1.99.1 --profile minimal --component clippy --component rustfmt
       - name: Cache pinned runtime
@@ -58,6 +58,24 @@ jobs:
           python -B next/tests/workflow_ledger_tests.py
       - name: Verified native runtime
         run: python next/tools/setup_runtime.py --output next/target/runtime.json
+      - name: Linux x64 native checkpoint promotion gate
+        if: runner.os == 'Linux'
+        env:
+          FREECAD_USER_HOME: ${{ github.workspace }}/next/target/checkpoint-linux-x64-config
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          test "$RUNNER_ARCH" = X64
+          mkdir -p "$FREECAD_USER_HOME"
+          python -B next/tools/check_checkpoint_linux.py --runtime next/target/runtime.json --host next/target/debug/cad-next --expected-arch x86_64 --output next/target/checkpoint-linux-x64
+      - name: Windows native checkpoint regression gate
+        if: runner.os == 'Windows'
+        env:
+          FREECAD_USER_HOME: ${{ github.workspace }}/next/target/checkpoint-windows-config
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          mkdir -p "$FREECAD_USER_HOME"
+          python -B next/tests/checkpoint_restore_workflows.py --runtime next/target/runtime.json --host next/target/debug/cad-next.exe --output next/target/checkpoint-windows
+          python -B next/tests/checkpoint_linux_workflows.py --runtime next/target/runtime.json --host next/target/debug/cad-next.exe --output next/target/checkpoint-windows-public
       - name: Native sketch editing, attachment, fillets, Bodies and history
         run: |
           host=next/target/debug/cad-next
@@ -120,7 +138,30 @@ jobs:
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
           mkdir -p "$CAD_LIFECYCLE_OUTPUT" "$FREECAD_USER_HOME"
-          cargo test --manifest-path next/Cargo.toml --all-features --locked editor::sketch::lifecycle_tests:: -- --ignored --test-threads=1
+          skip=(--skip mirror_editor_unavailable_constraints_preserves_default_and_redo)
+          if [ "$RUNNER_OS" != Windows ]; then
+            skip+=(--skip mirror_editor_apply_cancel_action_history_and_reopen --skip mirror_editor_invalid_selection_native_failure_and_session_cancel --skip mirror_editor_accepted_native_ids_survive_later_tasks_and_history)
+          fi
+          cargo test --manifest-path next/Cargo.toml --all-features --locked editor::sketch::lifecycle_tests:: -- --ignored --test-threads=1 "${skip[@]}"
+      - name: Windows editor unavailable Mirror mode preserves default and Redo
+        if: runner.os == 'Windows'
+        env:
+          CAD_LIFECYCLE_OUTPUT: ${{ github.workspace }}/next/target/mirror-unavailable-editor-documents
+          FREECAD_USER_HOME: ${{ github.workspace }}/next/target/mirror-unavailable-editor-config
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          mkdir -p "$CAD_LIFECYCLE_OUTPUT" "$FREECAD_USER_HOME"
+          python -B - <<'PY'
+          import json, pathlib, shutil
+          root = pathlib.Path.cwd()
+          target = root/'next/target/mirror-unavailable-source'
+          shutil.copytree(root/'next/backend', target/'backend', ignore=shutil.ignore_patterns('sketch_mirror.dll'))
+          shutil.copytree(root/'next/tests/fixtures', target/'tests/fixtures')
+          runtime = json.loads((root/'next/target/runtime.json').read_text())
+          runtime['test_worker'] = str(target/'tests/fixtures/lifecycle_fault_worker.py')
+          (root/'next/target/mirror-unavailable-runtime.json').write_text(json.dumps(runtime))
+          PY
+          CAD_LIFECYCLE_RUNTIME="$GITHUB_WORKSPACE/next/target/mirror-unavailable-runtime.json" cargo test --manifest-path next/Cargo.toml --all-features --locked mirror_editor_unavailable_constraints_preserves_default_and_redo -- --ignored --test-threads=1
       - name: Native assembly, measurement, attachment and reference editor workflows
         env:
           FREECAD_USER_HOME: ${{ github.workspace }}/next/target/parity-editor-config

@@ -104,6 +104,7 @@ fn label(kind: &str) -> &str {
         "chamfer" => "Sketch chamfer",
         "extend" => "Extend curve",
         "carbon_copy" => "Carbon Copy",
+        "mirror" => "Mirror",
         "spline_degree" => "Spline degree",
         "spline_knot" => "Spline knots",
         "spline_pole" => "Spline pole position",
@@ -121,6 +122,9 @@ fn defaults(kind: &str, snapshot: &Value, selection: &[SketchElement]) -> Value 
         "fillet" | "chamfer" => json!({"radius":"1 mm","trim":true,"preserve_corner":true}),
         "extend" => json!({"increment":if geo["kind"]=="arc" {"10 deg"}else{"1 mm"}}),
         "carbon_copy" => json!({"source":"","construction":false}),
+        "mirror" => {
+            json!({"reference":{"index":-1,"point":0},"delete_original":false,"create_symmetry_constraints":false})
+        }
         "spline_degree" => json!({"change":1}),
         "spline_knot" => {
             json!({"parameter":(geo["first_parameter"].as_f64().unwrap_or(0.)+geo["last_parameter"].as_f64().unwrap_or(1.))*0.5,"multiplicity":1})
@@ -151,6 +155,7 @@ impl Editor {
                 ("chamfer", "Chamfer"),
                 ("extend", "Extend"),
                 ("carbon_copy", "Carbon Copy"),
+                ("mirror", "Mirror"),
                 ("spline_degree", "Spline degree"),
                 ("spline_knot", "Spline knots"),
                 ("spline_pole", "Spline pole position"),
@@ -500,6 +505,67 @@ fn task_fields(ui: &mut egui::Ui, task: &mut SketchTask, choices: &[String]) -> 
     let index = task.selection.first().map_or(-1, |s| s.index);
     let geo = curve(&task.baseline, index).cloned().unwrap_or_default();
     match task.kind.as_str() {
+        "mirror" => {
+            ui.label(format!(
+                "Source native IDs: {}",
+                sketch_operation_commands::mirror_sources(&task.baseline, &task.selection)
+                    .unwrap_or_default()
+                    .iter()
+                    .map(i32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+            let references = sketch_operation_commands::mirror_references(&task.baseline);
+            let selected = references
+                .iter()
+                .find(|(r, _)| json!(r) == params["reference"])
+                .map_or("Choose reference", |(_, name)| name.as_str());
+            egui::ComboBox::from_id_salt("mirror_reference")
+                .selected_text(selected)
+                .show_ui(ui, |ui| {
+                    for (reference, name) in &references {
+                        if ui
+                            .selectable_label(json!(reference) == params["reference"], name)
+                            .clicked()
+                        {
+                            params["reference"] = json!(reference);
+                            changed = true;
+                        }
+                    }
+                });
+            for (key, other, name) in [
+                (
+                    "delete_original",
+                    "create_symmetry_constraints",
+                    "Delete original geometries",
+                ),
+                (
+                    "create_symmetry_constraints",
+                    "delete_original",
+                    "Create symmetry constraints",
+                ),
+            ] {
+                let mut value = params[key] == true;
+                let capability = &task.baseline["sketch"]["task_capabilities"]["mirror"]["create_symmetry_constraints"];
+                let available =
+                    key != "create_symmetry_constraints" || capability["available"] == true;
+                if ui
+                    .add_enabled(available, egui::Checkbox::new(&mut value, name))
+                    .changed()
+                {
+                    params[key] = json!(value);
+                    if value {
+                        params[other] = json!(false);
+                    }
+                    changed = true;
+                }
+                if !available {
+                    ui.weak(capability["reason"].as_str().unwrap_or(
+                        "Constrained Mirror availability is unknown; refresh the native sketch",
+                    ));
+                }
+            }
+        }
         "fillet" | "chamfer" => {
             changed |= text(ui, "Radius", &mut params["radius"]);
             if task.selection.len() == 2 {

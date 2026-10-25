@@ -23,6 +23,102 @@ fn geometry(snapshot: &Value, index: i32) -> Option<&Value> {
         .find(|g| g["index"].as_i64() == Some(index as i64))
 }
 
+fn mirror_geometry(snapshot: &Value, index: i32) -> Option<&Value> {
+    geometry(snapshot, index).or_else(|| {
+        snapshot["sketch"]["externals"]
+            .as_array()?
+            .iter()
+            .find(|g| g["geometry_index"].as_i64() == Some(index as i64))
+            .map(|g| &g["geometry"])
+    })
+}
+
+/// Match the pinned command's selected-edge/standalone-point extraction.
+/// Endpoint and axis picks do not become source geometry when mixed with edges.
+pub fn mirror_sources(snapshot: &Value, selection: &[SketchElement]) -> Result<Vec<i32>, String> {
+    let mut result = Vec::new();
+    for selected in selection {
+        if matches!((selected.index, selected.point), (-1, 0 | 1) | (-2, 0)) {
+            continue;
+        }
+        let geo = mirror_geometry(snapshot, selected.index)
+            .ok_or("Select native geometry from the captured sketch")?;
+        if selected.point == 0 || geo["kind"] == "point" && selected.point == 1 {
+            if result.contains(&selected.index) {
+                return Err("Select each source geometry once".into());
+            }
+            result.push(selected.index);
+        } else if !geo["handles"].as_array().is_some_and(|handles| {
+            handles
+                .iter()
+                .any(|h| h["point"].as_i64() == Some(selected.point as i64))
+        }) {
+            return Err("Choose an exposed native sketch selection".into());
+        }
+    }
+    if result.is_empty() {
+        return Err("Select whole native geometries or standalone sketch points to mirror".into());
+    }
+    Ok(result)
+}
+
+/// Reference choices carry the native IDs from the captured snapshot.
+pub fn mirror_references(snapshot: &Value) -> Vec<(SketchElement, String)> {
+    let mut result = vec![
+        (
+            SketchElement {
+                index: -1,
+                point: 0,
+            },
+            "X axis".into(),
+        ),
+        (
+            SketchElement {
+                index: -2,
+                point: 0,
+            },
+            "Y axis".into(),
+        ),
+        (
+            SketchElement {
+                index: -1,
+                point: 1,
+            },
+            "Origin".into(),
+        ),
+    ];
+    for g in snapshot["sketch"]["geometry"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .chain(
+            snapshot["sketch"]["externals"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|e| &e["geometry"]),
+        )
+    {
+        let Some(index) = g["index"].as_i64().and_then(|i| i32::try_from(i).ok()) else {
+            continue;
+        };
+        if g["kind"] == "line" {
+            result.push((SketchElement { index, point: 0 }, format!("Line {index}")));
+        }
+        for h in g["handles"].as_array().into_iter().flatten() {
+            if let Ok(element) = serde_json::from_value::<SketchElement>(
+                json!({"index":h["index"],"point":h["point"]}),
+            ) {
+                result.push((
+                    element,
+                    format!("Geometry {} point {}", element.index, element.point),
+                ));
+            }
+        }
+    }
+    result
+}
+
 /// Compile against the native snapshot and selections captured when the task
 /// began. Replacing a preview must use that baseline, not its generated IDs.
 pub fn build(
@@ -55,6 +151,11 @@ pub fn build(
         "spline_knot" => &["parameter", "multiplicity", "knot", "change"],
         "spline_pole" => &["pole", "position"],
         "spline_weight" => &["pole", "value", "release_constraints"],
+        "mirror" => &[
+            "reference",
+            "delete_original",
+            "create_symmetry_constraints",
+        ],
         _ => return Err("Unsupported native sketch task".into()),
     };
     if params.keys().any(|key| !allowed.contains(&key.as_str())) {
@@ -64,11 +165,48 @@ pub fn build(
         "fillet" | "chamfer" => "fillet_geometry",
         "split" => "split_geometry",
         "extend" => "extend_geometry",
+        "mirror" => "mirror_geometry",
         other => other,
     };
     let mut edit = json!({"op":native,"object":object});
     for (key, value) in params {
         edit[key] = value.clone();
+    }
+    if kind == "mirror" {
+        let sources = mirror_sources(snapshot, selection)?;
+        let reference: SketchElement = serde_json::from_value(parameters["reference"].clone())
+            .map_err(|_| "Choose a native Mirror reference")?;
+        if parameters["reference"]
+            .as_object()
+            .is_none_or(|r| r.len() != 2)
+            || !mirror_references(snapshot)
+                .iter()
+                .any(|(r, _)| *r == reference)
+        {
+            return Err("Choose a native line, axis or exposed point from this sketch".into());
+        }
+        if ["delete_original", "create_symmetry_constraints"]
+            .iter()
+            .any(|key| parameters.get(key).is_some_and(|v| !v.is_boolean()))
+            || parameters["delete_original"] == true
+                && parameters["create_symmetry_constraints"] == true
+        {
+            return Err("Choose either delete originals or create symmetry constraints".into());
+        }
+        if parameters["create_symmetry_constraints"] == true {
+            let capability =
+                &snapshot["sketch"]["task_capabilities"]["mirror"]["create_symmetry_constraints"];
+            if capability["available"] != true {
+                return Err(capability["reason"]
+                    .as_str()
+                    .unwrap_or(
+                        "Constrained Mirror availability is unknown; refresh the native sketch",
+                    )
+                    .into());
+            }
+        }
+        edit["indices"] = json!(sources);
+        return Ok(vec![edit]);
     }
     if kind == "carbon_copy" {
         if parameters["source"]
@@ -217,6 +355,60 @@ mod tests {
     }
     fn select(index: i32, point: i32) -> Vec<SketchElement> {
         vec![SketchElement { index, point }]
+    }
+    #[test]
+    fn mirror_compiles_supplied_ids_and_native_selection_filtering() {
+        let s = json!({"name":"Sketch","sketch":{"task_capabilities":{"mirror":{"create_symmetry_constraints":{"available":true}}},"geometry":[
+            {"index":4,"kind":"line","handles":[{"index":4,"point":1},{"index":4,"point":2}]},
+            {"index":8,"kind":"point","handles":[{"index":8,"point":1}]}],
+            "externals":[{"geometry_index":-3,"geometry":{"index":-3,"kind":"line",
+                "handles":[{"index":-3,"point":1},{"index":-3,"point":2}]}}]}});
+        let selection = vec![
+            SketchElement { index: 8, point: 1 },
+            SketchElement { index: 4, point: 0 },
+            SketchElement { index: 4, point: 2 },
+            SketchElement {
+                index: -2,
+                point: 0,
+            },
+        ];
+        let p = json!({"reference":{"index":-3,"point":0},"create_symmetry_constraints":true});
+        assert_eq!(
+            build(&s, "mirror", &selection, &p).unwrap(),
+            vec![json!({
+            "op":"mirror_geometry","object":"Sketch","indices":[8,4],
+            "reference":{"index":-3,"point":0},"create_symmetry_constraints":true})]
+        );
+        assert!(build(&s, "mirror", &select(4, 1), &p).is_err());
+        assert!(build(&s, "mirror", &select(0, 0), &p).is_err());
+        assert!(
+            build(
+                &s,
+                "mirror",
+                &select(4, 0),
+                &json!({"reference":{"index":8,"point":0}})
+            )
+            .is_err()
+        );
+        assert!(
+            build(
+                &s,
+                "mirror",
+                &select(4, 0),
+                &json!({"reference":{"index":4,"point":1},
+            "delete_original":true,"create_symmetry_constraints":true})
+            )
+            .is_err()
+        );
+        assert!(
+            build(
+                &s,
+                "mirror",
+                &select(4, 0),
+                &json!({"reference":{"index":-1,"point":0},"offset":1})
+            )
+            .is_err()
+        );
     }
     #[test]
     fn native_task_indices_units_and_explicit_releases_survive_compilation() {

@@ -5,6 +5,9 @@ use super::super::*;
 use super::*;
 use std::{fs, thread::JoinHandle};
 
+#[path = "mirror_tests.rs"]
+mod mirror_tests;
+
 fn test_output() -> PathBuf {
     PathBuf::from(std::env::var_os("CAD_LIFECYCLE_OUTPUT").expect("CAD_LIFECYCLE_OUTPUT"))
 }
@@ -34,8 +37,13 @@ impl Native {
         .unwrap();
         let mut config = WorkerConfig::new(
             runtime["executable"].as_str().unwrap(),
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("tests/fixtures/lifecycle_fault_worker.py"),
+            runtime["test_worker"]
+                .as_str()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                        .join("tests/fixtures/lifecycle_fault_worker.py")
+                }),
         );
         config.args = runtime["args"]
             .as_array()
@@ -189,11 +197,21 @@ impl Native {
         .unwrap();
         // Scope confirmation actions to the actual modal area, not an
         // identically labelled disabled control in the sketch toolbar.
-        let modal = self.editor.pending_file.map(|_| {
-            self.ctx
-                .memory(|memory| memory.area_rect(egui::Id::new("unsaved")))
-                .expect("file-action confirmation must have a modal area")
-        });
+        let modal = if self.editor.pending_file.is_some() {
+            Some(
+                self.ctx
+                    .memory(|memory| memory.area_rect(egui::Id::new("unsaved")))
+                    .expect("file-action confirmation must have a modal area"),
+            )
+        } else if self.editor.sketch_ui.task.is_some() && matches!(label, "Apply" | "Cancel") {
+            Some(
+                self.ctx
+                    .memory(|memory| memory.area_rect(egui::Id::new("native_sketch_task")))
+                    .expect("sketch task must have a modal area"),
+            )
+        } else {
+            None
+        };
         let matches: Vec<_> = texts
             .iter()
             .filter(|(text, rect)| {

@@ -14,13 +14,24 @@ import Sketcher
 
 
 OPERATIONS = ("fillet_geometry", "split_geometry", "extend_geometry", "carbon_copy",
-              "spline_degree", "spline_knot", "spline_pole", "spline_weight")
+              "spline_degree", "spline_knot", "spline_pole", "spline_weight", "mirror_geometry")
 
 
 class OperationError(ValueError):
     def __init__(self, message, code="invalid_request"):
         super().__init__(message)
         self.code = code
+
+
+def capabilities():
+    import sketch_mirror
+    return {"mirror": sketch_mirror.capabilities()}
+
+
+def preflight(edit):
+    if isinstance(edit, dict) and edit.get("op") == "mirror_geometry":
+        import sketch_mirror
+        sketch_mirror.preflight(edit)
 
 
 def integer(value, minimum, maximum, label):
@@ -109,6 +120,9 @@ def _apply(sketch, edit):
     op = edit.get("op")
     if op not in OPERATIONS:
         raise OperationError("Unsupported native sketch operation: " + str(op))
+    if op == "mirror_geometry":
+        import sketch_mirror
+        return sketch_mirror.apply(sketch, edit)
     if op == "carbon_copy":
         source = sketch.Document.getObject(edit.get("source", ""))
         if source is None or source == sketch or not source.isDerivedFrom("Sketcher::SketchObject"):

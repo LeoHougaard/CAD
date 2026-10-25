@@ -8,11 +8,12 @@ system locale, including portable Windows Python and Unicode file paths.
 
 The native worker can exchange private `cad-next-sketch-journal`,
 `cad-next-revisions` and `cad-next-leases` callback frames with `WorkerSession`
-while a public request is pending. Rust owns accepted sketch actions, replay order, the worker-local
+while a public request is pending. Rust owns accepted sketch actions, opaque native
+checkpoints and their history cursor, the worker-local
 revision registry, missing/stale revision checks and worker-wide gesture ownership.
 Rust also owns preview/sketch tokens, active-sketch edit scope, staged preview metadata, native-redo
 admission and poison state. Python supplies native transaction/redo facts and
-retains opaque replay payloads without an authorization token store. Python chooses when native
+retains the active preview's native checkpoint without an authorization token store. Python chooses when native
 acceptance or recovery requires publication. The native worker owns document mutations. These
 frames never reach public NDJSON clients. Version, outer request ID and a
 session-wide monotonic sequence correlate each callback. Callback replies and
@@ -166,6 +167,22 @@ owns recomputation and topology.
 
 ## Sketch editing sessions
 
+`mirror_geometry` is a sketch edit with native source `indices`,
+`reference:{index,point}`, and optional boolean `delete_original` and
+`create_symmetry_constraints`. The options are mutually exclusive. It shares
+sketch tokens, preview baselines, action replay, document history and native
+validation. See [Mirror](SKETCH-MIRROR.md) for selection semantics, the pinned
+Windows adapter and native constraint/expression behavior.
+
+`capabilities.sketch_tasks.mirror` and each sketch object's
+`sketch.task_capabilities.mirror` report `default_copy` and
+`create_symmetry_constraints`, each with `available` and `reason`. The task
+disables constrained mode and displays its reason when unavailable. The worker
+preflights that mode before opening a transaction or changing a revision,
+returning `sketch_mode_unavailable`. Default Python copy remains available
+without an adapter. Availability is checked once per worker, including platform,
+artifact/runtime hashes and successful synchronous adapter loading.
+
 `sketch_begin` takes `document`, `expected_revision`, native sketch `object` and
 a nonempty session `token` of at most 256 characters. Its response is a snapshot
 with `sketch_edit: {token, object}`. Beginning a session advances the revision but
@@ -184,8 +201,21 @@ is editable even when a Pad consumes it.
 
 The first edit opens one native transaction for the complete session. A small
 Rust-owned command journal groups accepted sketch actions. Session Undo/Redo
-abort and replay the selected action prefix against the same native document;
-they do not alter a frontend geometry/history graph. This also avoids FreeCAD's
+abort the current native transaction and restore the selected accepted action's
+opaque `SketchObject.dumpContent()` checkpoint through the same native
+`Persistence::restoreFromStream` engine, using the pinned adapter described in
+[native checkpoint restore](CHECKPOINT-RESTORE.md). The leaking Python
+`restoreContent` buffer binding is bypassed. Restoration remains
+against the same object and document. The private journal `checkpoint` callback
+returns only that cursor's payload, including a staged move or acceptance. Native
+checkpoint bytes are base64 encoded for transport; Rust does not interpret them.
+Missing checkpoint metadata is a protocol failure, never a silent fallback to
+re-running geometry creation. New candidate edits run after native restoration;
+failed replacements restore the last accepted preview checkpoint itself. Thus
+accepted geometry does not acquire new IDs merely because a later task is canceled.
+The complete native object serialization carries geometry extensions, constraints,
+expressions, link properties and native Shape/ElementMap data together. These operations
+do not alter a frontend geometry/history graph. This also avoids FreeCAD's
 20-entry native undo limit discarding a long session's cancellation baseline.
 Snapshot `undo_count` and `redo_count` describe session actions until it ends.
 Drag previews replace a temporary final group; committing adds one action and
