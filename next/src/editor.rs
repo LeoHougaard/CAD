@@ -1229,7 +1229,7 @@ impl Editor {
         }
     }
 
-    fn canvas(&mut self, ui: &mut egui::Ui) {
+    fn canvas(&mut self, ui: &mut egui::Ui, sketch_input_blocked: bool) {
         let axis_profile = self.property_ui.axis_profile.as_deref();
         let axis_active = !self.unavailable()
             && self.property_ui.axis_pick
@@ -1254,6 +1254,7 @@ impl Editor {
         }
         self.viewport.solid_select_in_sketch = self.sketch_ui.external;
         self.viewport.sketch_select_enabled = !self.sketch_ui.external
+            && self.sketch_ui.dimension_tool.is_none()
             && self.sketch_ui.tool == Draw::Select
             && self.sketch_ui.drag.is_none()
             && !self.sketch_ui.trim
@@ -1300,7 +1301,7 @@ impl Editor {
             }
         }
         if !self.unavailable() {
-            self.sketch_canvas(ui, picked);
+            self.sketch_canvas(ui, picked, sketch_input_blocked);
         }
     }
 }
@@ -1440,7 +1441,7 @@ impl eframe::App for Editor {
             .frame(egui::Frame::NONE.fill(Color32::from_rgb(5, 7, 9)))
             .show(ctx, |ui| {
                 ui.add_enabled_ui(!guide_was_open && !workflow_guide::active(ctx), |ui| {
-                    self.canvas(ui)
+                    self.canvas(ui, shortcut_blocked)
                 });
             });
         if self.source_recovery() && !guide_was_open && !workflow_guide::active(ctx) {

@@ -304,6 +304,11 @@ impl Editor {
 
         let kind = if selection.len() == 1
             && selection[0].point == 0
+            && geometry_kind(selection[0]) == "circle"
+        {
+            "Diameter"
+        } else if selection.len() == 1
+            && selection[0].point == 0
             && ["circle", "arc"].contains(&geometry_kind(selection[0]))
         {
             "Radius"
@@ -469,6 +474,11 @@ impl Editor {
         let Some(mut edit) = self.sketch_ui.dimension.take() else {
             return;
         };
+        if op == "transaction" && edit.submitting
+            || op.starts_with("preview") && edit.preview.is_some()
+        {
+            self.refresh_dimension_tool(success && matches!(op, "transaction" | "preview_commit"));
+        }
         if op == "transaction" && edit.submitting {
             if success {
                 return;
@@ -538,7 +548,20 @@ impl Editor {
                         }
                     }
                 });
-                ui.menu_button("Dimension", |ui| {
+                if ui
+                    .selectable_label(self.sketch_ui.dimension_tool.is_some(), "Dimension (D)")
+                    .on_hover_text("Select entities and click to place their dimension")
+                    .clicked()
+                {
+                    if self.viewport.sketch_selection.is_empty()
+                        || self.sketch_ui.dimension_tool.is_some()
+                    {
+                        self.start_dimension_tool();
+                    } else {
+                        self.smart_dimension();
+                    }
+                }
+                ui.menu_button("Dimension types", |ui| {
                     if ui
                         .add_enabled(
                             !self.viewport.sketch_selection.is_empty(),

@@ -86,8 +86,8 @@ pub(super) fn preview(
             }
         }
         Tool::Arc => {
-            if let Some(&middle) = points.get(1) {
-                if let Some(end) = cursor.or_else(|| points.get(2).copied()) {
+            if let Some(&end) = points.get(1) {
+                if let Some(middle) = cursor.or_else(|| points.get(2).copied()) {
                     if let Some(arc) = Arc::through(first, middle, end) {
                         let screen_radius = projected_radius(
                             viewport,
@@ -102,7 +102,7 @@ pub(super) fn preview(
                         path.extend([first, middle, end]);
                     }
                 } else {
-                    path.extend([first, middle]);
+                    path.extend([first, end]);
                 }
             } else if let Some(cursor) = cursor {
                 path.extend([first, cursor]);

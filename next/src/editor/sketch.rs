@@ -11,6 +11,7 @@ pub(super) struct SketchUi {
     snaps: Vec<Option<SketchElement>>,
     pub(super) construction: bool,
     pub(super) dimension: Option<DimensionEdit>,
+    pub(super) dimension_tool: Option<DimensionTool>,
     pub(super) selected_constraint: Option<usize>,
     pub(super) constraint_name: String,
     pub(super) session: Option<String>,
@@ -38,6 +39,7 @@ impl Default for SketchUi {
             snaps: vec![],
             construction: false,
             dimension: None,
+            dimension_tool: None,
             selected_constraint: None,
             constraint_name: String::new(),
             session: None,
@@ -61,6 +63,9 @@ impl Default for SketchUi {
 }
 impl SketchUi {
     pub(super) fn hint(&self) -> Option<&'static str> {
+        if self.dimension_tool.is_some() {
+            return Some("Select entities, then click to place the dimension; Esc ends Dimension");
+        }
         if self.split {
             return Some("Pick a curve to split; Esc ends splitting");
         }
@@ -68,6 +73,11 @@ impl SketchUi {
             return Some("Select an edge or vertex to project; Esc ends projection");
         }
         Some(match self.tool {
+            Tool::Arc => [
+                "Arc start endpoint",
+                "Arc end endpoint",
+                "Arc through point",
+            ][self.points.len().min(2)],
             Tool::Ellipse => [
                 "Ellipse center",
                 "Major axis endpoint",
@@ -90,10 +100,16 @@ impl SketchUi {
         })
     }
     pub(super) fn clear_points(&mut self) {
+        self.dimension_tool = None;
         self.points.clear();
         self.snaps.clear();
         self.continuation = None;
     }
+}
+pub(super) struct DimensionTool {
+    document: Value,
+    revision: Value,
+    sketch: String,
 }
 pub(super) struct Drag {
     element: SketchElement,
@@ -140,6 +156,49 @@ fn external_indices(snapshot: &Value, selection: &[SketchElement], deleting: boo
 }
 
 impl Editor {
+    pub(super) fn start_dimension_tool(&mut self) {
+        if self.busy
+            || self.sketch_ui.session.is_none()
+            || self.sketch_ui.drag.is_some()
+            || self.sketch_ui.task.is_some()
+            || self.sketch_ui.dimension.is_some()
+            || self.draft.is_some()
+        {
+            return;
+        }
+        let was_active = self.sketch_ui.dimension_tool.is_some();
+        self.sketch_ui.clear_points();
+        self.sketch_ui.tool = Tool::Select;
+        self.sketch_ui.trim = false;
+        self.sketch_ui.external = false;
+        self.sketch_ui.split = false;
+        self.sketch_ui.selected_constraint = None;
+        self.viewport.clear_sketch_selection();
+        if !was_active && let Some(sketch) = self.sketch.clone() {
+            self.sketch_ui.dimension_tool = Some(DimensionTool {
+                document: self.state["document"].clone(),
+                revision: self.state["revision"].clone(),
+                sketch,
+            });
+        }
+        self.error = None;
+    }
+
+    pub(super) fn refresh_dimension_tool(&mut self, clear_selection: bool) {
+        if let Some(owner) = &mut self.sketch_ui.dimension_tool {
+            if owner.document == self.state["document"]
+                && self.sketch.as_deref() == Some(owner.sketch.as_str())
+            {
+                owner.revision = self.state["revision"].clone();
+            } else {
+                self.sketch_ui.dimension_tool = None;
+            }
+            if clear_selection {
+                self.viewport.clear_sketch_selection();
+            }
+        }
+    }
+
     pub(super) fn prepare_new_sketch(&mut self) {
         self.sketch_ui = SketchUi {
             pending_begin: true,
@@ -334,6 +393,7 @@ impl Editor {
                 if ui
                     .selectable_label(
                         self.sketch_ui.tool == tool
+                            && self.sketch_ui.dimension_tool.is_none()
                             && !self.sketch_ui.trim
                             && !self.sketch_ui.external,
                         label,
@@ -588,13 +648,21 @@ impl Editor {
             .sketch_snapshot()
             .and_then(|s| s["sketch"]["geometry_count"].as_u64())
             .unwrap_or(0) as usize;
+        // The UI picks arc endpoints first. The stable native command API
+        // continues to accept start, through point, end.
+        let mut points = self.sketch_ui.points.clone();
+        let mut snaps = self.sketch_ui.snaps.clone();
+        if tool == Tool::Arc {
+            points.swap(1, 2);
+            snaps.swap(1, 2);
+        }
         let mut edits = match draw_snapped_edits(
             &object,
             tool,
-            &self.sketch_ui.points,
+            &points,
             count,
             self.sketch_ui.construction,
-            &self.sketch_ui.snaps,
+            &snaps,
         ) {
             Ok(e) => e,
             Err(e) => {
@@ -626,7 +694,12 @@ impl Editor {
         }
         self.transaction("Draw sketch geometry", edits);
     }
-    pub(super) fn sketch_canvas(&mut self, ui: &mut egui::Ui, native_pick: bool) {
+    pub(super) fn sketch_canvas(
+        &mut self,
+        ui: &mut egui::Ui,
+        native_pick: bool,
+        input_blocked: bool,
+    ) {
         if !ui.is_enabled() || self.sketch_ui.session.is_none() || self.draft.is_some() {
             return;
         }
@@ -636,6 +709,44 @@ impl Editor {
         let pos = ui.input(|i| i.pointer.interact_pos());
         let alt = ui.input(|i| i.modifiers.alt);
         if self.sketch_ui.task.is_some() {
+            return;
+        }
+        if let Some(owner) = &self.sketch_ui.dimension_tool {
+            if owner.document != self.state["document"]
+                || owner.revision != self.state["revision"]
+                || self.sketch.as_deref() != Some(owner.sketch.as_str())
+            {
+                self.sketch_ui.dimension_tool = None;
+                self.viewport.clear_sketch_selection();
+                return;
+            }
+            if self.sketch_ui.dimension.is_some()
+                || input_blocked
+                || self.busy
+                || egui::Popup::is_any_open(ui.ctx())
+                || ui.ctx().wants_keyboard_input()
+                || self.units_ui.active()
+                || self.measurement_is_open()
+                || self.pending_file.is_some()
+                || self.file_dialog.is_some()
+                || self.file_browser.active()
+                || self.exchange_ui.active()
+                || self.overwrite
+            {
+                return;
+            }
+            if response.clicked()
+                && let Some(pos) = pos
+            {
+                if self.viewport.sketch_hit(pos).is_some() {
+                    self.viewport.select_sketch_at(pos, true);
+                    self.sketch_ui.selected_constraint = None;
+                } else if !self.viewport.sketch_selection.is_empty() {
+                    let owner = self.sketch_ui.dimension_tool.take();
+                    self.smart_dimension();
+                    self.sketch_ui.dimension_tool = owner;
+                }
+            }
             return;
         }
         if self.sketch_ui.split {
@@ -915,8 +1026,14 @@ impl Editor {
                 self.commit_curve(false);
                 return;
             }
-            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::D)) {
-                self.smart_dimension();
+            if super::consume_exact_key(ctx, egui::Modifiers::NONE, Key::D) {
+                if self.sketch_ui.dimension_tool.is_some()
+                    || self.viewport.sketch_selection.is_empty()
+                {
+                    self.start_dimension_tool();
+                } else {
+                    self.smart_dimension();
+                }
                 return;
             }
             for (key, tool) in [
