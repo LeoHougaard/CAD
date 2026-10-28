@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Verification at wrap-up</title>
+<style>
+:root{color-scheme:light dark;--viz-series-1:var(--chart-1);--viz-series-2:var(--chart-2)}
+html,body{margin:0;background:transparent;color:var(--foreground);font-family:var(--font-sans);font-size:14px}
+main{padding:0;max-width:100%}h2,h3,p{margin:0 0 12px;font-weight:400}h2{font-size:20px}h3{font-size:14px;margin-top:26px}
+.caption{color:var(--muted-foreground);font-size:12px}.row{margin:14px 0}.labels{display:flex;justify-content:space-between;gap:12px;margin-bottom:7px;flex-wrap:wrap}.value{font-variant-numeric:tabular-nums;white-space:nowrap}
+.track{height:14px;background:var(--secondary);position:relative;overflow:hidden}.fill{height:100%;background:var(--viz-series-1)}.missing{height:100%;background:var(--viz-series-2)}
+.key{display:flex;gap:18px;flex-wrap:wrap;font-size:12px;color:var(--muted-foreground);margin:12px 0}.swatch{display:inline-block;width:10px;height:10px;margin-right:6px;background:var(--viz-series-1)}.swatch.other{background:var(--viz-series-2)}
+.segments{display:flex;height:14px}.segments .fill,.segments .missing{flex-shrink:0}
+</style>
+</head>
+<body>
+<main aria-label="CAD verification status at the stopping checkpoint">
+<h2>Verification at wrap-up</h2>
+<div class="row">
+<div class="labels"><span>Complete Onshape tutorials verified</span><span class="value">0 / 100 minimum</span></div>
+<div class="track" role="progressbar" aria-label="Complete tutorials verified" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="fill" style="width:0%"></div></div>
+</div>
+<p class="caption">128 video candidates discovered. No complete tutorial attempts; success rate and completion forecast are undefined.</p>
+<h3>Component tests on separate source snapshots</h3>
+<div class="key"><span><span class="swatch"></span>Passed</span><span><span class="swatch other"></span>Retained failure</span></div>
+<div class="row">
+<div class="labels"><span>Grounded Dimension Editor cases</span><span class="value">7 / 7</span></div>
+<div class="track" role="img" aria-label="Grounded Dimension Editor, 7 passed of 7"><div class="fill" style="width:100%"></div></div>
+</div>
+<div class="row">
+<div class="labels"><span>Independent grounded geometry comparisons</span><span class="value">42 / 42</span></div>
+<div class="track" role="img" aria-label="Grounded geometry, 42 exact comparisons of 42"><div class="fill" style="width:100%"></div></div>
+</div>
+<div class="row">
+<div class="labels"><span>Placement Editor batch, retained full suite</span><span class="value">24 passed / 3 failed</span></div>
+<div class="track segments" role="img" aria-label="Placement Editor batch, 24 passed and 3 failed"><div class="fill" style="width:88.888889%"></div><div class="missing" style="width:11.111111%"></div></div>
+</div>
+<div class="row">
+<div class="labels"><span>Default-plane guide Editor cases</span><span class="value">3 / 3</span></div>
+<div class="track" role="img" aria-label="Default-plane guides, 3 passed of 3"><div class="fill" style="width:100%"></div></div>
+</div>
+<p class="caption">Different test scopes. These results cannot be combined into a tutorial success rate or an extrapolated finish date.</p>
+</main>
+</body>
+</html>
