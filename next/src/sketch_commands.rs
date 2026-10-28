@@ -24,6 +24,7 @@ pub enum Tool {
     Line,
     Polyline,
     Rectangle,
+    CenterRectangle,
     Circle,
     Arc,
     Ellipse,
@@ -108,7 +109,7 @@ pub fn draw_edits(
     let expected = match tool {
         Tool::Select => return Err("Choose a drawing tool".into()),
         Tool::Point => 1,
-        Tool::Line | Tool::Rectangle | Tool::Circle => 2,
+        Tool::Line | Tool::Rectangle | Tool::CenterRectangle | Tool::Circle => 2,
         Tool::Arc => 3,
         Tool::Polyline if points.len() >= 2 => points.len(),
         Tool::Polyline => return Err("A polyline needs at least two points".into()),
@@ -118,7 +119,7 @@ pub fn draw_edits(
         return Err(format!("{tool:?} needs {expected} points"));
     }
     let count = match tool {
-        Tool::Rectangle => 4,
+        Tool::Rectangle | Tool::CenterRectangle => 4,
         Tool::Polyline => points.len() - 1,
         _ => 1,
     };
@@ -160,7 +161,7 @@ pub fn draw_edits(
                 ));
             }
         }
-        Tool::Rectangle => {
+        Tool::Rectangle | Tool::CenterRectangle => {
             nonzero(
                 points[1][0] - points[0][0],
                 "A rectangle needs a nonzero width",
@@ -169,14 +170,18 @@ pub fn draw_edits(
                 points[1][1] - points[0][1],
                 "A rectangle needs a nonzero height",
             )?;
-            let (x, y) = (
-                points[0][0].min(points[1][0]),
-                points[0][1].min(points[1][1]),
-            );
-            let (right, top) = (
-                points[0][0].max(points[1][0]),
-                points[0][1].max(points[1][1]),
-            );
+            let opposite = if tool == Tool::CenterRectangle {
+                [
+                    2. * points[0][0] - points[1][0],
+                    2. * points[0][1] - points[1][1],
+                    0.,
+                ]
+            } else {
+                points[0]
+            };
+            finite_point(&opposite)?;
+            let (x, y) = (opposite[0].min(points[1][0]), opposite[1].min(points[1][1]));
+            let (right, top) = (opposite[0].max(points[1][0]), opposite[1].max(points[1][1]));
             let corners = [[x, y, 0.], [right, y, 0.], [right, top, 0.], [x, top, 0.]];
             for offset in 0..4 {
                 edits.push(line(corners[offset], corners[(offset + 1) % 4]));
@@ -274,6 +279,36 @@ pub fn draw_snapped_edits(
             (0, geometry_count, 1),
             (points.len() - 1, geometry_count, 2),
         ],
+        Tool::CenterRectangle => {
+            if let Some(target) = snaps[0] {
+                if target.point == 0 {
+                    return Err(
+                        "Center rectangle cannot yet constrain its center to an edge".into(),
+                    );
+                }
+                let start = i32::try_from(geometry_count)
+                    .map_err(|_| "Native geometry index is too large")?;
+                edits.push(constraint(
+                    object,
+                    "Symmetric",
+                    json!([start, 1, start + 2, 1, target.index, target.point]),
+                ));
+            }
+            let opposite = [
+                2. * points[0][0] - points[1][0],
+                2. * points[0][1] - points[1][1],
+                0.,
+            ];
+            let minx = opposite[0].min(points[1][0]);
+            let miny = opposite[1].min(points[1][1]);
+            let corner = match (points[1][0] > minx, points[1][1] > miny) {
+                (false, false) => 0,
+                (true, false) => 1,
+                (true, true) => 2,
+                (false, true) => 3,
+            };
+            vec![(1, geometry_count + corner, 1)]
+        }
         Tool::Rectangle => {
             let minx = points[0][0].min(points[1][0]);
             let miny = points[0][1].min(points[1][1]);
@@ -978,6 +1013,46 @@ mod tests {
     }
     fn e(index: i32, point: i32) -> SketchElement {
         SketchElement { index, point }
+    }
+
+    #[test]
+    fn center_rectangle_uses_center_and_corner_without_faking_center_snap() {
+        let edits = draw_snapped_edits(
+            "Sketch",
+            Tool::CenterRectangle,
+            &[[2., 3., 0.], [5., 7., 0.]],
+            4,
+            true,
+            &[None, None],
+        )
+        .unwrap();
+        assert_eq!(edits.len(), 12);
+        assert_eq!(edits[0]["start"], json!([-1., -1., 0.]));
+        assert_eq!(edits[0]["end"], json!([5., -1., 0.]));
+        assert_eq!(edits[0]["construction"], true);
+        assert_eq!(edits[4]["args"], json!([4, 2, 5, 1]));
+        let snapped = draw_snapped_edits(
+            "Sketch",
+            Tool::CenterRectangle,
+            &[[2., 3., 0.], [5., 7., 0.]],
+            4,
+            false,
+            &[Some(e(-1, 1)), None],
+        )
+        .unwrap();
+        assert_eq!(snapped[12]["kind"], "Symmetric");
+        assert_eq!(snapped[12]["args"], json!([4, 1, 6, 1, -1, 1]));
+        assert!(
+            draw_snapped_edits(
+                "Sketch",
+                Tool::CenterRectangle,
+                &[[2., 3., 0.], [5., 7., 0.]],
+                4,
+                false,
+                &[Some(e(0, 0)), None]
+            )
+            .is_err()
+        );
     }
 
     #[test]

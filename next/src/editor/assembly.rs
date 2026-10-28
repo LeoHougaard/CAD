@@ -86,6 +86,12 @@ impl Editor {
         if self.busy || self.draft.is_some() || self.sketch_ui.session.is_some() {
             return;
         }
+        if self.state["recovery_only"] == true && request["op"] != "assembly_relink" {
+            self.error = Some(
+                "Recover native links through Save or Update / relink external source first".into(),
+            );
+            return;
+        }
         self.sequence += 1;
         self.draft = Some(Draft {
             id: "native.assembly".into(),
@@ -110,7 +116,7 @@ impl Editor {
         else {
             return false;
         };
-        if obj["type"] == "App::Link" && obj["instance_state"]["local"] == true {
+        if obj["type"] == "App::Link" && obj["assembly"].is_string() {
             self.start_assembly_task(
                 json!({"op":"assembly_placement","assembly":obj["assembly"],
                 "object":name,"placement":obj["properties"]["LinkPlacement"]}),
@@ -133,6 +139,23 @@ impl Editor {
             .selected_object
             .as_ref()
             .and_then(|n| all.iter().find(|o| o["name"] == *n))
+            .filter(|o| {
+                !self.source_recovery()
+                    || self.state["save_recovery"]["pending_edges"]
+                        .as_array()
+                        .is_some_and(|edges| edges.iter().any(|edge| edge["name"] == o["name"]))
+            })
+            .or_else(|| {
+                if self.source_recovery() {
+                    all.iter().find(|o| {
+                        self.state["save_recovery"]["pending_edges"]
+                            .as_array()
+                            .is_some_and(|edges| edges.iter().any(|edge| edge["name"] == o["name"]))
+                    })
+                } else {
+                    None
+                }
+            })
             .cloned();
         let assembly = selected
             .as_ref()
@@ -151,11 +174,7 @@ impl Editor {
             .map(str::to_owned);
         let instances: Vec<Value> = all
             .iter()
-            .filter(|o| {
-                o["type"] == "App::Link"
-                    && o["assembly"] == json!(assembly)
-                    && o["instance_state"]["local"] == true
-            })
+            .filter(|o| o["type"] == "App::Link" && o["assembly"] == json!(assembly))
             .cloned()
             .collect();
         let sources: Vec<Value> = all
@@ -167,6 +186,7 @@ impl Editor {
             .cloned()
             .collect();
         ui.menu_button("Assembly", |ui| {
+            ui.add_enabled_ui(!self.source_recovery(), |ui| {
             if ui.button("New assembly").clicked() {
                 let name = self.unique("Assembly"); let joints = self.unique("Joints");
                 self.start_assembly_task(json!({"op":"assembly_create","name":name,"joints":joints}), "New assembly"); ui.close();
@@ -178,13 +198,39 @@ impl Editor {
                 self.start_assembly_task(json!({"op":"assembly_insert","assembly":assembly,"name":name,
                     "source":source,"placement":identity_placement()}), "Insert component"); ui.close();
             }
+            if ui.add_enabled(assembly.is_some(), egui::Button::new("Insert external component...")).clicked() {
+                if self.state["path"].as_str().is_none_or(str::is_empty) {
+                    self.file_dialog(true);
+                    self.status = "Save the root FCStd, then choose Assembly > Insert external component again.".into();
+                } else {
+                    let name = self.unique("Component");
+                    self.start_assembly_task(json!({"op":"assembly_insert","assembly":assembly,"name":name,
+                        "external_source":null,"placement":identity_placement()}), "Insert external component");
+                }
+                ui.close();
+            }
             if ui.add_enabled(instances.len() >= 2, egui::Button::new("New joint")).clicked() {
                 let name = self.unique("Joint");
                 self.start_assembly_task(json!({"op":"assembly_joint","assembly":assembly,"name":name,
                     "create":true,"joint_type":"Fixed","reference1":{"link":instances[0]["name"],"subelements":["",""]},
                     "reference2":{"link":instances[1]["name"],"subelements":["",""]},"properties":{},"expressions":{}}), "New native joint"); ui.close();
             }
-            let selected_instance = selected.as_ref().filter(|o| instances.iter().any(|i| i["name"] == o["name"]));
+            });
+            let pending = self.state["save_recovery"]["pending_edges"].as_array();
+            let pending_instance = |o: &&Value| pending.is_some_and(|edges| edges.iter().any(|edge| edge["name"] == o["name"]));
+            let selected_instance = selected.as_ref().filter(|o| instances.iter().any(|i| i["name"] == o["name"]))
+                .filter(|o| !self.source_recovery() || pending_instance(o))
+                .or_else(|| if self.source_recovery() { instances.iter().find(pending_instance) } else { None });
+            if ui.add_enabled(selected_instance.is_some_and(|o| o["instance_state"]["external_source"].is_object()), egui::Button::new("Update / relink external source...")).clicked() {
+                let obj = selected_instance.unwrap();
+                self.start_assembly_task(json!({"op":"assembly_relink","assembly":assembly,"object":obj["name"],
+                    "external_source":obj["instance_state"]["external_source"],"solve_joints":true}), "Update / relink external source");
+                if let Some(draft) = &mut self.draft {
+                    draft.parameters["source_path"] = obj["instance_state"]["external_source"]["path"].clone();
+                }
+                ui.close();
+            }
+            ui.add_enabled_ui(!self.source_recovery(), |ui| {
             if ui.add_enabled(selected_instance.is_some(), egui::Button::new("Place component")).clicked() {
                 self.edit_assembly_object(selected_instance.unwrap()["name"].as_str().unwrap()); ui.close();
             }
@@ -204,14 +250,17 @@ impl Editor {
             if ui.add_enabled(assembly.is_some(), egui::Button::new("Solve assembly")).clicked() {
                 self.start_assembly_task(json!({"op":"assembly_solve","assembly":assembly}), "Solve assembly"); ui.close();
             }
+            });
         });
     }
 
     pub(super) fn assembly_fields(&mut self, ui: &mut egui::Ui) {
+        let mut browse = None;
+        let mut load = None;
         let Some(draft) = &mut self.draft else {
             return;
         };
-        let baseline = &draft.parameters["state"];
+        let baseline = draft.parameters["state"].clone();
         let mut request = draft.parameters["request"].clone();
         ui.label(&draft.name);
         egui::ScrollArea::vertical().max_height(510.).show(ui, |ui| {
@@ -224,26 +273,58 @@ impl Editor {
                     }
                     return;
                 }
-                let assemblies: Vec<_> = objects(baseline).iter().filter(|o| o["type"] == "Assembly::AssemblyObject").cloned().collect();
+                let assemblies: Vec<_> = objects(&baseline).iter().filter(|o| o["type"] == "Assembly::AssemblyObject").cloned().collect();
                 if op == "assembly_insert" || (op == "assembly_joint" && request["create"] == true) {
                     choose(ui, "Assembly", &mut request["assembly"], &assemblies);
                 } else { ui.label(format!("Assembly: {}", request["assembly"].as_str().unwrap_or_default())); }
-                let instances: Vec<_> = objects(baseline).iter().filter(|o| o["type"] == "App::Link"
-                    && o["assembly"] == request["assembly"] && o["instance_state"]["local"] == true).cloned().collect();
+                let instances: Vec<_> = objects(&baseline).iter().filter(|o| o["type"] == "App::Link"
+                    && o["assembly"] == request["assembly"]).cloned().collect();
+                let external = request.get("external_source").is_some();
+                if external {
+                    ui.label("External FCStd source is read only. Save only the root assembly.");
+                    let mut path = draft.parameters["source_path"].as_str().unwrap_or_default().to_owned();
+                    ui.horizontal(|ui| {
+                        ui.label("Source filepath");
+                        if ui.text_edit_singleline(&mut path).changed() {
+                            draft.parameters["source_path"] = json!(path);
+                            draft.parameters["source_catalog"] = Value::Null;
+                            request["external_source"] = Value::Null;
+                        }
+                        if ui.button("Browse...").clicked() { browse = Some(path.clone()); }
+                        if ui.button("Load source").clicked() { load = Some(path.clone()); }
+                    });
+                    let choices = draft.parameters["source_catalog"]["objects"].as_array().cloned().unwrap_or_default();
+                    let mut selected = request["external_source"]["object"].clone();
+                    choose(ui, "Native source object", &mut selected, &choices);
+                    if let Some(choice) = choices.iter().find(|o| o["name"] == selected) {
+                        request["external_source"] = choice["source"].clone();
+                    }
+                    if request["external_source"].is_object() {
+                        ui.label(format!("Native UUID {} / object ID {}", request["external_source"]["document_uid"].as_str().unwrap_or_default(), request["external_source"]["object_id"]));
+                        ui.weak(format!("Accepted file revision {}", request["external_source"]["sha256"].as_str().unwrap_or_default()));
+                    }
+                    if op == "assembly_relink" {
+                        ui.label("Update every instance of this exact source in the root. UUID and object ID must match.");
+                        ui.weak("Changed source already loaded at the same path requires a new revision path. Missing-source Open requires restoring the accepted file first.");
+                        let mut solve = request["solve_joints"] == true;
+                        ui.add_enabled(false, egui::Checkbox::new(&mut solve, "Solve joints after updating native links"));
+                        ui.weak("Pinned native Assembly recompute solves automatically. Updating links without solving remains unavailable.");
+                    }
+                }
                 if op == "assembly_insert" {
-                    let sources: Vec<_> = objects(baseline).iter().filter(|o| o["type"] == "PartDesign::Body"
+                    let sources: Vec<_> = objects(&baseline).iter().filter(|o| o["type"] == "PartDesign::Body"
                         || o["type"].as_str().is_some_and(|t| t.starts_with("Part::"))
                         || o["instance_state"]["local"] == true).cloned().collect();
-                    choose(ui, "Component source", &mut request["source"], &sources);
+                    if !external { choose(ui, "Component source", &mut request["source"], &sources); }
                     let mut name = request["name"].as_str().unwrap_or_default().to_owned();
                     ui.horizontal(|ui| { ui.label("Instance name"); if ui.text_edit_singleline(&mut name).changed() { request["name"] = json!(name); } });
-                    let meta = objects(baseline).iter().find(|o| o["name"] == request["object"])
+                    let meta = objects(&baseline).iter().find(|o| o["name"] == request["object"])
                         .map(|o| &o["property_metadata"]["Placement"]["quantity"]).unwrap_or(&Value::Null);
                     placement_fields(ui, "Instance placement", &mut request["placement"], meta, &baseline["units"]["defaults"]);
-                    ui.weak("Links reuse local editable source geometry. Hide the source in Features when needed.");
+                    if !external { ui.weak("Links reuse local editable source geometry. Hide the source in Features when needed."); }
                 } else if op == "assembly_placement" {
                     ui.label(request["object"].as_str().unwrap_or_default());
-                    let meta = objects(baseline).iter().find(|o| o["name"] == request["object"])
+                    let meta = objects(&baseline).iter().find(|o| o["name"] == request["object"])
                         .map(|o| &o["property_metadata"]["Placement"]["quantity"]).unwrap_or(&Value::Null);
                     placement_fields(ui, "Instance placement", &mut request["placement"], meta, &baseline["units"]["defaults"]);
                     ui.weak("Native constraints determine the final solved placement.");
@@ -276,7 +357,7 @@ impl Editor {
                         });
                     }
                     ui.weak("A face or edge repeated in both fields chooses its native center. Choose a native vertex for a corner connector.");
-                    let existing = objects(baseline).iter().find(|o| o["name"] == request["name"]);
+                    let existing = objects(&baseline).iter().find(|o| o["name"] == request["name"]);
                     ui.collapsing("Joint values, offsets and limits", |ui| {
                         for prop in ["Distance", "Distance2", "Angle", "LengthMin", "LengthMax", "AngleMin", "AngleMax",
                                      "EnableLengthMin", "EnableLengthMax", "EnableAngleMin", "EnableAngleMax", "Suppressed", "Offset1", "Offset2"] {
@@ -309,7 +390,7 @@ impl Editor {
                         }
                     });
                 }
-                ui.weak("Native Assembly solving validates Apply. External-document authoring and nested assemblies remain open.");
+                ui.weak("Apply validates native links and assembly solving. Nested assembly authoring remains open.");
             });
         });
         if draft.parameters["request"] != request {
@@ -317,6 +398,56 @@ impl Editor {
             draft.changed = Some(Instant::now());
             draft.valid = false;
         }
+        if let Some(path) = browse {
+            self.browse_file(super::file_browser::Purpose::AssemblySource, &path);
+        }
+        if let Some(path) = load {
+            self.assembly_source_path(path);
+        }
+    }
+
+    pub(super) fn assembly_source_path(&mut self, path: String) {
+        let Some(draft) = &mut self.draft else {
+            return;
+        };
+        if draft.id != "native.assembly" {
+            return;
+        }
+        draft.parameters["source_path"] = json!(path);
+        draft.parameters["source_catalog"] = Value::Null;
+        draft.parameters["request"]["external_source"] = Value::Null;
+        draft.valid = false;
+        self.send("assembly_sources", json!({"path":path}));
+    }
+
+    pub(super) fn assembly_source_reply(&mut self, data: Value) {
+        let Some(draft) = &mut self.draft else {
+            return;
+        };
+        if draft.id != "native.assembly" {
+            return;
+        }
+        let request = &draft.parameters["request"];
+        let old = objects(&draft.parameters["state"])
+            .iter()
+            .find(|o| o["name"] == request["object"])
+            .map(|o| o["instance_state"]["external_source"].clone())
+            .unwrap_or_default();
+        let chosen = data["objects"]
+            .as_array()
+            .and_then(|choices| {
+                choices.iter().find(|o| {
+                    request["op"] != "assembly_relink"
+                        || ["document_uid", "object", "object_id", "type"]
+                            .iter()
+                            .all(|key| o["source"][key] == old[key])
+                })
+            })
+            .map(|o| o["source"].clone())
+            .unwrap_or_default();
+        draft.parameters["request"]["external_source"] = chosen;
+        draft.parameters["source_catalog"] = data;
+        draft.changed = Some(Instant::now());
     }
 
     pub(super) fn assembly_tree(&mut self, ui: &mut egui::Ui) {

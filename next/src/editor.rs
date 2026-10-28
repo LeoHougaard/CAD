@@ -39,6 +39,17 @@ use std::{
     time::{Duration, Instant},
 };
 
+fn consume_exact_key(ctx: &egui::Context, modifiers: egui::Modifiers, key: Key) -> bool {
+    ctx.input_mut(|input| {
+        let exact = input.events.iter().any(|event| {
+            matches!(event,
+            egui::Event::Key { key: actual, pressed: true, modifiers: actual_modifiers, .. }
+                if *actual == key && actual_modifiers.matches_exact(modifiers))
+        });
+        exact && input.consume_key(modifiers, key)
+    })
+}
+
 struct Job {
     op: String,
     parameters: Value,
@@ -89,8 +100,44 @@ fn model_thread(
         let previous = current.clone();
         // Preserve the old document until a replacement loads successfully.
         // Opening the same path twice returns the worker's already_open error.
-        let result = call(&mut worker, &job.op, job.parameters);
-        if matches!(job.op.as_str(), "feature_schema" | "measure" | "quantities") {
+        let recovery_action = matches!(
+            job.op.as_str(),
+            "close_dependent" | "remove_dependent_references"
+        );
+        let result = if recovery_action {
+            // The UI action is bound to the inspected unavailable owner and an
+            // exact dependent revision. The worker still receives ordinary Close.
+            let listed = current["close_dependents"]
+                .as_array()
+                .is_some_and(|owners| {
+                    owners.iter().any(|owner| {
+                        owner["document"] == job.parameters["document"]
+                            && owner["revision"] == job.parameters["expected_revision"]
+                            && (job.op == "close_dependent"
+                                || owner["reference_removals"].is_array()
+                                    && owner["reference_removals"] == job.parameters["edits"])
+                    })
+                });
+            if current["available"] == false && listed {
+                call(
+                    &mut worker,
+                    if job.op == "close_dependent" {
+                        "close"
+                    } else {
+                        "transaction"
+                    },
+                    job.parameters,
+                )
+            } else {
+                Err("Recovery dependent changed; inspect the unavailable document again".into())
+            }
+        } else {
+            call(&mut worker, &job.op, job.parameters)
+        };
+        if matches!(
+            job.op.as_str(),
+            "feature_schema" | "measure" | "quantities" | "assembly_sources"
+        ) {
             let (accepted, data, error) = match result {
                 Ok(data) => (true, data, None),
                 Err(error) => (false, Value::Null, Some(error)),
@@ -116,7 +163,12 @@ fn model_thread(
         let mut error = None;
         match result {
             Ok(result) => {
-                if job.op == "close" {
+                if let Some(message) = result["cleanup_error"].as_str() {
+                    error = Some(message.to_owned());
+                }
+                if recovery_action {
+                    // Recovering a dependent does not replace the UI's owner.
+                } else if job.op == "close" {
                     current = Value::Null;
                 } else if result.get("state").is_some() {
                     current = result["state"].clone();
@@ -124,6 +176,11 @@ fn model_thread(
                     current = result;
                 } else if result.get("revision").is_some() {
                     current["revision"] = result["revision"].clone();
+                    if job.op == "save" {
+                        current["path"] = result["path"].clone();
+                        current["save_recovery"] = result["save_recovery"].clone();
+                        current["recovery_only"] = result["recovery_only"].clone();
+                    }
                 }
             }
             Err(message) => error = Some(message),
@@ -141,15 +198,22 @@ fn model_thread(
         }
         // Successful mutations already return the solved native snapshot. A
         // rejected native edit may still invalidate a revision during rollback.
-        if !accepted && let Some(document) = current["document"].as_str() {
+        if (!accepted || recovery_action)
+            && let Some(document) = current["document"].as_str()
+        {
             match call(&mut worker, "inspect", json!({"document":document})) {
                 Ok(state) => current = state,
-                Err(message) => error = Some(message),
+                Err(message) => {
+                    error.get_or_insert(message);
+                }
             }
         }
         let mut scenes = Vec::new();
         let mut display_failed = false;
-        for object in display_objects(&current) {
+        for object in display_objects(&current)
+            .into_iter()
+            .filter(|_| current["available"] != false)
+        {
             if current["sketch_edit"]["object"] == object {
                 continue;
             }
@@ -263,6 +327,12 @@ enum FileAction {
     Open,
     Close,
     Recover,
+    RecoverDependent {
+        index: usize,
+        owner_revision: u64,
+        revision: u64,
+        remove_references: bool,
+    },
 }
 
 pub struct Editor {
@@ -365,10 +435,26 @@ impl Editor {
         if self.busy || self.units_ui.active() && op != "document_settings" {
             return;
         }
+        if self.state["recovery_only"] == true
+            && !matches!(
+                op,
+                "save" | "close" | "inspect" | "assembly_sources" | "new" | "open"
+            )
+            && !(op == "transaction"
+                && parameters["edits"].as_array().is_some_and(|edits| {
+                    !edits.is_empty() && edits.iter().all(|e| e["op"] == "assembly_relink")
+                }))
+        {
+            self.error=Some("Native links need recovery. Retry Save or Update / relink external source after correcting the native error.".into());
+            return;
+        }
         if !matches!(op, "feature_schema" | "quantities") {
             self.measurement_invalidate();
         }
-        if !matches!(op, "new" | "open") {
+        if !matches!(
+            op,
+            "new" | "open" | "close_dependent" | "remove_dependent_references"
+        ) {
             parameters["document"] = self.state["document"].clone();
             parameters["expected_revision"] = self.state["revision"].clone();
             if let Some(token) = &self.sketch_ui.session {
@@ -467,9 +553,21 @@ impl Editor {
                 }
                 continue;
             }
+            if reply.op == "assembly_sources" {
+                self.error = reply.error;
+                if success {
+                    self.assembly_source_reply(reply.data);
+                }
+                continue;
+            }
             let units_changed = self.state["units"]["index"] != reply.state["units"]["index"];
             self.error = reply.error;
             self.state = reply.state;
+            if reply.op == "save" && !success && self.state["save_recovery"].is_object() {
+                self.path = self.state["path"].as_str().unwrap_or_default().into();
+                self.file_input = self.path.clone();
+                self.dirty = true;
+            }
             self.viewport.set_scenes(reply.scenes);
             self.viewport.set_references(&self.state);
             if success
@@ -561,6 +659,7 @@ impl Editor {
         self.start_native_feature(match id {
             "feature.pad" => "PartDesign::Pad",
             "feature.pocket" => "PartDesign::Pocket",
+            "feature.revolution" => "PartDesign::Revolution",
             "feature.fillet" => "PartDesign::Fillet",
             other => other,
         });
@@ -763,6 +862,34 @@ impl Editor {
                     self.send("close", json!({}));
                 }
             }
+            FileAction::RecoverDependent {
+                index,
+                owner_revision,
+                revision,
+                remove_references,
+            } => {
+                let owner = &self.state["close_dependents"][index];
+                if self.unavailable()
+                    && self.state["revision"].as_u64() == Some(owner_revision)
+                    && owner["revision"].as_u64() == Some(revision)
+                {
+                    self.send(
+                        if remove_references {
+                            "remove_dependent_references"
+                        } else {
+                            "close_dependent"
+                        },
+                        json!({
+                            "document":owner["document"], "expected_revision":revision,
+                            "edits":owner["reference_removals"]
+                        }),
+                    );
+                } else {
+                    self.error = Some(
+                        "Recovery dependent changed; inspect the unavailable document again".into(),
+                    );
+                }
+            }
         }
     }
 
@@ -779,7 +906,7 @@ impl Editor {
                     && self.sketch_ui.drag.is_none()
                     && self.sketch_ui.dimension.is_none()
                     && !self.busy
-                    && !self.unavailable()
+                    && (!self.unavailable() || self.source_recovery())
                     && self.draft.is_none()
                     && self.sketch_creation.is_none()
                     && self.pending_file.is_none()
@@ -788,10 +915,18 @@ impl Editor {
                     && !self.exchange_ui.active()
                     && !self.file_browser.active();
                 ui.add_enabled_ui(idle, |ui| {
-                    if self.sketch_ui.session.is_none() && ui.button("New").clicked() {
+                    if self.sketch_ui.session.is_none()
+                        && ui
+                            .add_enabled(!self.unavailable(), egui::Button::new("New"))
+                            .clicked()
+                    {
                         self.request_file(FileAction::New);
                     }
-                    if self.sketch_ui.session.is_none() && ui.button("Open").clicked() {
+                    if self.sketch_ui.session.is_none()
+                        && ui
+                            .add_enabled(!self.unavailable(), egui::Button::new("Open"))
+                            .clicked()
+                    {
                         self.request_file(FileAction::Open);
                     }
                     if self.sketch_ui.session.is_none() && ui.button("Save").clicked() {
@@ -800,11 +935,12 @@ impl Editor {
                     if self.sketch_ui.session.is_none() && ui.button("Save as").clicked() {
                         self.file_dialog(true);
                     }
-                    self.exchange_controls(ui);
+                    ui.add_enabled_ui(!self.unavailable(), |ui| self.exchange_controls(ui));
                     ui.separator();
                     if ui
                         .add_enabled(
-                            self.state["undo_count"].as_u64().unwrap_or(0) > 0,
+                            !self.unavailable()
+                                && self.state["undo_count"].as_u64().unwrap_or(0) > 0,
                             egui::Button::new("Undo"),
                         )
                         .clicked()
@@ -813,7 +949,8 @@ impl Editor {
                     }
                     if ui
                         .add_enabled(
-                            self.state["redo_count"].as_u64().unwrap_or(0) > 0,
+                            !self.unavailable()
+                                && self.state["redo_count"].as_u64().unwrap_or(0) > 0,
                             egui::Button::new("Redo"),
                         )
                         .clicked()
@@ -843,7 +980,7 @@ impl Editor {
             ui.horizontal_wrapped(|ui| {
                 ui.add_enabled_ui(
                     !self.busy
-                        && !self.unavailable()
+                        && (!self.unavailable() || self.source_recovery())
                         && self.sketch_ui.drag.is_none()
                         && self.sketch_ui.dimension.is_none()
                         && self.sketch_ui.task.is_none()
@@ -854,6 +991,10 @@ impl Editor {
                         && !self.exchange_ui.active()
                         && !self.file_browser.active(),
                     |ui| {
+                        if self.source_recovery() {
+                            self.assembly_toolbar(ui);
+                            return;
+                        }
                         if self.sketch_ui.session.is_none() {
                             self.body_toolbar(ui);
                             self.assembly_toolbar(ui);
@@ -910,9 +1051,11 @@ impl Editor {
     }
 
     fn panels(&mut self, ctx: &egui::Context) {
-        self.units_dialog(ctx);
-        self.body_tree(ctx);
-        self.sketch_panel(ctx);
+        if !self.source_recovery() {
+            self.units_dialog(ctx);
+            self.body_tree(ctx);
+            self.sketch_panel(ctx);
+        }
         if self.draft.is_some() {
             let mut commit = false;
             let mut cancel = false;
@@ -1087,6 +1230,28 @@ impl Editor {
     }
 
     fn canvas(&mut self, ui: &mut egui::Ui) {
+        let axis_profile = self.property_ui.axis_profile.as_deref();
+        let axis_active = !self.unavailable()
+            && self.property_ui.axis_pick
+            && self.draft.as_ref().is_some_and(|draft| {
+                draft.parameters["type"] == "PartDesign::Revolution"
+                    && draft.parameters["properties"]["Profile"]["link"].as_str() == axis_profile
+                    && axis_profile.is_some()
+            });
+        if axis_active {
+            let sketch = objects(&self.state)
+                .iter()
+                .find(|o| o["name"].as_str() == axis_profile)
+                .cloned();
+            if !self.viewport.sketch_matches(&sketch) {
+                self.viewport.set_sketch(sketch);
+            }
+        } else if self.property_ui.axis_profile.is_some() {
+            let sketch = self.sketch_snapshot();
+            if !self.viewport.sketch_matches(&sketch) {
+                self.viewport.set_sketch(sketch);
+            }
+        }
         self.viewport.solid_select_in_sketch = self.sketch_ui.external;
         self.viewport.sketch_select_enabled = !self.sketch_ui.external
             && self.sketch_ui.tool == Draw::Select
@@ -1106,6 +1271,34 @@ impl Editor {
                 .as_ref()
                 .map(|selection| selection.object.clone());
         }
+        if axis_active
+            && !self.busy
+            && self.draft.is_some()
+            && self.viewport.response.as_ref().is_some_and(|r| r.clicked())
+            && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
+            && let Some(hit) = self.viewport.sketch_hit(pos)
+            && hit.point == 0
+            && let Some(profile) = self.property_ui.axis_profile.clone()
+        {
+            let subelement = match hit.index {
+                -1 => Some("H_Axis".to_owned()),
+                -2 => Some("V_Axis".to_owned()),
+                _ => None,
+            };
+            if subelement.is_none() {
+                self.error = Some("Choose a native sketch horizontal or vertical axis".into());
+            }
+            if let Some(subelement) = subelement
+                && let Some(draft) = &mut self.draft
+            {
+                draft.parameters["properties"]["ReferenceAxis"] =
+                    json!({"link":profile,"subelements":[subelement]});
+                draft.changed = Some(Instant::now());
+                draft.valid = false;
+                self.property_ui.axis_pick = false;
+                self.viewport.set_sketch(None);
+            }
+        }
         if !self.unavailable() {
             self.sketch_canvas(ui, picked);
         }
@@ -1117,13 +1310,34 @@ impl eframe::App for Editor {
         self.viewport.destroy_gl();
     }
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let was_busy = self.busy;
+        let shortcut_blocked = self.busy
+            || egui::Popup::is_any_open(ctx)
+            || self.unavailable()
+            || self.units_ui.active()
+            || self.measurement_is_open()
+            || self.pending_file.is_some()
+            || self.file_dialog.is_some()
+            || self.overwrite
+            || self.exchange_ui.active()
+            || self.file_browser.active()
+            || self.sketch_creation.is_some()
+            || self.draft.is_some()
+            || self.sketch_ui.drag.is_some()
+            || self.sketch_ui.dimension.is_some()
+            || self.sketch_ui.task.is_some();
         self.poll();
+        if self.draft.is_none() && self.property_ui.axis_profile.is_some() {
+            self.property_ui.axis_pick = false;
+            self.property_ui.axis_profile = None;
+            self.viewport.set_sketch(self.sketch_snapshot());
+        }
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::F1)) {
             workflow_guide::open(ctx);
         }
         let guide_was_open = workflow_guide::active(ctx);
         if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close {
-            if self.unavailable() && !self.busy {
+            if self.unavailable() && !self.source_recovery() && !self.busy {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 self.pending_file = Some(FileAction::Recover);
             } else if self.busy
@@ -1156,7 +1370,7 @@ impl eframe::App for Editor {
                 ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Escape));
             } else if self.measurement_escape() {
                 ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Escape));
-            } else if self.unavailable() {
+            } else if self.unavailable() && !self.source_recovery() {
                 self.pending_file = None;
             } else if self.file_browser.active() {
                 self.cancel_file_browser();
@@ -1176,9 +1390,27 @@ impl eframe::App for Editor {
                 self.sketch_escape();
             }
         }
+        if !was_busy
+            && !self.busy
+            && !self.units_ui.active()
+            && !self.measurement_is_open()
+            && self.pending_file.is_none()
+            && self.file_dialog.is_none()
+            && !self.overwrite
+            && !self.exchange_ui.active()
+            && !self.file_browser.active()
+            && !workflow_guide::active(ctx)
+            && !egui::Popup::is_any_open(ctx)
+            && !ctx.wants_keyboard_input()
+            && self.property_ui.axis_profile.is_some()
+            && self.draft.is_some()
+            && consume_exact_key(ctx, egui::Modifiers::NONE, Key::Tab)
+        {
+            self.property_ui.axis_pick = true;
+        }
         self.toolbar(ctx);
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
-            if self.unavailable() {
+            if self.unavailable() && !self.source_recovery() {
                 ui.horizontal(|ui| self.recovery_controls(ui));
             }
             if self.sketch_ui.session.is_some()
@@ -1211,17 +1443,20 @@ impl eframe::App for Editor {
                     self.canvas(ui)
                 });
             });
-        if !self.unavailable() && !guide_was_open && !workflow_guide::active(ctx) {
+        if self.source_recovery() && !guide_was_open && !workflow_guide::active(ctx) {
+            self.panels(ctx);
+            self.file_browser_ui(ctx);
+        } else if !self.unavailable() && !guide_was_open && !workflow_guide::active(ctx) {
             if !self.exchange_ui.active() && !self.file_browser.active() {
                 self.panels(ctx);
             }
             self.sketch_creation_dialog(ctx);
             self.exchange_dialog(ctx);
             self.file_browser_ui(ctx);
-            self.sketch_pump(ctx);
+            self.sketch_pump(ctx, shortcut_blocked || egui::Popup::is_any_open(ctx));
         }
         if !guide_was_open && !workflow_guide::active(ctx) {
-            self.measurement_ui(ctx);
+            self.measurement_ui(ctx, shortcut_blocked || egui::Popup::is_any_open(ctx));
             self.file_action_dialog(ctx);
         }
         workflow_guide::show(ctx);
@@ -1229,12 +1464,38 @@ impl eframe::App for Editor {
         if guide_was_open || guide_is_open {
             self.sketch_help_input(ctx, !guide_is_open);
         }
+        if !was_busy
+            && !self.busy
+            && !self.units_ui.active()
+            && !self.measurement_is_open()
+            && self.pending_file.is_none()
+            && self.file_dialog.is_none()
+            && !self.overwrite
+            && !self.exchange_ui.active()
+            && !self.file_browser.active()
+            && !guide_was_open
+            && !guide_is_open
+            && !egui::Popup::is_any_open(ctx)
+            && !ctx.wants_keyboard_input()
+            && !self.property_ui.axis_pick
+            && self.draft.as_ref().is_some_and(|d| {
+                d.valid
+                    && d.changed.is_none()
+                    && matches!(
+                        d.parameters["type"].as_str(),
+                        Some("PartDesign::Pad" | "PartDesign::Revolution")
+                    )
+            })
+            && consume_exact_key(ctx, egui::Modifiers::NONE, Key::Enter)
+        {
+            self.finish_preview(true);
+        }
         // Text editors consume their own Undo first. Button focus must not
         // disable application shortcuts, and modals must block document writes.
         if !self.busy
             && !guide_was_open
             && !workflow_guide::active(ctx)
-            && !self.unavailable()
+            && (!self.unavailable() || self.source_recovery())
             && self.draft.is_none()
             && self.sketch_creation.is_none()
             && self.pending_file.is_none()
@@ -1262,6 +1523,32 @@ impl eframe::App for Editor {
                 self.send("redo", json!({}));
             } else if ctx.input_mut(|i| i.consume_key(command, Key::Z)) {
                 self.send("undo", json!({}));
+            } else if !shortcut_blocked
+                && !egui::Popup::is_any_open(ctx)
+                && !ctx.wants_keyboard_input()
+                && self.sketch_ui.session.is_none()
+                && consume_exact_key(ctx, egui::Modifiers::SHIFT, Key::S)
+            {
+                self.new_sketch();
+            } else if !shortcut_blocked
+                && !egui::Popup::is_any_open(ctx)
+                && !ctx.wants_keyboard_input()
+                && consume_exact_key(ctx, egui::Modifiers::SHIFT, Key::E)
+            {
+                self.feature_from_sketch("feature.pad");
+            } else if !shortcut_blocked
+                && !egui::Popup::is_any_open(ctx)
+                && !ctx.wants_keyboard_input()
+                && consume_exact_key(ctx, egui::Modifiers::SHIFT, Key::W)
+            {
+                self.feature_from_sketch("feature.revolution");
+            } else if !shortcut_blocked
+                && !egui::Popup::is_any_open(ctx)
+                && !ctx.wants_keyboard_input()
+                && self.sketch_ui.session.is_some()
+                && consume_exact_key(ctx, egui::Modifiers::NONE, Key::N)
+            {
+                self.viewport.align_sketch();
             } else if !ctx.wants_keyboard_input()
                 && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::F))
             {
@@ -1269,7 +1556,7 @@ impl eframe::App for Editor {
             }
         }
         if !self.busy
-            && !self.unavailable()
+            && (!self.unavailable() || self.source_recovery())
             && let Some(changed) = self.draft.as_ref().and_then(|d| d.changed)
         {
             if changed.elapsed() >= Duration::from_millis(150) {

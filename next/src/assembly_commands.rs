@@ -56,11 +56,8 @@ fn fresh(state: &Value, value: &Value) -> Result<(), String> {
 
 fn instance<'a>(state: &'a Value, value: &Value, assembly: &Value) -> Result<&'a Value, String> {
     let obj = object(state, value)?;
-    if obj["type"] != "App::Link"
-        || obj["assembly"] != *assembly
-        || obj["instance_state"]["local"] != true
-    {
-        return Err("Choose a local component instance in this assembly".into());
+    if obj["type"] != "App::Link" || obj["assembly"] != *assembly {
+        return Err("Choose a native component instance in this assembly".into());
     }
     Ok(obj)
 }
@@ -86,7 +83,21 @@ fn placement(value: &Value) -> Result<(), String> {
 /// Compile against a captured snapshot. Submit through the ordinary guarded
 /// transaction/preview boundary. Native validation remains authoritative.
 pub fn build(state: &Value, request: &Value) -> Result<Vec<Value>, String> {
-    if state["available"] == false || !state["objects"].is_array() {
+    let recovery_relink = state["recovery_only"] == true
+        && state["recovery_available"] == true
+        && state["save_recovery"]["dirty"] == true
+        && state["save_recovery"]["live_graph_restored"] == false
+        && request["op"] == "assembly_relink"
+        && state["save_recovery"]["pending_edges"]
+            .as_array()
+            .is_some_and(|edges| {
+                edges.iter().any(|edge| {
+                    edge["name"] == request["object"]
+                        && edge["native_id"].as_u64().is_some_and(|id| id > 0)
+                        && edge["source"] == request["external_source"]
+                })
+            });
+    if state["available"] == false && !recovery_relink || !state["objects"].is_array() {
         return Err("Read the available native document before authoring an assembly".into());
     }
     let fields = request
@@ -95,9 +106,28 @@ pub fn build(state: &Value, request: &Value) -> Result<Vec<Value>, String> {
     let op = request["op"]
         .as_str()
         .ok_or("Choose an assembly operation")?;
+    if state["recovery_only"] == true && op != "assembly_relink" {
+        return Err(
+            "Recover native links through Save or Update / relink external source first".into(),
+        );
+    }
     let allowed: &[&str] = match op {
         "assembly_create" => &["op", "name", "joints"],
-        "assembly_insert" => &["op", "assembly", "name", "source", "placement"],
+        "assembly_insert" => &[
+            "op",
+            "assembly",
+            "name",
+            "source",
+            "external_source",
+            "placement",
+        ],
+        "assembly_relink" => &[
+            "op",
+            "assembly",
+            "object",
+            "external_source",
+            "solve_joints",
+        ],
         "assembly_placement" => &["op", "assembly", "object", "placement"],
         "assembly_ground" => &["op", "assembly", "object", "name", "grounded"],
         "assembly_joint" => &[
@@ -133,6 +163,16 @@ pub fn build(state: &Value, request: &Value) -> Result<Vec<Value>, String> {
     match op {
         "assembly_insert" => {
             fresh(state, &request["name"])?;
+            if fields.contains_key("external_source") {
+                external_source(&request["external_source"])?;
+                if state["path"].as_str().is_none_or(str::is_empty) {
+                    return Err("Save as the root assembly FCStd before external insertion".into());
+                }
+                if let Some(value) = fields.get("placement") {
+                    placement(value)?;
+                }
+                return Ok(vec![request.clone()]);
+            }
             let source = object(state, &request["source"])?;
             let source = if source["type"] == "App::Link" {
                 if source["instance_state"]["local"] != true {
@@ -151,6 +191,21 @@ pub fn build(state: &Value, request: &Value) -> Result<Vec<Value>, String> {
             }
             if let Some(value) = fields.get("placement") {
                 placement(value)?;
+            }
+        }
+        "assembly_relink" => {
+            let instance = instance(state, &request["object"], assembly)?;
+            external_source(&request["external_source"])?;
+            let old = &instance["instance_state"]["external_source"];
+            for key in ["document_uid", "object", "object_id", "type"] {
+                if old[key] != request["external_source"][key] {
+                    return Err(
+                        "Relink requires the same native document UUID and object ID".into(),
+                    );
+                }
+            }
+            if request["solve_joints"] != true {
+                return Err("Independent source update without solving is unavailable in the pinned native runtime".into());
             }
         }
         "assembly_placement" => {
@@ -213,4 +268,52 @@ pub fn build(state: &Value, request: &Value) -> Result<Vec<Value>, String> {
 
 pub fn identity_placement() -> Value {
     json!({"position":[0.,0.,0.],"rotation":[0.,0.,0.,1.]})
+}
+
+fn external_source(value: &Value) -> Result<(), String> {
+    if value["version"] != 1
+        || !value["object_id"].is_u64()
+        || ["path", "document_uid", "object", "type"]
+            .iter()
+            .any(|key| value[key].as_str().is_none_or(str::is_empty))
+        || !value["sha256"]
+            .as_str()
+            .is_some_and(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+    {
+        return Err("Load a source FCStd and select its native object before Apply".into());
+    }
+    name(&value["object"])?;
+    let revisions = value["dependencies"]
+        .as_array()
+        .ok_or("Load the complete native dependency revisions before Apply")?;
+    if value.get("dependency_count").is_some()
+        && value["dependency_count"].as_u64() != Some(revisions.len() as u64)
+    {
+        return Err("Native dependency count differs from its complete revision list; load the source again".into());
+    }
+    let mut paths = std::collections::HashSet::new();
+    for revision in revisions {
+        if !revision.as_object().is_some_and(|o| o.len() == 3)
+            || ["path", "document_uid"]
+                .iter()
+                .any(|key| revision[key].as_str().is_none_or(str::is_empty))
+            || !revision["sha256"]
+                .as_str()
+                .is_some_and(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+        {
+            return Err("Invalid native dependency revision".into());
+        }
+        let normalize = |path: &str| {
+            if cfg!(target_os = "windows") {
+                path.replace('\\', "/").to_ascii_lowercase()
+            } else {
+                path.to_owned()
+            }
+        };
+        let path = normalize(revision["path"].as_str().unwrap());
+        if path == normalize(value["path"].as_str().unwrap()) || !paths.insert(path) {
+            return Err("Duplicate native dependency identity".into());
+        }
+    }
+    Ok(())
 }

@@ -578,3 +578,6 @@ mod followup_r1;
 mod review_r2;
 #[path = "settings_guard_tests.rs"]
 mod settings_guard_tests;
+
+#[path = "open_cleanup_tests.rs"]
+mod open_cleanup_tests;

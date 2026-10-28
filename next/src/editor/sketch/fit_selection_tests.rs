@@ -132,7 +132,7 @@ fn fit_selection_native_editor_view_menu_preserves_document_and_selection() {
     assert_eq!(n.editor.state, native);
     assert_eq!(n.editor.viewport.selections, selected);
     n.click("Help");
-    guide_click(&mut n, "Assembly");
+    guide_click(&mut n, "External assembly components");
     guide_click(&mut n, "Fit selection");
     let instructions = n.frame(vec![]);
     assert!(

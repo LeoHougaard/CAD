@@ -110,3 +110,70 @@ fn native_view_popup_escape_keeps_measure_owner() {
     );
     assert_eq!(n.editor.state, before);
 }
+
+#[test]
+#[ignore = "requires pinned native runtime"]
+fn native_view_help_escape_preserves_preview_until_intentional_cancel() {
+    let mut n = Native::new("view-help-preview");
+    n.send("new", json!({"name":"ViewHelpPreview"}), true);
+    n.transaction(json!([{"op":"add_object","type":"Part::Box","name":"Box"}]));
+    n.editor.edit_native_properties("Box");
+    n.editor.draft.as_mut().unwrap().parameters["properties"]["Length"] = json!(12);
+    n.editor.preview();
+    n.receive("preview", true);
+    let before = n.editor.state.clone();
+    let token = n.editor.draft.as_ref().unwrap().token.clone();
+    let path = n.editor.path.clone();
+    let dirty = n.editor.dirty;
+    assert_eq!(object(&before, "Box")["properties"]["Length"], json!(12.));
+    n.click("View");
+    assert!(egui::Popup::is_any_open(&n.ctx));
+    for pressed in [true, false] {
+        n.frame(vec![egui::Event::Key {
+            key: Key::F1,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+    }
+    let help = n.frame(vec![]);
+    assert!(workflow_guide::active(&n.ctx));
+    assert!(help.shapes.iter().any(|shape| matches!(&shape.shape,
+        egui::epaint::Shape::Text(text) if text.galley.text() == "Workflow guide")));
+    assert!(!n.editor.busy && n.raw.try_recv().is_err());
+    assert_eq!(n.editor.state, before);
+    assert_eq!(n.editor.draft.as_ref().unwrap().token, token);
+    escape(&mut n);
+    assert!(!workflow_guide::active(&n.ctx));
+    assert!(!n.editor.busy && n.raw.try_recv().is_err());
+    assert_eq!(n.editor.state, before);
+    assert_eq!(n.editor.draft.as_ref().unwrap().token, token);
+    let popup_after_help = egui::Popup::is_any_open(&n.ctx);
+    if popup_after_help {
+        escape(&mut n);
+        assert!(!egui::Popup::is_any_open(&n.ctx));
+        assert!(!n.editor.busy && n.raw.try_recv().is_err());
+        assert_eq!(n.editor.state, before);
+        assert_eq!(n.editor.draft.as_ref().unwrap().token, token);
+    }
+    assert_eq!(n.editor.path, path);
+    assert_eq!(n.editor.dirty, dirty);
+    escape(&mut n);
+    assert!(n.editor.busy);
+    n.receive("preview_cancel", true);
+    assert!(n.editor.draft.is_none());
+    assert_eq!(
+        object(&n.editor.state, "Box")["properties"]["Length"],
+        json!(10.)
+    );
+    fs::write(
+        n.folder.join("help-owner-result.json"),
+        serde_json::to_vec_pretty(&json!({"help_visible":true,
+            "help_escape_preserved_native_preview":true,"popup_after_help_escape":popup_after_help,
+            "optional_popup_escape_preserved_native_preview":true,
+            "before":before,"after_intentional_cancel":n.editor.state}))
+        .unwrap(),
+    )
+    .unwrap();
+}

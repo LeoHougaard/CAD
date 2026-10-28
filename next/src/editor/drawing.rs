@@ -48,14 +48,19 @@ pub(super) fn preview(
                 path.push(cursor);
             }
         }
-        Tool::Rectangle => {
+        Tool::Rectangle | Tool::CenterRectangle => {
             if let Some(end) = cursor.or_else(|| points.get(1).copied()) {
+                let start = if tool == Tool::CenterRectangle {
+                    [2. * first[0] - end[0], 2. * first[1] - end[1], 0.]
+                } else {
+                    first
+                };
                 path.extend([
-                    first,
-                    [end[0], first[1], 0.],
+                    start,
+                    [end[0], start[1], 0.],
                     end,
-                    [first[0], end[1], 0.],
-                    first,
+                    [start[0], end[1], 0.],
+                    start,
                 ]);
             }
         }

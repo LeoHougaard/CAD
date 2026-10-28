@@ -528,6 +528,7 @@ fn review_help_from_open_curves_menu_blocks_sketch_keys() {
         n.review_key(key, egui::Modifiers::NONE);
     }
     n.review_key(egui::Key::M, egui::Modifiers::COMMAND);
+    n.review_key(egui::Key::OpenBracket, egui::Modifiers::NONE);
     n.review_key(egui::Key::Z, egui::Modifiers::COMMAND);
     n.review_key(egui::Key::Escape, egui::Modifiers::NONE);
     assert!(!workflow_guide::active(&n.ctx));

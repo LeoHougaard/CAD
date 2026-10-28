@@ -1,5 +1,77 @@
 # Local modeling boundary, version 1
 
+If New or Open fails, cleanup attempts each new native document once and restores
+the previous active owner even when a native Close fails. The error retains its
+original code and message, followed by cleanup diagnostics and surviving names.
+Survivors acquire Rust-owned revisions and poisoned leases. They remain native
+documents but expose only recovery metadata through `inspect`: `document`,
+`revision`, `available:false`, empty `objects`, null `preview`/`sketch_edit`, and
+`recovery` with the failed operation, error, cleanup diagnostics, path and
+`action:"close"`. This is not an accepted geometry snapshot. Use that revision
+for explicit Close. A rejected Close preserves recovery ownership and observers;
+only successful native Close removes them. Writes, history, mesh, topology and
+export reject with `document_unavailable`. Retrying the exact failed Open path,
+through toolbar Open, Discard, the intended file row and the browser Open button,
+explicitly retries Close once for each owner
+still belonging to that failed-Open batch. It uses the same Rust revision and
+poisoned-Close admission as explicit Close. It opens the file again only after
+every batch owner closes. Repeated cleanup failures retain the original error
+code/message and append structured diagnostics; no loop or worker restart runs.
+Other paths and pre-existing native owners never join that batch. Unrelated
+documents keep their own revisions, leases, native content and history.
+
+Native dependency admission follows each live document's object references,
+including hidden Link/XLink properties, expressions in the native OutList, and
+indirect or cyclic document paths. A document reaching a failed-load quarantine
+owner cannot publish, recompute, inspect model geometry, save, export or return
+mesh/topology. Open checks this before acceptance. A previously accepted owner
+that acquires such a reference also fails these guards. Geometry caches are not
+proof that a native reference still exists.
+
+Inspection of an already accepted owner with such dependencies returns only its
+current Rust revision, `available:false`, empty objects and recovery diagnostics.
+It never returns cached geometry. This refreshes the revision after a rejected
+native reference-removal transaction and exposes the existing unavailable-owner
+Close dialog in Editor. Native graph availability is combined with Rust lease
+admission; no poisoned lease is cleared or bypassed. The normal guards still
+admit only bounded reference removals or Close for this graph. Unpublished
+candidate snapshots fail instead of returning an unavailable accepted state.
+
+Cleanup and explicit Close check every other Rust-registered accepted owner
+before native Close. If one depends on the target, `document_referenced` names
+the dependent documents and their revisions. No document is closed and no
+accepted native link is cleared. A failed-Open retry retains its original error
+and appends that structured diagnostic. Close the dependent first or remove its
+references through the normal native transaction protocol, then retry. Generic
+reference removals can clear native Link/XLink properties, clear expression
+bindings, or remove eligible objects; all ordinary native permissions, dependency
+checks, revision/lease guards, recompute and validation still apply. A partial
+removal that leaves quarantine dependencies cannot publish. Its native abort
+restores the prior graph without recomputing the already unavailable graph.
+Reference-removal recovery also tracks already accepted native dependents of
+the edited owner. Clean dependents recompute and validate in native dependency
+order inside the transaction before acceptance. Every affected registered owner
+receives a new Rust revision on acceptance or rollback. Dependents still reaching
+quarantine remain unavailable; existing poisoned leases remain poisoned. An
+exception while aborting poisons the affected owners through the existing lease
+mechanism. This recovery path never makes a follower readable with a stale
+cached BRep under its earlier revision.
+
+New expression bindings are temporarily refused before native history starts
+while any failed-load quarantine remains. Bindings can resolve external native
+owners; this conservative recovery restriction avoids installing a new binding
+before its native dependency edges exist. Clearing bindings is still admitted.
+After successful cleanup, normal expression authoring resumes. No Ctrl+O binding
+is added; the verified Editor recovery route is toolbar Open and its browser.
+
+External FCStd assembly sources add the guarded `assembly_sources` discovery
+operation and `external_source` version-1 identity descriptors. Insert and
+identity-matched relink share the existing transaction/preview boundary. See
+[the external assembly contract](EXTERNAL-ASSEMBLY.md). Source dependencies are
+readonly and never registered as writable roots. Same-path reload, offline
+missing-source Open repair and independent update without native solving remain
+open; unsupported update mode fails before native loading/history.
+
 Hole task metadata is an additive version-1 snapshot extension. For
 `PartDesign::Hole`, `property_metadata.ThreadType` includes
 `hole_task_version:1`, `hole_task_enumerations` and `hole_task_cut_angles`.
@@ -882,6 +954,39 @@ lease channel uses the same outer request ID, sequence and original deadline as
 the journal and revision channels. Internal lease-state errors terminate the
 session; ordinary ownership errors leave it usable. Close removes gesture and
 poison state, and reopening/reusing a name starts with no previous lease.
+
+An explicit dependent Close or isolated reference removal can use the private
+typed `terminal_recovery` callback when a foreign gesture owner is already
+poisoned. Rust exempts only settled poisoned owners reached by the native
+dependency graph. Healthy or unrelated sketch/preview owners still reject;
+the requested owner's poison, revision and local guards remain unchanged.
+There is no public bypass option and no normal modeling admission.
+Native Close still rejects accepted dependents. Terminal reference removal
+admits only `remove_object` edits on isolated, non-array native `App::Link`
+objects. Every edit must qualify before a native transaction starts. It requires
+no pending native transaction or foreign object dependency on any edited object.
+Generic property set/clear, including `LinkedObject`, and expression clearing
+do not receive terminal admission. The separate ordinary quarantine detach path
+remains broad when the ordinary Rust global leases already admit the request.
+The unavailable owner's content, history, lease and active ownership survive.
+
+An unavailable snapshot's `close_dependents` lists native document names,
+current Rust revisions and saved paths. The Editor offers a separate confirmed
+Close for each dependent, warning that its unsaved work will be discarded even
+when dirty status is unknown. Cancel and failed Close retain both owners and
+the current UI/path/dirty/sketch state. A successful dependent Close refreshes
+the retained owner's inspection without replacing it or clearing its poison.
+The current owner's confirmation never authorizes closing a dependent.
+When the native proof identifies isolated simple Link objects, a separate
+`Remove references` confirmation names that dependent and each native object
+name/ID. It submits only those revision-bound removals through an ordinary
+transaction, retaining both documents and all other unsaved work. Failed removal
+refreshes the dependent revision; retry requires the newly inspected metadata.
+No removal action is offered while any native transaction is pending, when
+foreign objects depend on the proposed removal, or when recomputation would
+touch a foreign dependency that is already Touched. Such graphs remain closed
+to editing and require further recovery work. This does not add a general
+cross-document property editor or allow editing the unavailable owner.
 
 Preview label validation precedes native redo admission. Rust requests the
 native RedoCount fact only for a first feature preview or unopened sketch

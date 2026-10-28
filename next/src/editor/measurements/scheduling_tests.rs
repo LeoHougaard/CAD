@@ -36,7 +36,7 @@ fn native_measure_revisits_discarded_selection_and_coalesces_rapid_toggles() {
     let mut n = Native::case("discarded-selection");
     fixture(&mut n, "DiscardedSelection");
     select(&mut n, "Edge1");
-    n.key(Key::M, egui::Modifiers::COMMAND);
+    n.key(Key::OpenBracket, egui::Modifiers::NONE);
     assert!(n.editor.busy);
     let baseline = n.editor.state.clone();
     select(&mut n, "Edge2");
@@ -92,7 +92,7 @@ fn native_measure_discarded_revision_can_automatically_measure_current_model() {
     let mut n = Native::case("discarded-revision");
     fixture(&mut n, "DiscardedRevision");
     n.editor.body_ui.selected = vec!["Box".into()];
-    n.key(Key::M, egui::Modifiers::COMMAND);
+    n.key(Key::OpenBracket, egui::Modifiers::NONE);
     let old_revision = n.editor.state["revision"].clone();
     let held = n.raw.recv_timeout(Duration::from_secs(40)).unwrap();
     assert!(held.accepted && held.op == "measure");
@@ -149,7 +149,7 @@ fn native_measure_failed_current_read_does_not_spin_and_clear_close_release_read
     let owner = n.editor.state.clone();
     let dirty = n.editor.dirty;
     select(&mut n, "Edge999");
-    n.key(Key::M, egui::Modifiers::COMMAND);
+    n.key(Key::OpenBracket, egui::Modifiers::NONE);
     n.receive("measure", false);
     let error = n.editor.measurement_ui.error.clone();
     assert!(error.is_some());
@@ -191,7 +191,7 @@ fn native_measure_failed_current_read_does_not_spin_and_clear_close_release_read
     n.receive("measure", true);
     assert!(!n.editor.measurement_ui.open && n.editor.measurement_ui.result.is_none());
     quiet(&mut n);
-    n.key(Key::M, egui::Modifiers::COMMAND);
+    n.key(Key::OpenBracket, egui::Modifiers::NONE);
     n.receive("measure", true);
     quiet(&mut n);
     assert_eq!(n.editor.state, owner);

@@ -1,4 +1,10 @@
 //! Real Editor methods and egui Apply/Cancel, with the pinned headless worker.
+#[path = "external_tests.rs"]
+mod external_tests;
+#[path = "partial_tests.rs"]
+mod partial_tests;
+#[path = "r1_tests.rs"]
+mod r1_tests;
 use super::super::*;
 use super::*;
 use std::{fs, thread::JoinHandle};
@@ -84,7 +90,7 @@ impl Native {
             .replies
             .recv_timeout(Duration::from_secs(25))
             .unwrap();
-        self.events.push(json!({"op":reply.op,"accepted":reply.accepted,"error":reply.error,"state":reply.state,
+        self.events.push(json!({"op":reply.op,"accepted":reply.accepted,"error":reply.error,"state":reply.state,"data":reply.data,
             "display_objects":reply.scenes.iter().map(|(m,_)|m["object"].clone()).collect::<Vec<_>>()}));
         fs::write(
             self.output.join("events.json"),

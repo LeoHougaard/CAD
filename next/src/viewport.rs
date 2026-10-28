@@ -353,6 +353,10 @@ impl Viewport {
         );
     }
 
+    pub fn sketch_matches(&self, sketch: &Option<Value>) -> bool {
+        &self.sketch == sketch
+    }
+
     pub fn set_sketch(&mut self, sketch: Option<Value>) {
         self.cancel_other_picker();
         if self.sketch != sketch {
@@ -466,6 +470,18 @@ impl Viewport {
             .chain(self.curves.iter().flat_map(|c| c.points.iter().copied()))
             .filter(|point| point.is_finite())
             .collect();
+        self.fit_points(points);
+    }
+    pub fn fit_sketch(&mut self) {
+        let points = self
+            .curves
+            .iter()
+            .flat_map(|curve| curve.points.iter().copied())
+            .filter(|point| point.is_finite())
+            .collect();
+        self.fit_points(points);
+    }
+    fn fit_points(&mut self, points: Vec<Vec3>) {
         if points.is_empty() {
             self.center = self.sketch_origin;
             self.scale = 8.;

@@ -3,6 +3,11 @@
 [Sketch Copy, Clone, Move and arrays](SKETCH-COPY.md) documents the typed native
 tasks, input domains, history behavior and remaining pointer-gesture differences.
 
+Current external component instructions are in
+[External native assembly components](EXTERNAL-ASSEMBLY.md) and Help. This
+bounded access preserves readonly source documents and native links; the named
+update, missing-source and physical GUI gates remain open.
+
 This is the replacement foundation. The earlier Rust/Brepkit application stays
 available while this implementation is verified. It is not the modeling engine
 for this version.

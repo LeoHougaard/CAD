@@ -14,6 +14,7 @@ pub(super) enum Purpose {
     Save,
     Import,
     Export,
+    AssemblySource,
 }
 impl Purpose {
     fn saving(self) -> bool {
@@ -25,7 +26,9 @@ impl Purpose {
             .and_then(|value| value.to_str())
             .unwrap_or_default();
         match self {
-            Self::Open | Self::Save => extension.eq_ignore_ascii_case("FCStd"),
+            Self::Open | Self::Save | Self::AssemblySource => {
+                extension.eq_ignore_ascii_case("FCStd")
+            }
             Self::Import | Self::Export => ["step", "stp", "iges", "igs"]
                 .iter()
                 .any(|allowed| extension.eq_ignore_ascii_case(allowed)),
@@ -37,6 +40,7 @@ impl Purpose {
             Self::Save => "Save native document",
             Self::Import => "Import geometry",
             Self::Export => "Choose export destination",
+            Self::AssemblySource => "Choose readonly native component source",
         }
     }
 }
@@ -47,6 +51,35 @@ pub(super) struct FileBrowser {
     storage: FileDialogStorage,
 }
 impl FileBrowser {
+    #[cfg(test)]
+    pub(super) fn test_layer(&self) -> Option<egui::LayerId> {
+        Some(egui::LayerId::new(
+            egui::Order::Middle,
+            self.active.as_ref()?.1.get_window_id(),
+        ))
+    }
+
+    #[cfg(test)]
+    pub(super) fn test_selection(
+        &mut self,
+        ctx: &egui::Context,
+    ) -> Option<(Option<PathBuf>, bool, egui::Rect, String, String)> {
+        let (_, dialog) = self.active.as_mut()?;
+        let selected = dialog
+            .selected_entry()
+            .map(|entry| entry.as_path().to_owned());
+        let enabled = dialog.selected_entry().is_some_and(|entry| entry.is_file());
+        let rect = ctx.memory(|memory| memory.area_rect(dialog.get_window_id()))?;
+        let config = dialog.config_mut();
+        Some((
+            selected,
+            enabled,
+            rect,
+            config.default_file_icon.clone(),
+            config.labels.open_button.clone(),
+        ))
+    }
+
     pub(super) fn active(&self) -> bool {
         self.active.is_some()
     }
@@ -84,7 +117,10 @@ impl FileBrowser {
             .default_size(egui::vec2(760., 500.))
             .min_size(egui::vec2(360., 280.))
             .allow_file_overwrite(true);
-        if matches!(purpose, Purpose::Open | Purpose::Save) {
+        if matches!(
+            purpose,
+            Purpose::Open | Purpose::Save | Purpose::AssemblySource
+        ) {
             dialog = dialog
                 .add_file_filter(
                     "FreeCAD (.FCStd)",
@@ -158,6 +194,7 @@ impl Editor {
         match purpose {
             Purpose::Open | Purpose::Save => self.file_dialog = None,
             Purpose::Import | Purpose::Export => self.exchange_browser_result(purpose, None),
+            Purpose::AssemblySource => (),
         }
     }
     pub(super) fn cancel_file_browser(&mut self) -> bool {
@@ -175,10 +212,17 @@ impl Editor {
             self.browser_canceled(purpose);
             return;
         };
+        self.browser_picked(purpose, path);
+    }
+    pub(super) fn browser_picked(&mut self, purpose: Purpose, path: PathBuf) {
+        self.file_browser.cancel();
         if !purpose.accepts(&path) {
             self.browser_canceled(purpose);
             self.error = Some(
-                if matches!(purpose, Purpose::Open | Purpose::Save) {
+                if matches!(
+                    purpose,
+                    Purpose::Open | Purpose::Save | Purpose::AssemblySource
+                ) {
                     "Choose a native FreeCAD filename ending in .FCStd"
                 } else {
                     "Choose a STEP or IGES filename (.step, .stp, .iges, .igs)"
@@ -202,6 +246,9 @@ impl Editor {
                 );
             }
             Purpose::Import | Purpose::Export => self.exchange_browser_result(purpose, Some(path)),
+            Purpose::AssemblySource => {
+                self.assembly_source_path(path.to_string_lossy().into_owned())
+            }
         }
     }
 }

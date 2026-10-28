@@ -16,6 +16,8 @@ pub(super) struct PropertyUi {
     advanced: bool,
     buffers: BTreeMap<String, String>,
     reference: super::profile_references::ProfileReferenceUi,
+    pub(super) axis_profile: Option<String>,
+    pub(super) axis_pick: bool,
 }
 
 impl Editor {
@@ -111,18 +113,31 @@ impl Editor {
     }
 
     pub(super) fn start_native_feature(&mut self, type_id: &str) {
+        self.start_native_feature_for_profile(type_id, None);
+    }
+
+    pub(super) fn start_native_feature_for_profile(
+        &mut self,
+        type_id: &str,
+        profile: Option<&str>,
+    ) {
         let Some(definition) = feature_commands::get(type_id) else {
             self.error = Some(format!("Unknown native feature {type_id}"));
             return;
         };
         let name = self.unique(definition.type_id.split("::").last().unwrap_or("Feature"));
-        let selections = self.native_link_selection();
-        let selected = self
-            .tree_selections()
-            .first()
-            .cloned()
-            .or(self.sketch.clone())
-            .or(self.selected_object.clone());
+        let selections = if let Some(profile) = profile {
+            vec![(profile.to_owned(), String::new())]
+        } else {
+            self.native_link_selection()
+        };
+        let selected = profile.map(str::to_owned).or_else(|| {
+            self.tree_selections()
+                .first()
+                .cloned()
+                .or(self.sketch.clone())
+                .or(self.selected_object.clone())
+        });
         let mut body = self.body().or_else(|| {
             selections
                 .first()
@@ -166,6 +181,9 @@ impl Editor {
                 &self.state,
                 reference_name,
             ),
+            axis_profile: (type_id == "PartDesign::Revolution")
+                .then(|| profile.map(str::to_owned))
+                .flatten(),
             loading: true,
             ..PropertyUi::default()
         };
@@ -262,6 +280,17 @@ impl Editor {
         let selected = self.native_link_selection();
         let draft = self.draft.as_mut().unwrap();
         ui.label(&draft.name);
+        if self.property_ui.axis_profile.is_some() {
+            if ui
+                .selectable_label(self.property_ui.axis_pick, "Revolve axis (Tab)")
+                .clicked()
+            {
+                self.property_ui.axis_pick = true;
+            }
+            if self.property_ui.axis_pick {
+                ui.label("Pick the horizontal or vertical sketch axis");
+            }
+        }
         if let Some(error) = &self.error {
             ui.colored_label(egui::Color32::from_rgb(225, 142, 138), error);
         }

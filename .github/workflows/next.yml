@@ -158,6 +158,32 @@ jobs:
           run([sys.executable,'-B',root/'next/tests/suppression_current_inputs.py','--host',host,'--runtime',runtime_path,'--fillet',out/'references/Fillet.FCStd','--hole',out/'hole-input.FCStd','--output',out/'current-inputs'])
           run([*prefix,root/'next/tests/suppression_units_native.py','--input',out/'current-inputs'])
           PY
+      - name: Native failed-Open quarantine and terminal recovery
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+          PYTHONUTF8: '1'
+        run: |
+          python -B - <<'PY'
+          import json, os, pathlib, subprocess, sys
+          root = pathlib.Path.cwd()
+          artifacts = [json.loads(line) for line in (root/'next/target/units-test-artifacts.jsonl').read_text().splitlines() if line.startswith('{')]
+          tests = next(a['executable'] for a in artifacts if a.get('reason') == 'compiler-artifact' and a.get('executable') and 'lib' in a['target']['kind'] and a['profile']['test'])
+          suffix = '.exe' if os.name == 'nt' else ''
+          subprocess.run([sys.executable, '-B', 'next/tools/check_open_recovery.py', '--runtime', 'next/target/runtime.json', '--host', str(root/'next/target/debug'/('cad-next'+suffix)), '--editor-tests', tests, '--output', 'next/target/open-recovery'], check=True)
+          PY
+      - name: Native external Assembly sources, recovery and portable Editor controls
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+          PYTHONUTF8: '1'
+        run: |
+          python -B - <<'PY'
+          import json, os, pathlib, subprocess, sys
+          root = pathlib.Path.cwd()
+          artifacts = [json.loads(line) for line in (root/'next/target/units-test-artifacts.jsonl').read_text().splitlines() if line.startswith('{')]
+          tests = next(a['executable'] for a in artifacts if a.get('reason') == 'compiler-artifact' and a.get('executable') and 'lib' in a['target']['kind'] and a['profile']['test'])
+          suffix = '.exe' if os.name == 'nt' else ''
+          subprocess.run([sys.executable, '-B', 'next/tools/check_external_assembly.py', '--runtime', 'next/target/runtime.json', '--host', str(root/'next/target/debug'/('cad-next'+suffix)), '--compiler', str(root/'next/target/debug'/('cad-next-packages'+suffix)), '--editor-tests', tests, '--output', 'next/target/external-assembly'], check=True)
+          PY
       - name: Native sketch Copy, Clone, Move, array and combined checkpoints
         env:
           PYTHONDONTWRITEBYTECODE: '1'
@@ -205,6 +231,8 @@ jobs:
             next/target/suppression/
             next/target/schema-startup/
             next/target/sketch-copy/
+            next/target/open-recovery/
+            next/target/external-assembly/
             next/backend/native/checkpoint_restore*.json
             next/backend/native/checkpoint_restore*.so
             next/backend/native/checkpoint_restore.dll

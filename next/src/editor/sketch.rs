@@ -193,7 +193,7 @@ impl Editor {
         if op == "sketch_begin" {
             if success {
                 self.viewport.align_sketch();
-                self.viewport.fit();
+                self.viewport.fit_sketch();
             } else {
                 self.sketch_ui.session = None;
                 self.sketch = None;
@@ -237,14 +237,17 @@ impl Editor {
         }
         if success && matches!(op, "sketch_finish" | "sketch_cancel") {
             let cancel = op == "sketch_cancel";
+            let finished_profile = self.sketch.clone();
             self.sketch_ui.session = None;
             self.sketch_ui.drag = None;
             self.sketch_ui.clear_points();
             self.sketch_ui.dimension = None;
             self.sketch = None;
             self.viewport.set_sketch(None);
-            self.viewport.iso();
-            self.viewport.fit();
+            if cancel || self.sketch_ui.after_finish.is_none() {
+                self.viewport.iso();
+                self.viewport.fit();
+            }
             if cancel {
                 if self.sketch_ui.new_sketch {
                     self.sketch_ui.cleanup = true;
@@ -255,7 +258,13 @@ impl Editor {
             } else {
                 self.dirty = true;
                 if let Some(feature) = self.sketch_ui.after_finish.take() {
-                    self.start_feature(&feature);
+                    let kind = match feature.as_str() {
+                        "feature.pad" => "PartDesign::Pad",
+                        "feature.pocket" => "PartDesign::Pocket",
+                        "feature.revolution" => "PartDesign::Revolution",
+                        other => other,
+                    };
+                    self.start_native_feature_for_profile(kind, finished_profile.as_deref());
                 }
             }
         }
@@ -270,7 +279,8 @@ impl Editor {
         }
     }
     pub(super) fn feature_from_sketch(&mut self, id: &str) {
-        if self.sketch_ui.dimension.is_some()
+        if self.busy
+            || self.sketch_ui.dimension.is_some()
             || self.sketch_ui.drag.is_some()
             || self.sketch_ui.task.is_some()
         {
@@ -279,6 +289,9 @@ impl Editor {
         if self.sketch_ui.session.is_some() {
             self.sketch_ui.after_finish = Some(id.into());
             self.finish_sketch(true);
+            if !self.busy {
+                self.sketch_ui.after_finish = None;
+            }
         } else {
             self.start_feature(id);
         }
@@ -313,7 +326,8 @@ impl Editor {
                 ("Point", Tool::Point),
                 ("Line", Tool::Line),
                 ("Polyline", Tool::Polyline),
-                ("Rectangle", Tool::Rectangle),
+                ("Corner rectangle (G)", Tool::Rectangle),
+                ("Center rectangle (R)", Tool::CenterRectangle),
                 ("Circle", Tool::Circle),
                 ("Arc", Tool::Arc),
             ] {
@@ -814,7 +828,7 @@ impl Editor {
         self.sketch_ui.trim = false;
         self.sketch_ui.box_start = None;
     }
-    pub(super) fn sketch_pump(&mut self, ctx: &egui::Context) {
+    pub(super) fn sketch_pump(&mut self, ctx: &egui::Context, shortcut_blocked: bool) {
         self.sketch_task_pump(ctx);
         if self.sketch_ui.task.is_some() {
             return;
@@ -879,6 +893,8 @@ impl Editor {
             && self.sketch_ui.session.is_some()
             && self.sketch_ui.drag.is_none()
             && self.sketch_ui.dimension.is_none()
+            && self.sketch_ui.task.is_none()
+            && !shortcut_blocked
             && !ctx.wants_keyboard_input()
         {
             if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Delete)) {
@@ -906,23 +922,27 @@ impl Editor {
             for (key, tool) in [
                 (Key::L, Tool::Line),
                 (Key::P, Tool::Polyline),
-                (Key::R, Tool::Rectangle),
+                (Key::G, Tool::Rectangle),
+                (Key::R, Tool::CenterRectangle),
                 (Key::C, Tool::Circle),
                 (Key::A, Tool::Arc),
             ] {
-                if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, key)) {
+                if super::consume_exact_key(ctx, egui::Modifiers::NONE, key) {
+                    let was_active = self.sketch_ui.tool == tool
+                        && !self.sketch_ui.trim
+                        && !self.sketch_ui.external
+                        && !self.sketch_ui.split;
                     self.sketch_ui.clear_points();
-                    if tool != Tool::Select {
-                        self.viewport.clear_sketch_selection();
-                        self.sketch_ui.selected_constraint = None;
-                    }
+                    self.viewport.clear_sketch_selection();
+                    self.sketch_ui.selected_constraint = None;
                     self.sketch_ui.external = false;
                     self.sketch_ui.split = false;
-                    self.sketch_ui.tool = tool;
+                    self.sketch_ui.tool = if was_active { Tool::Select } else { tool };
                     self.sketch_ui.trim = false;
+                    return;
                 }
             }
-            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::G)) {
+            if super::consume_exact_key(ctx, egui::Modifiers::NONE, Key::Q) {
                 self.sketch_ui.construction = !self.sketch_ui.construction;
                 self.toggle_construction();
             }

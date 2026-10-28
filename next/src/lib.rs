@@ -22,6 +22,8 @@ pub mod sketch_curve_commands;
 pub mod sketch_dimensions;
 mod sketch_journal;
 pub mod sketch_operation_commands;
+#[cfg(test)]
+mod terminal_recovery_tests;
 pub mod transform_commands;
 #[cfg(feature = "desktop")]
 pub mod viewport;

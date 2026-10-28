@@ -26,6 +26,8 @@ import feature_history as FeatureHistory
 import profile_references as ProfileReferences
 import expression_links as ExpressionLinks
 import assembly as AssemblyAuthoring
+import assembly_sources as AssemblySources
+import native_saves as NativeSaves
 import exchange as Exchange
 import document_units as DocumentUnits
 import measurements as Measurements
@@ -44,6 +46,7 @@ OPERATIONS = ["capabilities", "new", "open", "inspect", "transaction", "undo",
               "redo", "save", "mesh", "topology", "close", "preview",
               "preview_commit", "preview_cancel", "sketch_begin", "sketch_finish", "sketch_cancel", "feature_schema", "export_exchange"]
 OPERATIONS += ["measure", "document_settings", "quantities"]
+OPERATIONS += ["assembly_sources"]
 EDIT_OPERATIONS = ["add_object", "set", "expression", "geometry", "constraint",
                    "datum", "move_geometry", "construction", "delete_geometry", "delete_constraint", "refraction", "via_point",
                    "constraint_state", "trim_geometry", "remove_object", "binder_support",
@@ -74,6 +77,16 @@ _feature_schemas = {}
 # Opaque native replay payloads only. Rust owns all public tokens and leases.
 _native_previews = {}
 _native_sketch_sessions = {}
+# Failed new/Open owners contain no accepted model state. Rust still owns their
+# revisions and poisoned leases; only inspection of recovery metadata and Close
+# are allowed until the native document is actually gone.
+_failed_loads = {}
+# A nested source loader and the root rollback can encounter the same failed
+# Close. One public action must never retry that native Close implicitly.
+_load_close_errors = {}
+# Native handles captured before an attempted Close whose outcome could not be
+# queried. Keep them private; recovery snapshots contain no native model data.
+_uncertain_closes = {}
 
 
 class Failure(Exception):
@@ -120,16 +133,181 @@ def revision_request(action, key, **parameters):
 def bump(doc):
     return revision_request("bump", doc.Name)
 
+def native_references(obj, property_name=None):
+    values = [getattr(obj, property_name)] if property_name is not None else list(obj.OutList)
+    if property_name is None:
+        for prop in obj.PropertiesList:
+            if obj.getTypeIdOfProperty(prop).startswith(("App::PropertyLink", "App::PropertyXLink")):
+                values.append(getattr(obj, prop))
+    while values:
+        value = values.pop()
+        if isinstance(value, App.DocumentObject):
+            yield value
+        elif isinstance(value, (tuple, list)):
+            values.extend(value)
+
+
+def native_dependencies(doc):
+    """Follow native reference edges, including hidden link properties and cycles."""
+    documents = {}
+    pending = [doc]
+    while pending:
+        owner = pending.pop()
+        if owner.Name in documents:
+            continue
+        documents[owner.Name] = owner
+        for obj in owner.Objects:
+            pending.extend(value.Document for value in native_references(obj))
+    return documents
+
+
+def native_object_dependencies(objects):
+    pending = list(objects)
+    visited = set()
+    while pending:
+        obj = pending.pop()
+        identity = (obj.Document.Name, obj.ID)
+        if identity not in visited:
+            visited.add(identity)
+            yield obj
+            pending.extend(native_references(obj))
+
+
+def terminal_removal_safe(doc, request):
+    if not reference_removals(doc, request.get("edits")):
+        return False
+    # Opening another app-wide transaction would commit/enroll unknown work.
+    if App.getActiveTransaction() or any(d.HasPendingTransaction for d in App.listDocuments().values()):
+        fail("recovery_busy", "Native transaction is still pending; close dependents without editing references")
+    changed = {(doc.Name, object_in(doc, edit["object"]).ID) for edit in request["edits"]}
+    # A document-level cycle can still have an isolated removable link. Prove
+    # isolation through actual object edges, including hidden native properties.
+    for other in App.listDocuments().values():
+        if other.Name == doc.Name:
+            continue
+        for obj in native_object_dependencies(other.Objects):
+            identity = (obj.Document.Name, obj.ID)
+            if identity in changed:
+                fail("document_referenced", "Reference removal would mutate native dependent " + other.Name)
+    for edit in request["edits"]:
+        obj = object_in(doc, edit["object"])
+        if edit["op"] != "remove_object" or obj.TypeId != "App::Link" or obj.ElementCount:
+            fail("document_referenced", "Terminal recovery can remove only an isolated native Link object")
+        if not any(target.Document.Name != doc.Name and not lease("metadata", target.Document.Name)["available"]
+                   for target in native_object_dependencies([obj])):
+            fail("document_unavailable", "Terminal recovery can remove only references to unavailable owners")
+    for other in native_dependencies(doc).values():
+        if other.Name != doc.Name and any("Touched" in obj.State for obj in other.Objects):
+            fail("recovery_busy", "Native dependency needs recompute; reference removal would change another owner")
+    return True
+
+
+def admit_global(request):
+    try:
+        lease("global", request=request)
+        return False
+    except Failure as error:
+        if error.code not in ("sketch_active", "preview_active") or request.get("op") not in ("close", "transaction"):
+            raise
+        key = request.get("document")
+        if revision_request("lookup", key) is None:
+            raise error
+        doc = App.getDocument(key)
+        dependencies = native_dependencies(doc)
+        # Keep healthy/unrelated global conflicts and their error ordering.
+        # The typed callback below independently verifies authoritative poison.
+        if not any(owner != key and not lease("metadata", owner)["available"]
+                   for owner in dependencies):
+            raise error
+        lease("pre_revision", key, request=request)
+        revision_request("check", key, expected_revision=request.get("expected_revision"))
+        lease("local", key, request=request)
+        recovery = "close_dependent"
+        if request["op"] == "transaction":
+            if not reference_removals(doc, request.get("edits")):
+                raise error
+            recovery = "remove_references"
+        lease("terminal_recovery", key, request=request, recovery=recovery,
+              dependencies=sorted(dependencies))
+        if request["op"] == "transaction":
+            terminal_removal_safe(doc, request)
+        return True
+
+
+def dependency_recovery(doc):
+    if not _failed_loads:
+        return None
+    blocked = sorted(set(native_dependencies(doc)) & _failed_loads.keys())
+    if blocked:
+        return {"documents": blocked, "action": "remove_references_or_close_dependent",
+                "recovery": [_failed_loads[key] for key in blocked]}
+    return None
+
+
+def check_dependencies(doc):
+    recovery = dependency_recovery(doc)
+    if recovery is not None:
+        fail("document_unavailable", "Native references reach quarantined owners: " + json.dumps(recovery, sort_keys=True))
+
+
+def reference_removals(doc, edits):
+    if not isinstance(edits, list) or not edits:
+        return False
+    for edit in edits:
+        if not isinstance(edit, dict):
+            return False
+        if edit.get("op") not in ("remove_object", "expression", "set"):
+            return False
+        obj = object_in(doc, edit.get("object"))
+        if "native_id" in edit and (type(edit["native_id"]) is not int or edit["native_id"] != obj.ID):
+            fail("stale_reference", "Native recovery object identity changed")
+        if edit.get("op") == "remove_object" or edit.get("op") == "expression" and edit.get("expression") is None:
+            continue
+        if (edit.get("op") == "set" and edit.get("value") in (None, [])
+                and property_type(obj, edit.get("property")).startswith(("App::PropertyLink", "App::PropertyXLink"))):
+            continue
+        return False
+    return True
+
+
+def accepted_dependents(doc):
+    dependents = []
+    for other in App.listDocuments().values():
+        if other.Name == doc.Name or other.Name in _failed_loads:
+            continue
+        revision = revision_request("lookup", other.Name)
+        if revision is not None and doc.Name in native_dependencies(other):
+            dependents.append((other, revision))
+    return dependents
+
+
+def check_close_dependents(doc):
+    dependents = [{"document": other.Name, "revision": revision} for other, revision in accepted_dependents(doc)]
+    if dependents:
+        fail("document_referenced", "Native Close would clear accepted references: " + json.dumps({
+            "document": doc.Name, "dependents": dependents,
+            "action": "remove_references_or_close_dependents_first"}, sort_keys=True))
+
+
 def document(request, writable=False):
     key = request.get("document")
     hash(key)  # Preserve native request errors for unhashable document identifiers.
     if revision_request("lookup", key) is None:
         fail("not_found", "Document is not open in this worker")
+    if key in _uncertain_closes:
+        if writable:
+            lease("pre_revision", key, request=request)
+            revision_request("check", key, expected_revision=request.get("expected_revision"))
+            lease("local", key, request=request)
+        fail("document_unavailable", "Native Close outcome is unresolved: " + key)
     doc = App.getDocument(key)
     if writable:
         lease("pre_revision", key, request=request)
         revision_request("check", key, expected_revision=request.get("expected_revision"))
         lease("local", key, request=request)
+        if _failed_loads and request.get("op") != "close" and not (request.get("op") == "transaction" and reference_removals(doc, request.get("edits"))):
+            check_dependencies(doc)
+        AssemblySources.recovery_guard(doc, request)
         if request.get("op") not in ("close", "preview_cancel", "sketch_cancel"):
             validate_assembly_proxies(doc)
         # FreeCAD 1.1 transactions are app-wide. A change to an inactive
@@ -138,6 +316,10 @@ def document(request, writable=False):
         # the request. Reads, export, and close retain their activation.
         if request.get("op") not in ("close", "export_exchange"):
             App.setActiveDocument(doc.Name)
+    else:
+        if doc.Name not in _failed_loads and request.get("op") != "inspect":
+            check_dependencies(doc)
+        AssemblySources.recovery_guard(doc, request)
     return doc
 
 
@@ -492,7 +674,23 @@ def body_states(doc):
 
 
 def snapshot(doc, revision=None):
+    if doc.Name in _failed_loads:
+        return {"document": doc.Name, "revision": revision_request("current", doc.Name),
+                "objects": [], "available": lease("metadata", doc.Name)["available"],
+                "preview": None, "sketch_edit": None, "recovery": _failed_loads[doc.Name],
+                "close_dependents": close_dependents_metadata(doc)}
+    recovery = dependency_recovery(doc)
+    if recovery is not None:
+        # Only public inspection of an already registered owner can expose
+        # recovery metadata. Candidate snapshots must fail before acceptance.
+        if revision is not None:
+            check_dependencies(doc)
+        return {"document": doc.Name, "revision": revision_request("current", doc.Name),
+                "objects": [], "available": False, "preview": None, "sketch_edit": None,
+                "recovery": recovery, "close_dependents": close_dependents_metadata(doc)}
     validate_assembly_proxies(doc)
+    recovery_only = AssemblySources.recovery_metadata(doc) is not None
+    native_available = lease("metadata", doc.Name)["available"]
     objects = []
     bodies = body_states(doc)
     for obj in doc.Objects:
@@ -541,10 +739,33 @@ def snapshot(doc, revision=None):
                                                 **SketchGeometry.angle_witness(obj, c)}
                                                for i, c in enumerate(obj.Constraints)]}
         objects.append(entry)
-    return {"document": doc.Name, "revision": revision_request("current", doc.Name) if revision is None else revision, "objects": objects,
+    state = {"document": doc.Name, "path": doc.FileName, "save_recovery": NativeSaves.metadata(doc), "recovery_only": recovery_only, "revision": revision_request("current", doc.Name) if revision is None else revision, "objects": objects,
             "units": DocumentUnits.settings(doc),
             **history_counts(doc), "sketch_edit": sketch_metadata(doc),
-            "available": lease("metadata", doc.Name)["available"], "preview": preview_metadata(doc)}
+            "available": native_available and not recovery_only,
+            "recovery_available": native_available and recovery_only, "preview": preview_metadata(doc)}
+    if not state["available"]:
+        state["close_dependents"] = close_dependents_metadata(doc)
+    return state
+
+
+
+def close_dependents_metadata(doc):
+    result = []
+    for other, revision in accepted_dependents(doc):
+        entry = {"document": other.Name, "revision": revision, "path": other.FileName}
+        if not lease("metadata", doc.Name)["available"] and lease("metadata", other.Name)["available"]:
+            edits = [{"op": "remove_object", "object": obj.Name, "native_id": obj.ID}
+                     for obj in other.Objects if obj.TypeId == "App::Link" and not obj.ElementCount
+                     and any(target.Document.Name == doc.Name for target in native_object_dependencies([obj]))]
+            if edits:
+                try:
+                    if terminal_removal_safe(other, {"edits": edits}):
+                        entry["reference_removals"] = edits
+                except Failure:
+                    pass  # Offer no reference action without a native safety proof.
+        result.append(entry)
+    return result
 
 
 def prepare_state(doc):
@@ -556,6 +777,7 @@ def prepare_state(doc):
 
 
 def publish_state(doc, state):
+    check_dependencies(doc)
     current_revision = bump(doc)
     state.update(revision=current_revision, **history_counts(doc))
     return state
@@ -586,6 +808,7 @@ def native_history(doc, operation):
 
 
 def recompute_document(doc):
+    check_dependencies(doc)
     validate_assembly_proxies(doc)
     result = doc.recompute()
     check_suppression()
@@ -598,6 +821,7 @@ def recompute_document(doc):
 
 
 def validate(doc, whole=False):
+    check_dependencies(doc)
     validate_assembly_proxies(doc)
     if whole:
         try:
@@ -720,6 +944,8 @@ def apply_native_edit(doc, edit):
         # binder creation/editing command assigns this property explicitly.
         obj.Support = decode_property(doc, property_type(obj, "Support"), edit["value"])
     elif op == "remove_object":
+        if "native_id" in edit and (type(edit["native_id"]) is not int or edit["native_id"] != obj.ID):
+            fail("stale_reference", "Native recovery object identity changed")
         owner = owner_body(obj)
         dependents = [item.Name for item in obj.InList if item != owner and not (
             item.isDerivedFrom("App::Part") and obj in item.Group)]
@@ -887,32 +1113,77 @@ def apply_native_edit(doc, edit):
     return {"object": obj.Name}
 
 
-def transaction(doc, request):
+def transaction(doc, request, terminal_recovery=False):
     edits = request["edits"]
     if not isinstance(edits, list) or not edits:
         fail("invalid_request", "Transaction requires a nonempty edits list")
     preflight_constraints(edits)
+    recovering_references = bool(_failed_loads and set(native_dependencies(doc)) & _failed_loads.keys())
+    affected = {other.Name: other for other, _ in accepted_dependents(doc)} if recovering_references and not terminal_recovery else {}
+    for other in affected.values():
+        if not lease("metadata", other.Name)["available"]:
+            fail("document_unavailable", "Close unavailable dependent " + other.Name + " before repairing native references")
     if sketch_metadata(doc):
         return sketch_transaction(doc, request)
+    recovery_only = AssemblySources.recovery_metadata(doc) is not None
+    repair_only = recovery_only and all(
+        edit.get('op') == 'assembly_relink' and edit.get('solve_joints') is True
+        and (assembly := AssemblyAuthoring.owner(object_in(doc, edit['object']))) is not None
+        and assembly.Name == edit.get('assembly')
+        and AssemblySources.same_revision(AssemblySources.stored(object_in(doc, edit['object'])), edit.get('external_source'))
+        for edit in edits)
+    prepare_assembly_sources(doc, edits)
+    if repair_only:
+        # Repairing the captured original source is recovery, not an authoring
+        # transaction. Preserve pending native Redo and every accepted history
+        # entry. An explicit different source revision still authors normally.
+        validate(doc)
+        AssemblySources.check(doc)
+        state = prepare_state(doc)
+        return {'document': doc.Name, 'revision': revision_request('current', doc.Name),
+                'edits': [{'object': edit['object'], 'recovered': True} for edit in edits], 'state': state}
     doc.openTransaction(request.get("label", "Edit"))
     try:
         results = [apply_edit(doc, edit) for edit in edits]
         if recompute_document(doc) is False:
             fail("invalid_model", "Native recompute failed")
         validate(doc)
+        AssemblySources.check(doc)
+        # A reference-removal recovery can change native followers as well as
+        # this owner. Never make a newly clean follower readable at an old
+        # revision with a stale BRep. Native ordering/recompute stay native.
+        solved = {doc.Name}
+        for other in affected.values():
+            if dependency_recovery(other) is not None or not lease("metadata", other.Name)["available"]:
+                continue
+            for owner in other.getDependentDocuments():
+                if owner.Name not in solved and doc.Name in native_dependencies(owner):
+                    if dependency_recovery(owner) is None and lease("metadata", owner.Name)["available"]:
+                        if recompute_document(owner) is False:
+                            fail("invalid_model", "Native dependent recompute failed: " + owner.Name)
+                        validate(owner)
+                        solved.add(owner.Name)
         state = prepare_state(doc)
         json.dumps(results, allow_nan=False)
+        AssemblySources.check(doc)
         doc.commitTransaction()
+        for other in affected.values():
+            bump(other)
     except Exception:
         try:
             abort_transaction(doc)
-            recompute_document(doc)
-            validate(doc)
+            if not recovering_references:
+                recompute_document(doc)
+                validate(doc)
         except Exception:
             lease("poison", doc.Name)
+            for other in affected.values():
+                lease("poison", other.Name)
             traceback.print_exc(file=sys.stderr)
         # Abort restores model edits, but native element aliases and redo
         # history may have changed. Never reuse identities from before it.
+        for other in affected.values():
+            bump(other)
         bump(doc)
         raise
     publish_state(doc, state)
@@ -922,6 +1193,11 @@ def transaction(doc, request):
 
 def preflight_constraints(edits):
     for edit in edits:
+        # New bindings can resolve external native owners. Defer them during
+        # failed-load recovery before opening native history; clearing remains
+        # an admitted reference-removal operation.
+        if _failed_loads and isinstance(edit, dict) and edit.get("op") == "expression" and edit.get("expression") is not None:
+            fail("document_unavailable", "Close quarantined owners before binding native expressions")
         try:
             SketchOperations.preflight(edit)
         except SketchOperations.OperationError as error:
@@ -1185,6 +1461,7 @@ def preview(doc, request):
         fail("invalid_request", "Preview requires a nonempty edits list")
     preflight_constraints(edits)
     label = preview_ready(doc, request)
+    prepare_assembly_sources(doc, edits, active is not None)
     if active:
         try:
             abort_transaction(doc)
@@ -1201,6 +1478,7 @@ def preview(doc, request):
         if recompute_document(doc) is False:
             fail("invalid_model", "Native recompute failed")
         validate(doc)
+        AssemblySources.check(doc)
         lease("preview_stage", doc.Name, request=request, label=label)
         staged = True
         state = prepare_state(doc)
@@ -1237,12 +1515,287 @@ def native_path(value):
     return str(Path(value).expanduser().resolve())
 
 
+def close_document(doc):
+    key = doc.Name
+    close_loaded_document(key)
+    return finish_closed_document(key)
+
+
+def finish_closed_document(key):
+    revision_request("close", key)
+    lease("close", key)
+    _uncertain_closes.pop(key, None)
+    recovery = _failed_loads.pop(key, None)
+    if recovery is not None:
+        recovery["documents"].remove(key)
+    _native_previews.pop(key, None)
+    _native_sketch_sessions.pop(key, None)
+    journal(key, "end")
+    NativeSaves.close(key)
+    AssemblySources.close_root(key)
+    AssemblySources._dependencies.pop(key, None)
+    result = {"document": key, "closed": True}
+    before = set(App.listDocuments()) - set(AssemblySources._dependencies)
+    active = App.ActiveDocument.Name if App.ActiveDocument else ""
+    readonly_before = set(AssemblySources._readonly_paths)
+    try:
+        AssemblySources.release(registered_root)
+    except Exception as error:
+        # The requested root really closed. Retain any failed readonly teardown
+        # as named quarantine, while reporting that partial cleanup truthfully.
+        try:
+            cleanup_failed_load("source_cleanup", None, before, active, error, readonly_before)
+        except Exception as cleanup_error:
+            result["cleanup_error"] = str(cleanup_error)
+    diagnostics = [value for value in _load_close_errors.values() if value.get("native_closed")]
+    if diagnostics:
+        message = "Close cleanup: " + json.dumps(diagnostics, allow_nan=False, sort_keys=True)
+        result["cleanup_error"] = result.get("cleanup_error", "") + message
+    return result
+
+
+def close_loaded_document(key):
+    if key in _load_close_errors:
+        previous = _load_close_errors[key]
+        raise Failure(previous["code"], previous["message"])
+    pending = _uncertain_closes.get(key)
+    doc = App.listDocuments().get(key) if pending is not None else App.getDocument(key)
+    already_absent = doc is None
+    if already_absent:
+        doc, uid, path = pending
+    else:
+        uid, path = str(doc.Uid), doc.FileName or None
+    diagnostics = []
+
+    def presence():
+        try:
+            current = App.listDocuments().get(key)
+        except Exception as error:
+            # Native Close may already have deleted or replaced the captured
+            # owner. Neither its name nor a copied writable Uid proves identity.
+            previous = _failed_loads.pop(key, None)
+            if previous is not None:
+                previous["documents"].remove(key)
+            _uncertain_closes[key] = (doc, uid, path)
+            lease("poison", key)
+            revision_request("bump", key)
+            _failed_loads[key] = {"operation": "close", "path": path, "action": "close",
+                "documents": [key], "error_code": "document_unavailable",
+                "error": "Native Close presence query failed: " + str(error),
+                "cleanup_errors": diagnostics + [cleanup_diagnostic(key, error)]}
+            fail("document_unavailable", "Native Close outcome is unresolved: " + key + ": " + str(error))
+        if current is not None:
+            try:
+                same = current == doc and str(doc.Uid) == uid
+            except Exception:
+                same = False  # A deleted native handle must not authorize name reuse.
+            if not same:
+                # A callback replaced the native owner. Do not detach or publish
+                # the new owner under the old revision, observer, or source claim.
+                error = Failure("document_unavailable", "Native owner changed during Close: " + key)
+                previous = _failed_loads.pop(key, None)
+                if previous is not None:
+                    previous["documents"].remove(key)
+                lease("poison", key)
+                revision_request("bump", key)
+                _uncertain_closes.pop(key, None)
+                _failed_loads[key] = {"operation": "close", "path": current.FileName or None,
+                    "error": str(error), "error_code": error.code, "action": "close", "documents": [key],
+                    "cleanup_errors": diagnostics, "replaced_document_uid": uid,
+                    "document_uid": str(current.Uid)}
+                source = AssemblySources._dependencies.get(key)
+                if source is not None and source["document_uid"] == uid:
+                    AssemblySources._dependencies.pop(key)
+                raise error
+        return current is not None
+
+    try:
+        if not already_absent:
+            check_close_dependents(doc)
+            try:
+                App.closeDocument(key)
+            except Exception as error:
+                diagnostics.append(cleanup_diagnostic(key, error))
+                if presence():
+                    raise
+        if presence():
+            raise RuntimeError("Native Close left the document open")
+        try:
+            _native_suppression.detach(key)
+        except Exception as error:
+            diagnostics.append(cleanup_diagnostic(key, error))
+            presence()
+            # The captured native handle is gone. Finish only its local observer
+            # lifetime bookkeeping; this does not claim the thrown hook succeeded.
+            _native_suppression.documents.discard(key)
+            _native_suppression.pending = {k: v for k, v in _native_suppression.pending.items() if k[0] != key}
+        presence()
+    except Exception as error:
+        _load_close_errors[key] = cleanup_diagnostic(key, error)
+        raise
+    if diagnostics:
+        _load_close_errors[key] = {"document": key, "code": "native_error",
+            "message": "Native Close completed with cleanup diagnostics", "native_closed": True,
+            "diagnostics": diagnostics}
+
+
+def restore_active_document(active):
+    App.setActiveDocument(active if active in App.listDocuments() else "")
+    # FreeCAD 1.1.4 leaves this Python attribute stale when the native
+    # active owner is cleared with an empty name.
+    App.ActiveDocument = App.activeDocument()
+
+
+def cleanup_diagnostic(key, error):
+    return {"document": key, "code": getattr(error, "code", "native_error"),
+            "message": str(error)}
+
+
+def load_cleanup_failure(recovery):
+    return Failure(recovery["error_code"], recovery["error"]
+                   + "\nLoad cleanup: " + json.dumps(recovery, allow_nan=False, sort_keys=True))
+
+
+def cleanup_failed_load(operation, path, before, active, error, readonly_before):
+    cleanup_errors = []
+    try:
+        for key in sorted(set(App.listDocuments()) - before):
+            try:
+                close_loaded_document(key)
+                AssemblySources._dependencies.pop(key, None)
+            except Exception as cleanup_error:
+                cleanup_errors.append(cleanup_diagnostic(key, cleanup_error))
+    finally:
+        AssemblySources._readonly_paths.clear()
+        AssemblySources._readonly_paths.update(readonly_before)
+        try:
+            restore_active_document(active)
+        except Exception as restore_error:
+            cleanup_errors.append(cleanup_diagnostic("active document restore", restore_error))
+    # Nested source cleanup may already have closed an owner despite a thrown
+    # hook. Preserve that diagnostic with the original load error, not as a survivor.
+    cleanup_errors.extend(value for value in _load_close_errors.values() if value.get("native_closed"))
+    survivors = sorted(set(App.listDocuments()) - before)
+    if path is None and operation == "source_cleanup":
+        files = {App.getDocument(key).FileName for key in survivors}
+        if len(files) == 1:
+            path = files.pop()
+    recovery = {"operation": operation, "error": str(error), "error_code": getattr(error, "code", "native_error"),
+                "cleanup_errors": cleanup_errors, "action": "close", "path": path, "documents": survivors}
+    for key in survivors:
+        lease("poison", key)
+        revision_request("bump", key)
+        _failed_loads[key] = recovery
+    if cleanup_errors or survivors:
+        raise load_cleanup_failure(recovery) from error
+
+
+def retry_failed_open(path, operation="open"):
+    recovery = next((batch for batch in _failed_loads.values()
+                     if batch["operation"] == operation
+                     and batch["path"] is not None
+                     and os.path.normcase(batch["path"]) == os.path.normcase(path)), None)
+    if recovery is None:
+        return
+    active = App.ActiveDocument.Name if App.ActiveDocument else ""
+    previous_errors = len(recovery["cleanup_errors"])
+    try:
+        for key in tuple(recovery["documents"]):
+            # Only the exact failed-load batch is eligible. Explicit Close and
+            # later name reuse remove this identity before any new owner exists.
+            if _failed_loads.get(key) is not recovery:
+                continue
+            try:
+                doc = document({"op": "close", "document": key,
+                                "expected_revision": revision_request("current", key)}, writable=True)
+                close_document(doc)
+            except Exception as error:
+                recovery["cleanup_errors"].append(cleanup_diagnostic(key, error))
+    finally:
+        try:
+            restore_active_document(active)
+        except Exception as error:
+            recovery["cleanup_errors"].append(cleanup_diagnostic("active document restore", error))
+    recovery["documents"] = [key for key in recovery["documents"] if _failed_loads.get(key) is recovery]
+    if recovery["documents"] or len(recovery["cleanup_errors"]) != previous_errors:
+        raise load_cleanup_failure(recovery)
+
+
+def registered_root(key):
+    return revision_request('lookup', key) is not None
+
+
+def validate_external_source(doc):
+    # Exactly the authoritative restored-input and proxy admission used by root
+    # Open. Sources stay readonly on disk; stale saved BReps are regenerated in
+    # their own native document before any root transaction can begin.
+    _native_suppression.attach(doc)
+    HoleTask.restore_inputs(doc, doc.FileName)
+    recompute_document(doc)
+    for obj in doc.Objects:
+        if obj.isDerivedFrom('Sketcher::SketchObject') and obj.solve() != 0:
+            fail('invalid_model', obj.Name + ': native source sketch solver rejected restored constraints')
+    recompute_document(doc)
+    validate(doc)
+
+
+def prepare_assembly_sources(doc, edits, active=False):
+    recover_external_edges(doc)
+    if any(e.get('op') == 'assembly_relink' and e.get('solve_joints') is not True for e in edits):
+        fail('assembly_update_mode_unavailable', 'Pinned native Assembly recompute solves automatically. Independent link update without solving is unavailable without changing global preferences.')
+    for edit in edits:
+        if edit.get('op') == 'assembly_insert' and edit.get('external_source') is not None and not doc.FileName:
+            fail('assembly_save_required', 'Save as the root assembly FCStd before external insertion')
+        if edit.get('op') == 'assembly_relink':
+            old = AssemblySources.stored(object_in(doc, edit['object']))
+            selected = edit.get('external_source', {})
+            if old is None or any(old.get(k) != selected.get(k) for k in ('document_uid', 'object', 'object_id', 'type')):
+                fail('source_identity', 'Relink requires the same native document UUID and object ID')
+    external = [e for e in edits if e.get('external_source') is not None]
+    if active and external:
+        # Never open/close native documents inside an owned preview. Only already
+        # loaded, immutable sources may participate in replacement/replay.
+        for edit in external:
+            AssemblySources.resolve(edit['external_source'])
+    else:
+        before = set(App.listDocuments())
+        readonly_before = set(AssemblySources._readonly_paths)
+        active_owner = App.ActiveDocument.Name if App.ActiveDocument else ""
+        paths = {str(Path(e['external_source']['path']).expanduser().resolve()) for e in external
+                 if isinstance(e.get('external_source'), dict) and isinstance(e['external_source'].get('path'), str)}
+        path = next(iter(paths)) if len(paths) == 1 else None
+        if path is not None:
+            retry_failed_open(path, "assembly_sources")
+            retry_failed_open(path, "source_cleanup")
+            before = set(App.listDocuments())
+        try:
+            AssemblySources.prepare(edits, registered_root, validate_external_source)
+        except Exception as error:
+            cleanup_failed_load("assembly_sources", path, before, active_owner, error, readonly_before)
+            raise
+    # Relink is the deliberate recovery action for a changed or missing source.
+    # All other mutation routes reject stale sources before native history starts.
+    if not any(e.get('op') == 'assembly_relink' for e in edits):
+        AssemblySources.check(doc)
+
+
+def recover_external_edges(doc):
+    if AssemblySources.recovery_metadata(doc) is not None:
+        try:
+            AssemblySources.recover_edges(doc)
+        finally:
+            # Native restoration may change aliases even on rejection. Existing
+            # admission already checked revision, lease and registered ownership.
+            bump(doc)
+
+
 def dispatch(request):
     if request.get("version") != VERSION:
         fail("unsupported_version", "Expected protocol version 1")
     if type(request.get("id")) is not int:
         fail("invalid_request", "Request id must be an integer")
     op = request.get("op")
+    _load_close_errors.clear()
     if op == "capabilities":
         return {"protocol_version": VERSION, "freecad_version": list(App.Version()),
                 "occt_version": Part.OCC_VERSION, "process_id": os.getpid(), "operations": OPERATIONS,
@@ -1256,7 +1809,8 @@ def dispatch(request):
                                 "legacy_requires_original_state": True},
                 "assembly": {"container_type": "Assembly::AssemblyObject", "instance_type": "App::Link",
                              "joint_types": list(AssemblyAuthoring.JOINT_TYPES),
-                             "component_sources": ["local_document"], "external_file_insertion": False}}
+                             "component_sources": ["local_document", "external_fcstd"], "external_file_insertion": True,
+                             "source_identity_version": 1, "in_place_source_reload": False}}
     if op == "feature_schema":
         type_id = request.get("type")
         if type_id not in _feature_schemas:
@@ -1267,10 +1821,39 @@ def dispatch(request):
             revision_request("check", doc.Name, expected_revision=request.get("expected_revision"))
             return DocumentUnits.schema(_feature_schemas[type_id], doc, request.get("values", {}))
         return _feature_schemas[type_id]
-    lease("global", request=request)
+    terminal_recovery = admit_global(request)
+    previous_active = App.ActiveDocument.Name if App.ActiveDocument else ""
+    if _uncertain_closes and op in ("new", "open", "assembly_sources"):
+        fail("document_unavailable", "Resolve uncertain native Close before loading documents: "
+             + ", ".join(sorted(_uncertain_closes)))
+    key = request.get("document")
+    if isinstance(key, str) and key in _uncertain_closes:
+        if op == "inspect":
+            return {"document": key, "revision": revision_request("current", key),
+                "objects": [], "available": False, "preview": None, "sketch_edit": None,
+                "recovery": _failed_loads[key]}
+        if op == "close":
+            lease("pre_revision", key, request=request)
+            revision_request("check", key, expected_revision=request.get("expected_revision"))
+            lease("local", key, request=request)
+            try:
+                close_loaded_document(key)
+                return finish_closed_document(key)
+            finally:
+                if terminal_recovery:
+                    restore_active_document(previous_active)
     if op in ("new", "open"):
+        if op == "open":
+            path = native_path(request["path"])
+            # One explicit same-path Open retries this batch's Close exactly
+            # once. Never retry native work in a loop or reopen a partial batch.
+            retry_failed_open(path)
+            if any(d.FileName and AssemblySources.same_file(d.FileName, path)
+                   for key, d in App.listDocuments().items() if key in _failed_loads):
+                fail("document_unavailable", "This native file still has a quarantined owner; close its failed-load batch before Open")
         before = set(App.listDocuments())
-        active = App.ActiveDocument
+        readonly_before = set(AssemblySources._readonly_paths)
+        active = App.ActiveDocument.Name if App.ActiveDocument else ""
         try:
             if op == "new":
                 key = name(request["name"])
@@ -1279,11 +1862,16 @@ def dispatch(request):
                 doc = App.newDocument(key)
             else:
                 path = native_path(request["path"])
+                if AssemblySources.protected_path(path):
+                    fail('source_ownership', 'This FCStd is owned as a readonly assembly dependency in this worker. It cannot become an editable root. Open an independent worker to edit source documents explicitly.')
                 if not Path(path).is_file():
                     fail("not_found", "Native document does not exist")
                 if any(os.path.normcase(d.FileName) == os.path.normcase(path) for d in App.listDocuments().values()):
                     fail("already_open", "Native document is already open")
+                AssemblySources.prepare_open(path, registered_root, validate_external_source)
                 doc = App.openDocument(path)
+                AssemblySources.claim(before, lambda key: key == doc.Name or registered_root(key), validate_external_source)
+                AssemblySources.check(doc)
             _native_suppression.attach(doc)
             doc.UndoMode = 1
             if op == "open":
@@ -1298,12 +1886,8 @@ def dispatch(request):
             recompute_document(doc)
             validate(doc)
             state = prepare_state(doc)
-        except Exception:
-            for key in set(App.listDocuments()) - before:
-                App.closeDocument(key)
-                _native_suppression.detach(key)
-            if active is not None and active.Name in App.listDocuments():
-                App.setActiveDocument(active.Name)
+        except Exception as error:
+            cleanup_failed_load(op, path if op == "open" else None, before, active, error, readonly_before)
             raise
         return publish_state(doc, state)
     if op not in OPERATIONS:
@@ -1311,6 +1895,27 @@ def dispatch(request):
     doc = document(request, writable=op in ("transaction", "undo", "redo", "save", "close",
                                            "preview", "preview_commit", "preview_cancel",
                                            "sketch_begin", "sketch_finish", "sketch_cancel", "export_exchange", "document_settings"))
+    if op == 'assembly_sources':
+        # Loading is native global activity even though source ownership is read
+        # only. Use exactly the Rust lease/revision/poison guards, without
+        # selecting another active document or opening a native transaction.
+        lease('pre_revision', doc.Name, request=request)
+        revision_request('check', doc.Name, expected_revision=request.get('expected_revision'))
+        lease('local', doc.Name, request=request)
+        if not doc.FileName:
+            fail('assembly_save_required', 'Save as the root assembly FCStd before choosing an external component')
+        path = native_path(request['path'])
+        retry_failed_open(path, "assembly_sources")
+        retry_failed_open(path, "source_cleanup")
+        before = set(App.listDocuments())
+        active = App.ActiveDocument.Name if App.ActiveDocument else ""
+        readonly_before = set(AssemblySources._readonly_paths)
+        try:
+            result = AssemblySources.browse(path, registered_root, validate_external_source)
+        except Exception as error:
+            cleanup_failed_load("assembly_sources", path, before, active, error, readonly_before)
+            raise
+        return {'document': doc.Name, 'revision': revision_request('current', doc.Name), **result}
     if op == "quantities":
         lease("read_guard", doc.Name)
         revision_request("check", doc.Name, expected_revision=request.get("expected_revision"))
@@ -1350,6 +1955,7 @@ def dispatch(request):
     if op == "measure":
         lease("read_guard", doc.Name)
         revision_request("check", doc.Name, expected_revision=request.get("expected_revision"))
+        AssemblySources.check(doc)
         active = sketch_metadata(doc)
         try:
             result = Measurements.measure(doc, request, active["object"] if active else None)
@@ -1360,7 +1966,11 @@ def dispatch(request):
     if op == "inspect":
         return snapshot(doc)
     if op == "transaction":
-        return transaction(doc, request)
+        try:
+            return transaction(doc, request, terminal_recovery)
+        finally:
+            if terminal_recovery:
+                restore_active_document(previous_active)
     if op == "export_exchange":
         validate(doc)
         try:
@@ -1384,6 +1994,7 @@ def dispatch(request):
             ExpressionLinks.repair_new(doc, names_before)
             recompute_document(doc)
             validate(doc)
+            AssemblySources.check(doc)
             state = prepare_state(doc)
         except Exception:
             try:
@@ -1398,23 +2009,41 @@ def dispatch(request):
             raise
         return publish_state(doc, state)
     if op == "save":
+        recovering_edges = AssemblySources.recovery_metadata(doc) is not None
+        recover_external_edges(doc)
         validate(doc)
+        AssemblySources.check(doc)
         path = native_path(request["path"])
-        doc.saveAs(path)
+        if AssemblySources.protected_path(path):
+            fail('source_ownership', 'Readonly source paths cannot be overwritten, including after browsing or closing their native documents')
+        if any(d.FileName and AssemblySources.same_file(d.FileName, path)
+               for d in App.listDocuments().values() if d != doc):
+            fail('source_ownership', 'Save cannot overwrite another root or readonly source file')
+        if any(obj.TypeId == 'App::Link' and AssemblySources.stored(obj) is not None for obj in doc.Objects):
+            try:
+                NativeSaves.save(doc, path)
+            except NativeSaves.SaveError as error:
+                bump(doc)
+                fail(error.code, str(error))
+        else:
+            doc.saveAs(path)
+            NativeSaves.close(doc.Name)
         bump(doc)
-        return {"document": doc.Name, "revision": revision_request("current", doc.Name), "path": path}
+        result = {"document": doc.Name, "revision": revision_request("current", doc.Name), "path": path, "save_recovery": None, "recovery_only": False}
+        if recovering_edges:
+            # The Editor may hold an unresolved snapshot from a rejected Save.
+            # Publish the repaired native graph with the successful retry.
+            result["state"] = snapshot(doc)
+        return result
     if op == "close":
-        key = doc.Name
-        App.closeDocument(key)
-        _native_suppression.detach(key)
-        revision_request("close", key)
-        lease("close", key)
-        _native_previews.pop(key, None)
-        _native_sketch_sessions.pop(key, None)
-        journal(key, "end")
-        return {"document": key, "closed": True}
+        try:
+            return close_document(doc)
+        finally:
+            if terminal_recovery:
+                restore_active_document(previous_active)
     if op in ("mesh", "topology"):
         lease("read_guard", doc.Name)
+        AssemblySources.check(doc)
         validate(doc)
         obj = object_in(doc, request["object"])
         if not hasattr(obj, "Shape") or obj.Shape.isNull():
@@ -1465,12 +2094,19 @@ def main():
             if not isinstance(exc, Failure):
                 traceback.print_exc(file=sys.stderr)
             response = {"version": VERSION, "id": request.get("id") if isinstance(request, dict) else None,
-                        "ok": False, "error": {"code": exc.code if isinstance(exc, Failure) else "native_error",
+                        "ok": False, "error": {"code": exc.code if isinstance(exc, (Failure, AssemblySources.SourceError)) else "native_error",
                                                 "message": str(exc)}}
         _protocol.write(json.dumps(response, allow_nan=False, separators=(",", ":")) + "\n")
         _protocol.flush()
     for key in list(App.listDocuments()):
         App.closeDocument(key)
+
+
+# Source scratch/autoload lifetimes share the same guarded native Close and
+# saved-name observer ordering as writable roots and failed-Open recovery.
+AssemblySources.close_native = close_loaded_document
+AssemblySources.restore_active = restore_active_document
+AssemblySources.guard_existing = check_dependencies
 
 
 if __name__ == "__main__":

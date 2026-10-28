@@ -7,6 +7,16 @@ impl Editor {
         self.state["available"] == false
     }
 
+    pub(super) fn source_recovery(&self) -> bool {
+        self.state["recovery_only"] == true
+            && self.state["recovery_available"] == true
+            && self.state["save_recovery"]["dirty"] == true
+            && self.state["save_recovery"]["live_graph_restored"] == false
+            && self.state["save_recovery"]["pending_edges"]
+                .as_array()
+                .is_some_and(|edges| !edges.is_empty())
+    }
+
     pub(super) fn reset_document_interaction(&mut self) {
         self.measurement_ui = measurements::MeasurementUi::default();
         self.sketch = None;
@@ -37,15 +47,71 @@ impl Editor {
         {
             self.pending_file = Some(FileAction::Recover);
         }
+        if let Some(dependents) = self.state["close_dependents"].as_array() {
+            for (index, owner) in dependents.iter().enumerate() {
+                if let (Some(document), Some(revision), Some(owner_revision)) = (
+                    owner["document"].as_str(),
+                    owner["revision"].as_u64(),
+                    self.state["revision"].as_u64(),
+                ) {
+                    if ui
+                        .add_enabled(
+                            !self.busy && self.pending_file.is_none(),
+                            egui::Button::new(format!("Close dependent {document}...")),
+                        )
+                        .clicked()
+                    {
+                        self.pending_file = Some(FileAction::RecoverDependent {
+                            index,
+                            owner_revision,
+                            revision,
+                            remove_references: false,
+                        });
+                    }
+                    if owner["reference_removals"]
+                        .as_array()
+                        .is_some_and(|edits| !edits.is_empty())
+                        && ui
+                            .add_enabled(
+                                !self.busy && self.pending_file.is_none(),
+                                egui::Button::new(format!("Remove references in {document}...")),
+                            )
+                            .clicked()
+                    {
+                        self.pending_file = Some(FileAction::RecoverDependent {
+                            index,
+                            owner_revision,
+                            revision,
+                            remove_references: true,
+                        });
+                    }
+                }
+            }
+        }
     }
 
     pub(super) fn file_action_dialog(&mut self, ctx: &egui::Context) {
         let Some(action) = self.pending_file else {
             return;
         };
-        let recovery = matches!(action, FileAction::Recover);
+        let recovery = matches!(
+            action,
+            FileAction::Recover | FileAction::RecoverDependent { .. }
+        );
         egui::Modal::new(egui::Id::new("unsaved")).show(ctx, |ui| {
-            if recovery {
+            if let FileAction::RecoverDependent { index, remove_references, .. } = action {
+                let owner = &self.state["close_dependents"][index];
+                ui.heading(format!("{} {}?", if remove_references { "Remove references in" } else { "Close dependent" }, owner["document"].as_str().unwrap_or_default()));
+                ui.label(owner["path"].as_str().unwrap_or_default());
+                if remove_references {
+                    ui.label("Remove only these native Link objects. Both documents stay open; other unsaved work is retained.");
+                    for edit in owner["reference_removals"].as_array().into_iter().flatten() {
+                        ui.label(format!("{} (native ID {})", edit["object"].as_str().unwrap_or_default(), edit["native_id"]));
+                    }
+                } else {
+                    ui.label("This dependent's unsaved changes will be lost. The unavailable document stays open.");
+                }
+            } else if recovery {
                 ui.heading("Close unavailable document?");
                 ui.label("Recovery failed. Close this document, then use New or Open to continue.");
                 ui.label("Unsaved changes and the active operation will be lost. Saved files will not change.");
@@ -56,7 +122,9 @@ impl Editor {
                 if ui
                     .add_enabled(
                         !self.busy && (recovery || self.draft.is_none()),
-                        egui::Button::new(if recovery {
+                        egui::Button::new(if matches!(action, FileAction::RecoverDependent { remove_references: true, .. }) {
+                            "Remove listed references"
+                        } else if recovery {
                             "Close document and discard"
                         } else {
                             "Discard"

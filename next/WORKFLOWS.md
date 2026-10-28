@@ -2992,6 +2992,12 @@ Current compatibility is a separate default check. It requires exact native stab
 
 ## Later document-unit bundle
 
+Current external FCStd assembly component instructions are in
+[External native assembly components](EXTERNAL-ASSEMBLY.md). This dated
+implementation note does not revise the frozen audit, its routes, requirement
+statuses or acceptance claims. Independent source-update/solver controls,
+offline missing-source recovery and physical GUI acceptance remain open.
+
 The separate [Native document units](DOCUMENT-UNITS.md) instructions cover the
 Units menu, Apply/Cancel, saved settings, quantity editing, shared agent access
 and the complete current-route inventory. The historical tables and acceptance

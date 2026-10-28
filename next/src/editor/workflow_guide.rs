@@ -68,6 +68,11 @@ fn matches(family: &Family, query: &str) -> bool {
 fn instructions(ui: &mut egui::Ui, ctx: &egui::Context) {
     let pages = [
         (
+            "External assembly components",
+            include_str!("../../EXTERNAL-ASSEMBLY.md"),
+            Some("UI workflow"),
+        ),
+        (
             "Assembly",
             include_str!("../../ASSEMBLY.md"),
             Some("UI workflow"),

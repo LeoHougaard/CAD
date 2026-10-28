@@ -624,3 +624,473 @@ mod fit_tree_selection_tests;
 
 #[path = "popup_ownership_tests.rs"]
 mod popup_ownership_tests;
+
+fn tutorial_key(n: &mut Native, key: Key, modifiers: egui::Modifiers) {
+    for pressed in [true, false] {
+        n.frame(vec![egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers,
+        }]);
+    }
+}
+fn tutorial_click(n: &mut Native, point: [f64; 3]) {
+    let pos = n.editor.viewport.sketch_screen_point(point);
+    for pressed in [true, false] {
+        n.frame(vec![
+            egui::Event::PointerMoved(pos),
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+    }
+}
+
+#[test]
+#[ignore = "requires CAD_LIFECYCLE_RUNTIME and CAD_LIFECYCLE_OUTPUT"]
+fn tutorial_sketch_keyboard_and_native_rectangles() {
+    let mut n = Native::new("tutorial-rectangle-keys");
+    n.send("new", json!({"name":"TutorialRectangleFixture"}), true);
+    // Fixture preparation is separate from the tutorial keyboard assertions.
+    n.editor.prepare_new_sketch();
+    n.editor.sketch = Some("Sketch".into());
+    n.transaction(json!([{"op":"add_object","type":"Sketcher::SketchObject","name":"Sketch"}]));
+    n.receive("sketch_begin", true);
+    n.frame(vec![]);
+    tutorial_key(&mut n, Key::G, egui::Modifiers::SHIFT);
+    assert_eq!(
+        n.editor.sketch_ui.tool,
+        Draw::Select,
+        "Shift+G is not corner rectangle"
+    );
+    n.editor.busy = true;
+    tutorial_key(&mut n, Key::G, egui::Modifiers::NONE);
+    assert_eq!(
+        n.editor.sketch_ui.tool,
+        Draw::Select,
+        "busy input belongs to the pending job"
+    );
+    n.editor.busy = false;
+    egui::Popup::open_id(&n.ctx, egui::Id::new("tutorial-owner-popup"));
+    tutorial_key(&mut n, Key::G, egui::Modifiers::NONE);
+    assert_eq!(
+        n.editor.sketch_ui.tool,
+        Draw::Select,
+        "popup owns the frame"
+    );
+    egui::Popup::close_all(&n.ctx);
+    tutorial_key(&mut n, Key::G, egui::Modifiers::NONE);
+    assert_eq!(n.editor.sketch_ui.tool, Draw::Rectangle);
+    tutorial_key(&mut n, Key::G, egui::Modifiers::NONE);
+    assert_eq!(n.editor.sketch_ui.tool, Draw::Select);
+    tutorial_key(&mut n, Key::R, egui::Modifiers::NONE);
+    assert_eq!(n.editor.sketch_ui.tool, Draw::CenterRectangle);
+    tutorial_key(&mut n, Key::Q, egui::Modifiers::NONE);
+    assert!(n.editor.sketch_ui.construction);
+    tutorial_click(&mut n, [10., 10., 0.]);
+    tutorial_click(&mut n, [15., 14., 0.]);
+    n.receive("transaction", true);
+    let sketch = object(&n.editor.state, "Sketch");
+    assert_eq!(sketch["sketch"]["geometry_count"], 4);
+    assert!(
+        sketch["sketch"]["geometry"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|g| g["construction"] == true)
+    );
+    tutorial_key(&mut n, Key::Q, egui::Modifiers::NONE);
+    tutorial_key(&mut n, Key::G, egui::Modifiers::NONE);
+    tutorial_click(&mut n, [25., 10., 0.]);
+    tutorial_click(&mut n, [30., 14., 0.]);
+    n.receive("transaction", true);
+    assert_eq!(
+        object(&n.editor.state, "Sketch")["sketch"]["geometry_count"],
+        8
+    );
+}
+
+#[test]
+#[ignore = "requires CAD_LIFECYCLE_RUNTIME and CAD_LIFECYCLE_OUTPUT"]
+fn tutorial_shift_extrude_finishes_native_session_with_exact_profile() {
+    let mut n = Native::new("tutorial-extrude-handoff");
+    n.send("new", json!({"name":"TutorialExtrudeFixture"}), true);
+    // Fixture preparation: a native Body and sketch; tutorial actions start after Begin.
+    n.editor.prepare_new_sketch();
+    n.editor.sketch = Some("Sketch".into());
+    n.transaction(json!([
+        {"op":"add_object","type":"PartDesign::Body","name":"Body"},
+        {"op":"add_object","type":"Sketcher::SketchObject","name":"Sketch","body":"Body"}
+    ]));
+    n.receive("sketch_begin", true);
+    n.editor.selected_object = Some("Body".into());
+    n.editor.body_ui.selected = vec!["Body".into()];
+    n.frame(vec![]);
+    tutorial_key(&mut n, Key::E, egui::Modifiers::SHIFT);
+    assert!(n.editor.busy && n.editor.sketch_ui.session.is_some());
+    n.receive("sketch_finish", true);
+    assert!(n.editor.sketch_ui.session.is_none());
+    let draft = n.editor.draft.as_ref().expect("native Extrude task");
+    assert_eq!(draft.parameters["type"], "PartDesign::Pad");
+    assert_eq!(draft.parameters["properties"]["Profile"]["link"], "Sketch");
+    assert!(n.editor.busy, "native schema request must be admitted");
+    n.receive("feature_schema", true);
+}
+
+#[test]
+#[ignore = "requires CAD_LIFECYCLE_RUNTIME and CAD_LIFECYCLE_OUTPUT"]
+fn tutorial_revolve_tab_axis_and_enter_commit() {
+    let mut n = Native::new("tutorial-revolve-axis");
+    n.send("new", json!({"name":"TutorialRevolveFixture"}), true);
+    n.editor.prepare_new_sketch();
+    n.editor.sketch = Some("Sketch".into());
+    n.transaction(json!([
+        {"op":"add_object","type":"PartDesign::Body","name":"Body"},
+        {"op":"add_object","type":"Sketcher::SketchObject","name":"Sketch","body":"Body"}
+    ]));
+    n.receive("sketch_begin", true);
+    // Fixture coordinates, not dimensions specified by the Tech Tip.
+    n.transaction(json!([
+        {"op":"geometry","object":"Sketch","kind":"line","start":[5,1,0],"end":[10,1,0]},
+        {"op":"geometry","object":"Sketch","kind":"line","start":[10,1,0],"end":[10,5,0]},
+        {"op":"geometry","object":"Sketch","kind":"line","start":[10,5,0],"end":[5,5,0]},
+        {"op":"geometry","object":"Sketch","kind":"line","start":[5,5,0],"end":[5,1,0]},
+        {"op":"constraint","object":"Sketch","kind":"Coincident","args":[0,2,1,1]},
+        {"op":"constraint","object":"Sketch","kind":"Coincident","args":[1,2,2,1]},
+        {"op":"constraint","object":"Sketch","kind":"Coincident","args":[2,2,3,1]},
+        {"op":"constraint","object":"Sketch","kind":"Coincident","args":[3,2,0,1]}
+    ]));
+    n.frame(vec![]);
+    tutorial_key(&mut n, Key::W, egui::Modifiers::SHIFT);
+    n.receive("sketch_finish", true);
+    assert_eq!(
+        n.editor.draft.as_ref().unwrap().parameters["properties"]["Profile"]["link"],
+        "Sketch"
+    );
+    n.receive("feature_schema", true);
+    std::thread::sleep(Duration::from_millis(200));
+    n.frame(vec![]);
+    if n.editor.busy {
+        n.receive("preview", true);
+    }
+    tutorial_key(&mut n, Key::Tab, egui::Modifiers::NONE);
+    assert!(n.editor.property_ui.axis_pick);
+    let point = [7., 0., 0.];
+    let screen = n.editor.viewport.sketch_screen_point(point);
+    let hit = n.editor.viewport.sketch_hit(screen);
+    fs::write(n.folder.join("axis-before-click.json"), serde_json::to_vec_pretty(&json!({
+        "point":point, "screen":[screen.x,screen.y], "hit":hit,
+        "axis_pick":n.editor.property_ui.axis_pick,
+        "response_rect":n.editor.viewport.response.as_ref().map(|r| json!([r.rect.min.x,r.rect.min.y,r.rect.max.x,r.rect.max.y]))
+    })).unwrap()).unwrap();
+    assert_eq!(
+        hit,
+        Some(SketchElement {
+            index: -1,
+            point: 0
+        }),
+        "point must identify native horizontal axis"
+    );
+    tutorial_click(&mut n, point);
+    assert!(
+        !n.editor.property_ui.axis_pick,
+        "axis click must be accepted"
+    );
+    assert_eq!(
+        n.editor.draft.as_ref().unwrap().parameters["properties"]["ReferenceAxis"],
+        json!({"link":"Sketch","subelements":["H_Axis"]})
+    );
+    std::thread::sleep(Duration::from_millis(200));
+    n.frame(vec![]);
+    n.receive("preview", true);
+    tutorial_key(&mut n, Key::Enter, egui::Modifiers::NONE);
+    n.receive("preview_commit", true);
+    assert!(n.editor.draft.is_none());
+    let solid = objects(&n.editor.state)
+        .iter()
+        .find(|o| o["type"] == "PartDesign::Revolution")
+        .unwrap();
+    assert_eq!(solid["shape"]["valid"], true);
+    assert_eq!(solid["shape"]["solids"], 1);
+    let committed_name = solid["name"].as_str().unwrap().to_owned();
+    let committed_axis = solid["properties"]["ReferenceAxis"].clone();
+    assert_eq!(
+        committed_axis,
+        json!({"link":"Sketch","subelements":["H_Axis"]})
+    );
+    n.send("undo", json!({}), true);
+    assert!(
+        !objects(&n.editor.state)
+            .iter()
+            .any(|o| o["name"] == committed_name)
+    );
+    n.send("redo", json!({}), true);
+    let replayed = object(&n.editor.state, &committed_name);
+    assert_eq!(replayed["properties"]["ReferenceAxis"], committed_axis);
+    assert_eq!(replayed["shape"]["solids"], 1);
+    let path = n.save("tutorial-revolve.FCStd");
+    n.send("close", json!({}), true);
+    n.send("open", json!({"path":path}), true);
+    let reopened = object(&n.editor.state, &committed_name);
+    assert_eq!(reopened["properties"]["ReferenceAxis"], committed_axis);
+    assert_eq!(reopened["shape"]["solids"], 1);
+}
+
+#[test]
+#[ignore = "requires CAD_LIFECYCLE_RUNTIME and CAD_LIFECYCLE_OUTPUT"]
+fn tutorial_failed_finish_retains_sketch_until_cancel_and_redo() {
+    let mut n = Native::new("tutorial-failed-finish");
+    n.send("new", json!({"name":"TutorialFailedFinishFixture"}), true);
+    n.transaction(json!([
+        {"op":"add_object","type":"PartDesign::Body","name":"Body"},
+        {"op":"add_object","type":"Sketcher::SketchObject","name":"Sketch","body":"Body"},
+        {"op":"geometry","object":"Sketch","kind":"line","start":[5,1,0],"end":[10,1,0]},
+        {"op":"geometry","object":"Sketch","kind":"line","start":[10,1,0],"end":[10,5,0]},
+        {"op":"geometry","object":"Sketch","kind":"line","start":[10,5,0],"end":[5,5,0]},
+        {"op":"geometry","object":"Sketch","kind":"line","start":[5,5,0],"end":[5,1,0]},
+        {"op":"add_object","type":"PartDesign::Pad","name":"Pad","body":"Body"},
+        {"op":"set","object":"Pad","property":"Profile","value":{"link":"Sketch"}},
+        {"op":"set","object":"Pad","property":"Length","value":5}
+    ]));
+    n.editor.request_sketch("Sketch");
+    n.receive("sketch_begin", true);
+    n.transaction(json!([{"op":"delete_geometry","object":"Sketch","index":0}]));
+    n.frame(vec![]);
+    tutorial_key(&mut n, Key::E, egui::Modifiers::SHIFT);
+    n.receive("sketch_finish", false);
+    assert!(n.editor.sketch_ui.session.is_some());
+    assert!(n.editor.draft.is_none());
+    assert!(n.editor.sketch_ui.after_finish.is_none());
+    tutorial_key(&mut n, Key::Z, egui::Modifiers::COMMAND);
+    n.receive("undo", true);
+    assert_eq!(
+        object(&n.editor.state, "Sketch")["sketch"]["geometry_count"],
+        4
+    );
+    tutorial_key(
+        &mut n,
+        Key::Z,
+        egui::Modifiers {
+            shift: true,
+            ..egui::Modifiers::COMMAND
+        },
+    );
+    n.receive("redo", true);
+    assert_eq!(
+        object(&n.editor.state, "Sketch")["sketch"]["geometry_count"],
+        3
+    );
+    n.click("Cancel");
+    n.receive("sketch_cancel", true);
+    assert!(n.editor.sketch_ui.session.is_none());
+    assert_eq!(
+        object(&n.editor.state, "Sketch")["sketch"]["geometry_count"],
+        4
+    );
+}
+
+#[test]
+#[ignore = "requires CAD_LIFECYCLE_RUNTIME and CAD_LIFECYCLE_OUTPUT"]
+fn tutorial_shift_sketch_selected_native_plane_and_normal() {
+    let mut n = Native::new("tutorial-plane-entry");
+    n.send("new", json!({"name":"TutorialPlaneFixture"}), true);
+    // Fixture prepares a Body; subsequent selection and keys are actual Editor actions.
+    n.transaction(json!([{"op":"add_object","type":"PartDesign::Body","name":"Body"}]));
+    n.frame(vec![]);
+    tutorial_key(&mut n, Key::M, egui::Modifiers::COMMAND);
+    assert!(
+        !n.editor.measurement_is_open(),
+        "Ctrl+M is reserved for the missing Mate connector"
+    );
+    n.click("References");
+    n.click("XY-plane");
+    assert_eq!(n.editor.selected_object.as_deref(), Some("XY_Plane"));
+    tutorial_key(&mut n, Key::S, egui::Modifiers::SHIFT);
+    assert!(
+        n.editor.busy,
+        "selected plane should start native sketch creation without a chooser"
+    );
+    n.receive("transaction", true);
+    n.receive("sketch_begin", true);
+    assert!(n.editor.sketch_ui.session.is_some());
+    assert!(n.editor.sketch_creation.is_none());
+    n.editor.viewport.iso(); // Fixture prepares an oblique view before the tutorial N action.
+    tutorial_key(&mut n, Key::N, egui::Modifiers::NONE);
+    let origin = n.editor.viewport.sketch_screen_point([0., 0., 0.]);
+    let right = n.editor.viewport.sketch_screen_point([10., 0., 0.]);
+    let up = n.editor.viewport.sketch_screen_point([0., 10., 0.]);
+    assert_eq!(origin.y, right.y);
+    assert_eq!(origin.x, up.x);
+    assert!(n.editor.sketch_ui.session.is_some());
+}
+
+#[test]
+#[ignore = "requires CAD_LIFECYCLE_RUNTIME and CAD_LIFECYCLE_OUTPUT"]
+fn tutorial_revolve_axis_mode_cancel_clears_overlay() {
+    let mut n = Native::new("tutorial-axis-cancel");
+    n.send("new", json!({"name":"TutorialAxisCancelFixture"}), true);
+    n.editor.prepare_new_sketch();
+    n.editor.sketch = Some("Sketch".into());
+    n.transaction(json!([
+        {"op":"add_object","type":"PartDesign::Body","name":"Body"},
+        {"op":"add_object","type":"Sketcher::SketchObject","name":"Sketch","body":"Body"}
+    ]));
+    n.receive("sketch_begin", true);
+    // Fixture coordinates, not dimensions specified by the Tech Tip.
+    n.transaction(json!([
+        {"op":"geometry","object":"Sketch","kind":"line","start":[5,1,0],"end":[10,1,0]},
+        {"op":"geometry","object":"Sketch","kind":"line","start":[10,1,0],"end":[10,5,0]},
+        {"op":"geometry","object":"Sketch","kind":"line","start":[10,5,0],"end":[5,5,0]},
+        {"op":"geometry","object":"Sketch","kind":"line","start":[5,5,0],"end":[5,1,0]},
+        {"op":"constraint","object":"Sketch","kind":"Coincident","args":[0,2,1,1]},
+        {"op":"constraint","object":"Sketch","kind":"Coincident","args":[1,2,2,1]},
+        {"op":"constraint","object":"Sketch","kind":"Coincident","args":[2,2,3,1]},
+        {"op":"constraint","object":"Sketch","kind":"Coincident","args":[3,2,0,1]}
+    ]));
+    n.frame(vec![]);
+    tutorial_key(&mut n, Key::W, egui::Modifiers::SHIFT);
+    n.receive("sketch_finish", true);
+    assert_eq!(
+        n.editor.draft.as_ref().unwrap().parameters["properties"]["Profile"]["link"],
+        "Sketch"
+    );
+    n.receive("feature_schema", true);
+    std::thread::sleep(Duration::from_millis(200));
+    n.frame(vec![]);
+    if n.editor.busy {
+        n.receive("preview", true);
+    }
+    tutorial_key(&mut n, Key::Tab, egui::Modifiers::NONE);
+    assert!(n.editor.property_ui.axis_pick);
+    n.click("View");
+    assert!(egui::Popup::is_any_open(&n.ctx));
+    n.frame(vec![]);
+    assert!(
+        egui::Popup::is_any_open(&n.ctx),
+        "axis overlay refresh must preserve the popup"
+    );
+    tutorial_key(&mut n, Key::Escape, egui::Modifiers::NONE);
+    assert!(!egui::Popup::is_any_open(&n.ctx));
+    assert!(
+        n.editor.property_ui.axis_pick,
+        "popup Escape must preserve axis selection"
+    );
+    n.click("Cancel");
+    n.receive("preview_cancel", true);
+    n.frame(vec![]);
+    assert!(n.editor.draft.is_none());
+    assert!(!n.editor.property_ui.axis_pick);
+    assert!(n.editor.property_ui.axis_profile.is_none());
+    let point = n.editor.viewport.sketch_screen_point([7., 0., 0.]);
+    assert!(n.editor.viewport.sketch_hit(point).is_none());
+    assert!(
+        !objects(&n.editor.state)
+            .iter()
+            .any(|o| o["type"] == "PartDesign::Revolution")
+    );
+    // Retry through the actual sketch tree row and the same shortcut.
+    let output = n.frame(vec![]);
+    let area = n
+        .ctx
+        .memory(|memory| memory.area_rect(egui::Id::new("features")))
+        .unwrap();
+    let hits: Vec<_> = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text() == "Sketch" => {
+                let rect = text.galley.rect.translate(text.pos.to_vec2());
+                area.contains(rect.center()).then_some(rect.center())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(hits.len(), 1, "one sketch tree row");
+    for _ in 0..2 {
+        for pressed in [true, false] {
+            n.frame(vec![
+                egui::Event::PointerMoved(hits[0]),
+                egui::Event::PointerButton {
+                    pos: hits[0],
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]);
+        }
+    }
+    n.receive("sketch_begin", true);
+    tutorial_key(&mut n, Key::W, egui::Modifiers::SHIFT);
+    n.receive("sketch_finish", true);
+    assert_eq!(
+        n.editor.draft.as_ref().unwrap().parameters["properties"]["Profile"]["link"],
+        "Sketch"
+    );
+    assert!(!n.editor.property_ui.axis_pick);
+    n.receive("feature_schema", true);
+}
+
+#[test]
+#[ignore = "requires CAD_LIFECYCLE_RUNTIME and CAD_LIFECYCLE_OUTPUT"]
+fn tutorial_axis_preview_reply_popup_escape_preserves_owner() {
+    let mut n = Native::new("tutorial-axis-reply");
+    n.send("new", json!({"name":"TutorialAxisReplyFixture"}), true);
+    n.editor.prepare_new_sketch();
+    n.editor.sketch = Some("Sketch".into());
+    n.transaction(json!([
+        {"op":"add_object","type":"PartDesign::Body","name":"Body"},
+        {"op":"add_object","type":"Sketcher::SketchObject","name":"Sketch","body":"Body"}
+    ]));
+    n.receive("sketch_begin", true);
+    // Fixture coordinates, not dimensions specified by the Tech Tip.
+    n.transaction(json!([
+        {"op":"geometry","object":"Sketch","kind":"line","start":[5,1,0],"end":[10,1,0]},
+        {"op":"geometry","object":"Sketch","kind":"line","start":[10,1,0],"end":[10,5,0]},
+        {"op":"geometry","object":"Sketch","kind":"line","start":[10,5,0],"end":[5,5,0]},
+        {"op":"geometry","object":"Sketch","kind":"line","start":[5,5,0],"end":[5,1,0]},
+        {"op":"constraint","object":"Sketch","kind":"Coincident","args":[0,2,1,1]},
+        {"op":"constraint","object":"Sketch","kind":"Coincident","args":[1,2,2,1]},
+        {"op":"constraint","object":"Sketch","kind":"Coincident","args":[2,2,3,1]},
+        {"op":"constraint","object":"Sketch","kind":"Coincident","args":[3,2,0,1]}
+    ]));
+    n.frame(vec![]);
+    tutorial_key(&mut n, Key::W, egui::Modifiers::SHIFT);
+    n.receive("sketch_finish", true);
+    assert_eq!(
+        n.editor.draft.as_ref().unwrap().parameters["properties"]["Profile"]["link"],
+        "Sketch"
+    );
+    n.receive("feature_schema", true);
+    std::thread::sleep(Duration::from_millis(200));
+    // Tab enables the axis selector; the same update dispatches the pending preview.
+    tutorial_key(&mut n, Key::Tab, egui::Modifiers::NONE);
+    assert!(n.editor.property_ui.axis_pick && n.editor.busy);
+    n.click("View");
+    assert!(egui::Popup::is_any_open(&n.ctx));
+    let reply = n
+        .raw
+        .recv_timeout(Duration::from_secs(25))
+        .expect("native preview reply");
+    assert_eq!(reply.op, "preview");
+    assert!(reply.accepted, "native preview: {:?}", reply.error);
+    n.events.push(json!({"op":reply.op,"accepted":reply.accepted,"error":reply.error,
+        "state":reply.state,"scenes":reply.scenes,"observation":"queued actual native preview before popup Escape"}));
+    n.record();
+    n.forward.send(reply).unwrap();
+    tutorial_key(&mut n, Key::Escape, egui::Modifiers::NONE);
+    assert!(!egui::Popup::is_any_open(&n.ctx));
+    assert!(n.editor.property_ui.axis_pick);
+    assert!(n.editor.draft.is_some() && !n.editor.busy);
+    tutorial_key(&mut n, Key::Enter, egui::Modifiers::NONE);
+    assert!(
+        n.editor.property_ui.axis_pick && n.editor.draft.is_some() && !n.editor.busy,
+        "Enter while selecting an axis must not commit"
+    );
+    n.click("Cancel");
+    n.receive("preview_cancel", true);
+}

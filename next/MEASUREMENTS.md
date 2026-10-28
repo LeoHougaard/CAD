@@ -7,7 +7,7 @@ gesture. Native FreeCAD 1.1.4 and OCCT 7.8.1 remain authoritative.
 ## Use the editor
 
 1. Open an FCStd document or create native geometry. Click **Measure** beside the
-   View controls, or press **Ctrl+M** while a text field has no focus.
+   View controls, or press **[** while a text field has no focus.
 2. Click an edge, face or vertex in the viewport. Use View's native picking filter
    for small vertices or overlapping elements. Click a tree row to measure the
    whole object. Bodies, nested Part containers and native Links are supported.

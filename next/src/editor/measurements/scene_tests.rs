@@ -104,7 +104,7 @@ fn native_measure_link_scene_selection_and_witness_frames() {
             n.editor.viewport.selected.as_ref().unwrap().subelement,
             "Vertex1"
         );
-        n.key(Key::M, egui::Modifiers::COMMAND);
+        n.key(Key::OpenBracket, egui::Modifiers::NONE);
         n.receive("measure", true);
         let selected = &n.editor.measurement_ui.result.as_ref().unwrap().selections[0];
         near(selected.center.value, world, 2e-7);
@@ -126,7 +126,7 @@ fn native_measure_link_scene_selection_and_witness_frames() {
         egui::Modifiers::SHIFT,
     );
     assert_eq!(n.editor.viewport.selections.len(), 2);
-    n.key(Key::M, egui::Modifiers::COMMAND);
+    n.key(Key::OpenBracket, egui::Modifiers::NONE);
     n.receive("measure", true);
     let result = n.editor.measurement_ui.result.as_ref().unwrap();
     let distance = result.distance.as_ref().unwrap();

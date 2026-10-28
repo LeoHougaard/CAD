@@ -5,9 +5,10 @@ import FreeCAD as App
 import document_units as DocumentUnits
 import Assembly
 import UtilsAssembly
+import assembly_sources as Sources
 
 OPERATIONS = {"assembly_create", "assembly_insert", "assembly_placement", "assembly_ground",
-              "assembly_joint", "assembly_remove", "assembly_solve"}
+              "assembly_joint", "assembly_remove", "assembly_solve", "assembly_relink"}
 # The pinned task interface, also declared by Rust's assembly_commands. Loading
 # the shipped joint proxies imports Qt and Coin; ordinary Part Studios and Link
 # display do not need those modules. Actual joint creation still uses the native
@@ -107,8 +108,10 @@ def local_instance(assembly, value):
     if obj.TypeId != "App::Link" or obj not in assembly.Group:
         reject("Choose a component instance in this assembly")
     source = obj.LinkedObject
-    if source is None or source.Document != assembly.Document:
-        reject("External or missing component references are preserved but cannot be authored here")
+    if source is None:
+        reject("Component source is missing; explicitly relink its native identity")
+    if source.Document != assembly.Document and Sources.stored(obj) is None:
+        reject("External component has no accepted source identity")
     return obj
 
 
@@ -184,6 +187,8 @@ def metadata(obj):
         data["instance_state"] = {"source": None if source is None else source.Name,
                                   "source_document": None if source is None else source.Document.Name,
                                   "source_path": None if source is None else source.Document.FileName,
+                                  "external_source": Sources.stored(obj),
+                                  "source_status": Sources.status(obj),
                                   "local": source is not None and source.Document == obj.Document,
                                   "grounded": bool(assembly.isPartGrounded(obj))}
     return data
@@ -214,19 +219,44 @@ def apply(doc, edit):
     if assembly.TypeId != "Assembly::AssemblyObject":
         reject("Choose a native Assembly container")
     group = joint_group(assembly)
+    if op == "assembly_relink":
+        obj = local_instance(assembly, edit["object"])
+        old = Sources.stored(obj)
+        if old is None:
+            reject("Choose a registered external component")
+        value = edit["external_source"]
+        source = Sources.resolve(value)
+        if any(old.get(k) != value.get(k) for k in ('document_uid', 'object', 'object_id', 'type')):
+            reject("Relink requires the same native document UUID and object ID", "source_identity")
+        updated = []
+        # A source update is root-owned and updates every instance of this exact
+        # source in the root, preserving instances, grounds and joint references.
+        for link in doc.Objects:
+            if link.TypeId == 'App::Link' and Sources.stored(link) == old:
+                pose = link.LinkPlacement
+                link.setLink(source)
+                link.LinkPlacement = pose
+                Sources.put(link, value)
+                updated.append(link.Name)
+        return {"object": obj.Name, "updated_instances": updated}
     if op == "assembly_insert":
         key = unique(doc, edit["name"])
-        source = object_in(doc, edit["source"])
-        if source.TypeId == "App::Link":
+        external = edit.get("external_source")
+        if external is not None and not doc.FileName:
+            reject("Save as the root assembly FCStd before inserting an external component", "assembly_save_required")
+        source = Sources.resolve(external) if external is not None else object_in(doc, edit["source"])
+        if source.TypeId == "App::Link" and external is None:
             source = source.getLinkedObject(True)
-        if source.Document != doc or source == assembly or assembly in source.OutListRecursive:
+        if (external is None and source.Document != doc) or source == assembly or assembly in source.OutListRecursive:
             reject("Component must be a local document source without an assembly dependency")
-        if not (source.isDerivedFrom("Part::Feature") or source.TypeId == "PartDesign::Body"):
+        if not (Sources.supported(source)):
             reject("Choose a local native Part feature or Body as the component source")
         if not hasattr(source, "Shape") or source.Shape.isNull():
             reject("Component source requires a native shape")
         link = assembly.newObject("App::Link", key)
         link.setLink(source)
+        if external is not None:
+            Sources.put(link, external)
         if "placement" in edit:
             link.LinkPlacement = placement(edit["placement"])
         return {"object": key, "source": source.Name}

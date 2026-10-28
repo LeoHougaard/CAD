@@ -330,7 +330,7 @@ fn native_measure_button_shortcut_clear_cancel_recompute_and_gesture_reads() {
     assert!(!n.editor.measurement_ui.open);
     n.receive("measure", true);
     assert!(n.editor.measurement_ui.result.is_none());
-    n.key(Key::M, egui::Modifiers::COMMAND);
+    n.key(Key::OpenBracket, egui::Modifiers::NONE);
     assert!(n.editor.measurement_ui.open);
     n.receive("measure", true);
     // Native preview remains owned after both successful and failed reads.
@@ -362,10 +362,10 @@ fn native_measure_button_shortcut_clear_cancel_recompute_and_gesture_reads() {
     n.editor.viewport.sketch_selection =
         vec![crate::sketch_commands::SketchElement { index: 0, point: 0 }];
     n.editor.sketch_ui.external = true;
-    n.key(Key::M, egui::Modifiers::COMMAND);
+    n.key(Key::OpenBracket, egui::Modifiers::NONE);
     assert!(!n.editor.measurement_ui.open && !n.editor.busy);
     n.editor.sketch_ui.external = false;
-    n.key(Key::M, egui::Modifiers::COMMAND);
+    n.key(Key::OpenBracket, egui::Modifiers::NONE);
     n.receive("measure", true);
     let session = n.editor.state.clone();
     assert_eq!(
@@ -383,7 +383,7 @@ fn native_measure_button_shortcut_clear_cancel_recompute_and_gesture_reads() {
     n.send("sketch_cancel", json!({"token":sketch_token}));
     // A changed selection while a read is in flight cannot publish its old result.
     n.editor.viewport.selections = vec![reference("Box", "Edge1")];
-    n.key(Key::M, egui::Modifiers::COMMAND);
+    n.key(Key::OpenBracket, egui::Modifiers::NONE);
     assert!(n.editor.busy);
     n.editor.viewport.selections = vec![reference("Box", "Vertex2")];
     n.receive("measure", true);
@@ -426,13 +426,13 @@ fn review_help_escape_then_measure_preserves_native_preview() {
     n.receive("preview", true);
     let before = n.editor.state.clone();
     let dirty = n.editor.dirty;
-    n.key(Key::M, egui::Modifiers::COMMAND);
+    n.key(Key::OpenBracket, egui::Modifiers::NONE);
     n.receive("measure", true);
     let measurement = format!("{:?}", n.editor.measurement_ui.result.as_ref().unwrap());
     n.key(Key::F1, egui::Modifiers::NONE);
     assert!(workflow_guide::active(&n.ctx));
     assert!(n.editor.measurement_ui.open);
-    n.key(Key::M, egui::Modifiers::COMMAND);
+    n.key(Key::OpenBracket, egui::Modifiers::NONE);
     n.key(Key::Z, egui::Modifiers::COMMAND);
     n.key(Key::S, egui::Modifiers::COMMAND);
     n.click("Parity checklist");
