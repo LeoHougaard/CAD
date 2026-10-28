@@ -1,0 +1,72 @@
+{
+  "schema": "development-acceptance-checkpoint-v1",
+  "time_utc": "2026-10-28T06:26:44.419625+00:00",
+  "application_source_commit": "d65956c924d435dda7b8335bad8edd8e593f4405",
+  "approval": false,
+  "tutorial_acceptance": {
+    "minimum_target": 100,
+    "discovered_video_candidates": 128,
+    "distinct_exercises_authenticated": false,
+    "ready": 0,
+    "complete_attempts": 0,
+    "complete_verified": 0,
+    "pass_rate": null,
+    "completion_estimate": null
+  },
+  "dimension_prototype2": {
+    "source_manifest": "e85bfaca437e11bae7e0808e667ebc9657c810225e00bbd4da60b48340692461",
+    "new_editor_tests": {
+      "passed": 19,
+      "failed": 0
+    },
+    "full_retained_editor_batch": {
+      "passed": 24,
+      "failed": 3,
+      "exit_code": 101
+    },
+    "historical_prototype1": {
+      "passed": 6,
+      "failed": 2
+    },
+    "stock_equalities": {
+      "passed": 54,
+      "failed": 11
+    },
+    "geometry_authority": "unresolved: ten dimension geometry XML differences and known native signed-zero roundtrip difference"
+  },
+  "private_close_recovery": {
+    "source_manifest": "7da59588b0cc2a746b40a9ffbe6b8e0d2447f78f4908e1467b7e33519dbf218a",
+    "packet_manifest": "1b39149072bb23dff375aa487eec47faaf958f09bd46123e89c4d37b99a277cd",
+    "tests": {
+      "public_source_close": 2,
+      "direct_owner_cases": 7,
+      "denials": 140,
+      "source_composition_cases": 9,
+      "new_actual_editor": 2,
+      "original_actual_editor": 1
+    },
+    "build_exit": 0,
+    "clippy_exit": 0,
+    "independent_R4": "pending",
+    "application_code_in_this_commit": false
+  },
+  "blockers": [
+    "Fresh sketch failed Begin can leave created native objects",
+    "New sketch creation/Cancel can replace prior native Redo; public provisional transaction abort does not preserve it",
+    "Native rollback may log partial-apply errors without returning failure",
+    "Restore workflow remains unavailable",
+    "New code has no physical tutorial acceptance; Windows computer-use connection is unavailable",
+    "Native child graceful EOF/exit0 behind Rust remains uncertified",
+    "Current composition platform CI/resource/full parity gates remain open"
+  ],
+  "published_pixel_evidence": {
+    "frozen_source": "61a4df32f4df82511612407b6030d987d5931b2c",
+    "bounded_routes": 8,
+    "full_tutorial_credit": 0,
+    "archive_status_exceptions": [
+      "H01 Profile.FullyConstrained Touched bit",
+      "S01 Sketch.FullyConstrained Touched bit"
+    ],
+    "status_cause_proven": false
+  }
+}
