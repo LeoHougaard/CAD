@@ -78,6 +78,19 @@ impl Reference {
     }
 }
 impl Viewport {
+    pub fn planes_visible(&self) -> bool {
+        self.planes_visible
+    }
+
+    /// Hide display planes without changing native object visibility or history.
+    pub fn toggle_planes(&mut self, state: &Value) {
+        self.planes_visible = !self.planes_visible;
+        if !self.planes_visible {
+            self.clear_standard_plane();
+        }
+        self.set_references(state);
+    }
+
     /// Refresh presentation-only native datums directly from the solved snapshot.
     /// Infinite reference Shapes are deliberately never tessellated for display.
     pub fn set_references(&mut self, state: &Value) {
@@ -108,6 +121,9 @@ impl Viewport {
                     return None;
                 }
                 let kind = descriptor["kind"].as_str()?;
+                if kind == "plane" && !self.planes_visible {
+                    return None;
+                }
                 if !matches!(
                     kind,
                     "plane" | "line" | "point" | "coordinate_system" | "origin"
@@ -304,6 +320,52 @@ impl Viewport {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn plane_display_toggle_preserves_axes_and_native_visibility() {
+        let mut viewport = Viewport::default();
+        viewport.top();
+        let state = json!({"revision":1,"objects":[
+            {"name":"Plane","properties":{"Visibility":true},"reference_display":{"kind":"plane","size":[20,20],"placement":{"position":[100,0,0]},"subelement":"Face1"}},
+            {"name":"Axis","properties":{"Visibility":true},"reference_display":{"kind":"line","size":[20,20],"line_axis":"x","subelement":"Edge1"}}
+        ]});
+        viewport.set_references(&state);
+        viewport.select_native_element(
+            Some(Selection {
+                object: "Plane".into(),
+                subelement: "Face1".into(),
+            }),
+            false,
+        );
+        viewport.toggle_planes(&state);
+        assert!(!viewport.planes_visible());
+        assert!(viewport.selected.is_none() && viewport.selections.is_empty());
+        assert_eq!(viewport.references.len(), 1);
+        assert_eq!(viewport.references[0].object.as_ref(), "Axis");
+        assert_eq!(state["objects"][0]["properties"]["Visibility"], true);
+        assert!(
+            viewport
+                .pick(viewport.project(Vec3::new(100., 0., 0.)).0, &[])
+                .is_none()
+        );
+        assert_eq!(
+            viewport
+                .pick(viewport.project(Vec3::new(5., 0., 0.)).0, &[])
+                .unwrap()
+                .object,
+            "Axis"
+        );
+        viewport.toggle_planes(&state);
+        assert!(viewport.planes_visible());
+        assert_eq!(viewport.references.len(), 2);
+        assert_eq!(
+            viewport
+                .pick(viewport.project(Vec3::new(100., 0., 0.)).0, &[])
+                .unwrap()
+                .object,
+            "Plane"
+        );
+    }
+
     #[test]
     fn infinite_native_reference_uses_finite_native_display_size_and_actual_native_face() {
         let mut viewport = Viewport::default();

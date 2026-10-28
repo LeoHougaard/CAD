@@ -1,20 +1,15 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CAD verification checkpoint</title>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CAD verification progress</title>
 <style>
-:root{color-scheme:light dark;--viz-series-1:var(--chart-1);--viz-series-2:var(--chart-2)}
-html,body{margin:0;background:transparent;color:var(--foreground);font-family:var(--font-sans)}
-h2,h3,p{font-weight:400;margin:0 0 12px}h3{margin-top:24px}
-.row{margin:14px 0}.labels{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:7px}.value{white-space:nowrap;font-variant-numeric:tabular-nums}
-.track{height:14px;background:var(--secondary);display:flex;overflow:hidden}.pass{background:var(--viz-series-1);height:100%}.fail{background:var(--viz-series-2);height:100%}.caption{color:var(--muted-foreground);font-size:12px}
-</style></head><body><main aria-label="Source-bound CAD component verification and full tutorial acceptance">
-<h2>CAD verification checkpoint</h2>
-<div class="row"><div class="labels"><span>Complete tutorials verified</span><span class="value">0 / 100 minimum</span></div><div class="track" role="progressbar" aria-label="Complete tutorials verified" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="pass" style="width:0%"></div></div></div>
-<p class="caption">Three written exercises inspected, none ready. No full-tutorial attempt denominator or completion forecast.</p>
-<h3>Current combined code, focused checks</h3>
-<div class="row"><div class="labels"><span>Active library tests</span><span class="value">241 passed / 0 failed</span></div><div class="track" role="img" aria-label="Active tests, 241 passed"><div class="pass" style="width:100%"></div></div></div>
-<div class="row"><div class="labels"><span>Distinct native Editor checks</span><span class="value">32 passed / 0 failed</span></div><div class="track" role="img" aria-label="Native Editor checks, 32 passed"><div class="pass" style="width:100%"></div></div></div>
-<p class="caption">Same production bytes; test-only extension for 19 placement cases. The repeated public missing-adapter control is excluded from the distinct count.</p>
-<h3>Retained earlier stock comparison cohort</h3>
-<div class="row"><div class="labels"><span>Exact native comparisons</span><span class="value">54 passed / 11 failed</span></div><div class="track" role="img" aria-label="Earlier stock comparisons, 54 passed and 11 failed"><div class="pass" style="width:83.076923%"></div><div class="fail" style="width:16.923077%"></div></div></div>
-<p class="caption">Ten free-position geometry differences remain unresolved; the native signed-zero failure is retained. Different scopes cannot be combined into a tutorial success rate or fitted trend.</p>
-</main></body></html>
+body{margin:0;color:var(--foreground);font-family:var(--font-sans);font-size:14px}h2{font-size:18px;font-weight:500;margin:0 96px 12px 0}p{margin:8px 0 16px;line-height:1.5}svg{display:block;width:100%;height:354px}svg text{fill:var(--foreground);font-size:12px}small{font-size:12px;color:var(--muted-foreground)}.legend{display:flex;gap:20px;flex-wrap:wrap;font-size:12px;margin:10px 0}.key{display:inline-block;width:12px;height:12px;margin-right:5px;vertical-align:-2px}.pass{background:var(--chart-1)}.fail{background:var(--destructive)}.summary{border-top:1px solid var(--border);padding-top:14px;margin-top:16px}strong{font-weight:500}a{color:var(--foreground)}
+</style></head><body>
+<h2>CAD verification progress</h2>
+<p><strong>Full tutorials verified: 0 of at least 100.</strong><br>Focused checks measure specific behavior. Their changing scope cannot predict completion of the full tutorial goal.</p>
+<div class="legend"><span><i class="key pass"></i>Passed</span><span><i class="key fail"></i>Failed, retained</span></div>
+<svg id="checks" role="img" aria-label="Separate verification cohorts. Current build 247 passed, zero failed. Current Editor 15 passed, zero failed. Prior source6 Editor 32 passed, zero failed. Placement Editor 24 passed, 3 failed. Placement stock 54 passed, 11 failed. Grounded stock 42 passed, zero failed."><title>Success by separate verification cohort</title></svg>
+<p><small>Each bar is a separate cohort and source tree. Failure classification does not remove a failed assertion. No pooled rate or extrapolated limit is calculated.</small></p>
+<div class="summary"><strong>New combined code</strong><p>Continuous Line, P plane visibility and Windows native EOF cleanup passed the combined build and focused Editor checks. Independent integration review found no new confirmed defect within its scope.</p>
+<strong>Still open</strong><p>Atomic new-sketch Begin/Cancel/Redo/Restore, negative whole-edge spacing, ten free-position geometry differences, current Pixel acceptance and full tutorial coverage. Unix graceful shutdown is unsupported; its original forced cleanup remains.</p></div>
+<script>
+(()=>{const rows=[['Current build',247,0],['Current Editor',15,0],['Prior source6 Editor',32,0],['Placement Editor',24,3],['Placement stock',54,11],['Grounded stock',42,0]];const svg=document.getElementById('checks'),NS='http://www.w3.org/2000/svg';const make=(n,a,t)=>{const e=document.createElementNS(NS,n);for(const k in a)e.setAttribute(k,a[k]);if(t!==undefined)e.textContent=t;svg.append(e);return e};function draw(){svg.replaceChildren();const w=svg.getBoundingClientRect().width,h=354,left=8,right=64,plotW=w-left-right;svg.setAttribute('viewBox',`0 0 ${w} ${h}`);rows.forEach((r,i)=>{const y=18+i*50,total=r[1]+r[2],p=r[1]/total;make('text',{x:left,y},`${r[0]}  |  ${r[1]} / ${total}`);make('rect',{x:left,y:y+9,width:plotW*p,height:14,fill:'var(--chart-1)'});if(r[2])make('rect',{x:left+plotW*p,y:y+9,width:plotW*(1-p),height:14,fill:'var(--destructive)'});make('text',{x:w-2,y:y+20,'text-anchor':'end'},`${(p*100).toFixed(p===1?0:1)}%`)});make('line',{x1:left,y1:321,x2:left+plotW,y2:321,stroke:'var(--border)'});make('text',{x:left,y:340,class:'axis-title','data-axis':'x'},'Share of checks passing (%)');make('text',{x:left+plotW,y:340,'text-anchor':'end'},'100')};new ResizeObserver(draw).observe(svg);draw()})();
+</script></body></html>

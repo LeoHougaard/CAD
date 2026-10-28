@@ -406,7 +406,11 @@ impl Editor {
                     }
                     self.sketch_ui.external = false;
                     self.sketch_ui.split = false;
-                    self.sketch_ui.tool = tool;
+                    self.sketch_ui.tool = if tool == Tool::Line && self.sketch_ui.tool == tool {
+                        Tool::Select
+                    } else {
+                        tool
+                    };
                     self.sketch_ui.trim = false;
                     self.sketch_ui.clear_points();
                 }
@@ -689,7 +693,7 @@ impl Editor {
             }
         }
         self.sketch_ui.clear_points();
-        if tool == Tool::Polyline {
+        if matches!(tool, Tool::Line | Tool::Polyline) {
             self.sketch_ui.continuation = Some(count);
         }
         self.transaction("Draw sketch geometry", edits);
@@ -1038,7 +1042,6 @@ impl Editor {
             }
             for (key, tool) in [
                 (Key::L, Tool::Line),
-                (Key::P, Tool::Polyline),
                 (Key::G, Tool::Rectangle),
                 (Key::R, Tool::CenterRectangle),
                 (Key::C, Tool::Circle),

@@ -34,7 +34,7 @@ use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::time::{Duration, Instant};
 
@@ -344,6 +344,68 @@ impl WorkerSession {
         }
     }
 
+    /// On Windows, close stdin and wait for stdout EOF and the actual child exit.
+    /// Unix refuses this operation without changing the session; Drop retains
+    /// its existing private-process-group cleanup until graceful group lifetime
+    /// ownership is independently implemented and tested there.
+    /// Does not save documents. A timeout or transport error forces cleanup and
+    /// remains an error; a nonzero child status is returned without reinterpretation.
+    pub fn shutdown_gracefully(&mut self, timeout: Duration) -> Result<ExitStatus, Error> {
+        if self.closed {
+            return Err(Error::Closed);
+        }
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .filter(|_| !timeout.is_zero())
+            .ok_or_else(|| {
+                Error::InvalidRequest("shutdown timeout must be positive and finite".into())
+            })?;
+        #[cfg(unix)]
+        {
+            let _ = deadline;
+            Err(Error::InvalidRequest(
+                "graceful process-group shutdown is not supported on Unix".into(),
+            ))
+        }
+        #[cfg(not(unix))]
+        {
+            self.input.take();
+            let mut stdout_closed = false;
+            loop {
+                let status = match self.child.try_wait() {
+                    Ok(status) => status,
+                    Err(error) => {
+                        self.shutdown();
+                        return Err(Error::Io(error));
+                    }
+                };
+                let received = match self.output.try_recv() {
+                    Ok(Ok(_)) => true,
+                    Ok(Err(error)) => {
+                        self.shutdown();
+                        return Err(Error::Io(error));
+                    }
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        stdout_closed = true;
+                        false
+                    }
+                    Err(mpsc::TryRecvError::Empty) => false,
+                };
+                if let Some(status) = status.filter(|_| stdout_closed) {
+                    self.closed = true;
+                    return Ok(status);
+                }
+                if Instant::now() >= deadline {
+                    self.shutdown();
+                    return Err(Error::Timeout(timeout));
+                }
+                if !received {
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+            }
+        }
+    }
+
     /// Stop the child. Does not save native documents implicitly.
     pub fn shutdown(&mut self) {
         if self.closed {
@@ -369,7 +431,10 @@ impl WorkerSession {
 
 impl Drop for WorkerSession {
     fn drop(&mut self) {
+        #[cfg(unix)]
         self.shutdown();
+        #[cfg(not(unix))]
+        let _ = self.shutdown_gracefully(Duration::from_secs(1));
     }
 }
 
@@ -425,6 +490,7 @@ mod tests {
         let mut count = 0;
         let mut sequence = 0;
         let mut fixture_revision = 0;
+        let mut shutdown_config = Value::Null;
         let stdin = io::stdin();
         let mut lines = stdin.lock().lines();
         while let Some(line) = lines.next() {
@@ -568,6 +634,7 @@ mod tests {
                     }
                     response["result"]["callbacks"] = json!(replies);
                 }
+                "shutdown_config" => shutdown_config = request.clone(),
                 "crash" => std::process::exit(17),
                 #[cfg(target_os = "linux")]
                 // This fixture intentionally leaves a live descendant for the
@@ -606,6 +673,169 @@ mod tests {
                 std::thread::sleep(Duration::from_secs(4));
             }
         }
+        if let Some(marker) = shutdown_config["marker"].as_str() {
+            std::fs::write(marker, b"stdin EOF observed").unwrap();
+        }
+        for _ in 0..shutdown_config["lines"].as_u64().unwrap_or(0) {
+            println!("worker shutdown diagnostic");
+        }
+        io::stdout().flush().unwrap();
+        if let Some(ms) = shutdown_config["delay_ms"].as_u64() {
+            std::thread::sleep(Duration::from_millis(ms));
+        }
+        if let Some(code) = shutdown_config["exit_code"].as_i64() {
+            std::process::exit(i32::try_from(code).unwrap());
+        }
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn graceful_shutdown_waits_for_eof_and_reports_child_exit() {
+        let mut worker = session();
+        worker
+            .call(
+                "shutdown_config",
+                json!({"lines": 2048}).as_object().unwrap().clone(),
+            )
+            .unwrap();
+        assert!(
+            worker
+                .shutdown_gracefully(Duration::from_secs(2))
+                .unwrap()
+                .success()
+        );
+        assert!(worker.child.try_wait().unwrap().unwrap().success());
+        assert!(matches!(
+            worker.call("inspect", Map::new()),
+            Err(Error::Closed)
+        ));
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn graceful_shutdown_preserves_nonzero_exit_status() {
+        let mut worker = session();
+        worker
+            .call(
+                "shutdown_config",
+                json!({"exit_code": 7}).as_object().unwrap().clone(),
+            )
+            .unwrap();
+        assert_eq!(
+            worker
+                .shutdown_gracefully(Duration::from_secs(2))
+                .unwrap()
+                .code(),
+            Some(7)
+        );
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn graceful_shutdown_timeout_forces_child_without_claiming_success() {
+        let mut worker = session();
+        worker
+            .call(
+                "shutdown_config",
+                json!({"delay_ms": 4000}).as_object().unwrap().clone(),
+            )
+            .unwrap();
+        assert!(matches!(
+            worker.shutdown_gracefully(Duration::from_millis(50)),
+            Err(Error::Timeout(_))
+        ));
+        assert!(worker.child.try_wait().unwrap().is_some());
+        assert!(matches!(
+            worker.shutdown_gracefully(Duration::from_secs(1)),
+            Err(Error::Closed)
+        ));
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn graceful_shutdown_invalid_deadline_leaves_transport_usable() {
+        let mut worker = session();
+        assert!(matches!(
+            worker.shutdown_gracefully(Duration::ZERO),
+            Err(Error::InvalidRequest(_))
+        ));
+        assert!(matches!(
+            worker.shutdown_gracefully(Duration::MAX),
+            Err(Error::InvalidRequest(_))
+        ));
+        assert!(worker.call("inspect", Map::new()).is_ok());
+        worker.shutdown();
+        assert!(matches!(
+            worker.shutdown_gracefully(Duration::from_secs(1)),
+            Err(Error::Closed)
+        ));
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn healthy_drop_delivers_stdin_eof() {
+        let marker =
+            std::env::temp_dir().join(format!("cad-worker-eof-{}.txt", std::process::id()));
+        assert!(!marker.exists());
+        let mut worker = session();
+        worker
+            .call(
+                "shutdown_config",
+                json!({"marker": marker}).as_object().unwrap().clone(),
+            )
+            .unwrap();
+        drop(worker);
+        assert_eq!(std::fs::read(&marker).unwrap(), b"stdin EOF observed");
+        std::fs::remove_file(marker).unwrap();
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    #[ignore = "requires the pinned native runtime and private profile"]
+    fn native_graceful_shutdown_observes_real_eof_and_exit() {
+        let runtime: Value = serde_json::from_slice(
+            &std::fs::read(std::env::var_os("CAD_GRACEFUL_RUNTIME").unwrap()).unwrap(),
+        )
+        .unwrap();
+        let mut config = WorkerConfig::new(
+            runtime["executable"].as_str().unwrap(),
+            runtime["script"].as_str().unwrap(),
+        );
+        config.args = runtime["args"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| OsString::from(v.as_str().unwrap()))
+            .collect();
+        let mut worker = WorkerSession::spawn(&config).unwrap();
+        let state = worker
+            .call(
+                "new",
+                json!({"name":"GracefulUnsaved"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            )
+            .unwrap();
+        assert_eq!(state["document"], "GracefulUnsaved");
+        let status = worker.shutdown_gracefully(Duration::from_secs(10)).unwrap();
+        assert_eq!(status.code(), Some(0));
+        assert!(worker.child.try_wait().unwrap().unwrap().success());
+        assert!(matches!(
+            worker.output.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_graceful_refusal_preserves_the_live_transport() {
+        let mut worker = session();
+        assert!(matches!(
+            worker.shutdown_gracefully(Duration::from_secs(1)),
+            Err(Error::InvalidRequest(_))
+        ));
+        assert!(worker.call("inspect", Map::new()).is_ok());
     }
 
     #[test]

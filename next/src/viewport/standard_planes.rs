@@ -35,6 +35,9 @@ impl StandardPlane {
 }
 impl Viewport {
     fn standard_guide_hit(&self, pos: Pos2) -> Option<StandardPlane> {
+        if !self.planes_visible {
+            return None;
+        }
         let mut hits = Vec::new();
         for plane in [
             StandardPlane::Top,
@@ -109,7 +112,7 @@ impl Viewport {
             .as_str()
             .zip(state["revision"].as_u64())
             .map(|(d, r)| (d.to_owned(), r));
-        if !available || binding.is_none() {
+        if !available || !self.planes_visible || binding.is_none() {
             self.clear_standard_plane();
             return None;
         }

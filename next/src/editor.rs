@@ -1603,6 +1603,24 @@ impl eframe::App for Editor {
                 && consume_exact_key(ctx, egui::Modifiers::NONE, Key::N)
             {
                 self.viewport.align_sketch();
+            } else if !shortcut_blocked
+                && !egui::Popup::is_any_open(ctx)
+                && !ctx.wants_keyboard_input()
+                && consume_exact_key(ctx, egui::Modifiers::NONE, Key::P)
+            {
+                self.viewport.toggle_planes(&self.state);
+                if !self.viewport.planes_visible() {
+                    let state = &self.state;
+                    let is_plane = |name: &str| {
+                        objects(state).iter().any(|object| {
+                            object["name"] == name && object["reference_display"]["kind"] == "plane"
+                        })
+                    };
+                    if self.selected_object.as_deref().is_some_and(is_plane) {
+                        self.selected_object = None;
+                    }
+                    self.body_ui.selected.retain(|name| !is_plane(name));
+                }
             } else if !ctx.wants_keyboard_input()
                 && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::F))
             {

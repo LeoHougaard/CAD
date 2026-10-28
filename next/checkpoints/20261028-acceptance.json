@@ -1,28 +1,64 @@
 {
-  "source6_files": 280,
-  "source6_manifest_sha256": "5f09fa3bcd1749e55196bc6b3039f5f7d6c537e9a29d7901ab14e9ade622cfb0",
-  "compiled_source4_manifest_sha256": "6686f0475972f9340ada139d74fcb5e5dc3d8ebcf0974569782322a233f12af7",
-  "source4_278_entirely_exact": true,
+  "time_utc": "2026-10-28T23:47:27.762537+00:00",
+  "source_files": 281,
+  "source_manifest_sha256": "597df89eac5dfe30de5d08df4ee406a563c25838977ffd3d878c3c0ad01c88e8",
   "active_tests": [
-    241,
+    247,
     0
   ],
-  "distinct_current_native_editor": [
+  "ignored_tests": 124,
+  "distinct_current_editor_checks": [
+    15,
+    0
+  ],
+  "current_native_worker_bindings": 20,
+  "prior_source6_editor_checks": [
     32,
     0
   ],
-  "public_control_duplicate": [
-    1,
-    0
-  ],
-  "close_current_editor": [
-    2,
-    0
-  ],
-  "Close_R5_manifest": "42be5721f278c94c82a3d330de99fe59b0de738536de33ae90ac77c4821a8298",
-  "sketch_review_manifest": "c7281a429dcc13892dce803f330963a4fe7819843494f5607c639b9a60ae614f",
-  "both_bounded_reviews_no_new_finding": true,
+  "prior_results_remain_tree_labeled": true,
+  "independent_combined_review": {
+    "manifest_sha256": "c75ab3edc9964a2de76a4a4d09822a108d5a0cbe93240150d2f80be6d10c2e7e",
+    "verdict": "No new confirmed integration defect within bounded scope"
+  },
+  "artifacts": {
+    "cad-next-editor.exe": {
+      "bytes": 17031680,
+      "sha256": "84ea1d11ec1e0c678d1c500db63b7a70aee10fd3e2f940bf812d1f8257c79578"
+    },
+    "cad-next-editor.rmeta": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "cad-next-tests.exe": {
+      "bytes": 20149248,
+      "sha256": "ccd8974e98c6978aba414200e3ae128d206aaa815d9519970e892977cd284133"
+    },
+    "clippy-lib.rmeta": {
+      "bytes": 1345330,
+      "sha256": "42ba8d230d8196f1187a1f024780ebdf972bec819badbae25ad18c367b63ba45"
+    },
+    "clippy-tests.rmeta": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "libcad_next.rlib": {
+      "bytes": 40106126,
+      "sha256": "65d7ec0c70e15132f99a520f5b286fafe21f035407e330e063bab7c8326f7e02"
+    }
+  },
   "full_tutorial_credit": 0,
-  "native_graceful_eof_certified": false,
-  "owned_heavy_processes": []
+  "full_tutorial_target": 100,
+  "native_graceful_eof_scope": "Separate Windows source2 positive native OS-handle exit0 and expected I/O negative; identical lib.rs. Current20 finalization rows do not independently certify every OS exit.",
+  "unix_graceful_shutdown_supported": false,
+  "old_pixel_eof_still_unmet": true,
+  "unresolved": [
+    "Dynamic Sketch Begin failure",
+    "New-sketch Cancel/Redo/Restore atomicity",
+    "Parallel-edge negative spacing, candidate excluded",
+    "Ten old free-position raw geometry mismatches",
+    "Current Pixel physical acceptance",
+    "Complete tutorial routes",
+    "Current platform CI/resources/full parity"
+  ]
 }

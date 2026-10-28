@@ -3,6 +3,8 @@
 //! pointing to a fresh writable directory. No desktop application is launched.
 #[path = "fit_selection_tests.rs"]
 mod fit_selection_tests;
+#[path = "line_plane_tests.rs"]
+mod line_plane_tests;
 use super::super::*;
 use super::*;
 use std::{fs, thread::JoinHandle};
