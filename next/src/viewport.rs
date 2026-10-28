@@ -9,6 +9,8 @@ use std::{
 mod gl_renderer;
 mod navigation;
 mod references;
+mod standard_planes;
+pub use standard_planes::StandardPlane;
 mod select_other;
 #[cfg(test)]
 mod select_other_ui_tests;
@@ -81,6 +83,8 @@ pub struct Viewport {
     /// Pick native solid subelements during the external-reference tool.
     pub solid_select_in_sketch: bool,
     dimension_hits: Vec<sketch::DimensionHit>,
+    standard_plane: Option<StandardPlane>,
+    standard_plane_document: Option<(String, u64)>,
     other_picker: Option<select_other::Picker>,
     other_hover: Option<Selection>,
 }
@@ -115,6 +119,8 @@ impl Default for Viewport {
             sketch_select_enabled: true,
             solid_select_in_sketch: false,
             dimension_hits: vec![],
+            standard_plane: None,
+            standard_plane_document: None,
             other_picker: None,
             other_hover: None,
         };

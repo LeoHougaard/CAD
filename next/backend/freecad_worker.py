@@ -1551,7 +1551,17 @@ def finish_closed_document(key):
     if diagnostics:
         message = "Close cleanup: " + json.dumps(diagnostics, allow_nan=False, sort_keys=True)
         result["cleanup_error"] = result.get("cleanup_error", "") + message
+    if _uncertain_closes:
+        # The root really closed. Offer only named unavailable metadata, never
+        # another owner's model, for the existing explicit Close confirmation.
+        result["cleanup_recovery"] = uncertain_close_state(sorted(_uncertain_closes)[0])
     return result
+
+
+def uncertain_close_state(key):
+    return {"document": key, "revision": revision_request("current", key),
+            "objects": [], "available": False, "preview": None, "sketch_edit": None,
+            "path": _uncertain_closes[key][2], "recovery": _failed_loads[key]}
 
 
 def close_loaded_document(key):
@@ -1565,7 +1575,7 @@ def close_loaded_document(key):
         doc, uid, path = pending
     else:
         uid, path = str(doc.Uid), doc.FileName or None
-    diagnostics = []
+    diagnostics = list(_failed_loads.get(key, {}).get("cleanup_errors", []))
 
     def presence():
         try:
@@ -1583,7 +1593,9 @@ def close_loaded_document(key):
                 "documents": [key], "error_code": "document_unavailable",
                 "error": "Native Close presence query failed: " + str(error),
                 "cleanup_errors": diagnostics + [cleanup_diagnostic(key, error)]}
-            fail("document_unavailable", "Native Close outcome is unresolved: " + key + ": " + str(error))
+            fail("document_unavailable", "Native Close outcome is unresolved: " + key + ": " + str(error)
+                 + "\nClose cleanup: " + json.dumps(_failed_loads[key]["cleanup_errors"],
+                                                      allow_nan=False, sort_keys=True))
         if current is not None:
             try:
                 same = current == doc and str(doc.Uid) == uid
@@ -1675,9 +1687,19 @@ def cleanup_failed_load(operation, path, before, active, error, readonly_before)
     # Nested source cleanup may already have closed an owner despite a thrown
     # hook. Preserve that diagnostic with the original load error, not as a survivor.
     cleanup_errors.extend(value for value in _load_close_errors.values() if value.get("native_closed"))
-    survivors = sorted(set(App.listDocuments()) - before)
+    # An unresolved Close can have deleted its owner. Native presence alone
+    # cannot enumerate the recovery targets created by this public action.
+    uncertain = (set(_uncertain_closes) & set(_load_close_errors)) - before
+    survivors = sorted((set(App.listDocuments()) - before) | uncertain)
+    for key in survivors:
+        previous = _failed_loads.get(key)
+        if previous is not None:
+            # Retain the first Close/detach error as well as the later failed
+            # presence query before replacing keyed metadata with this batch.
+            cleanup_errors.extend(previous["cleanup_errors"])
     if path is None and operation == "source_cleanup":
-        files = {App.getDocument(key).FileName for key in survivors}
+        files = {_uncertain_closes[key][2] if key in _uncertain_closes
+                 else App.getDocument(key).FileName for key in survivors}
         if len(files) == 1:
             path = files.pop()
     recovery = {"operation": operation, "error": str(error), "error_code": getattr(error, "code", "native_error"),
@@ -1829,9 +1851,7 @@ def dispatch(request):
     key = request.get("document")
     if isinstance(key, str) and key in _uncertain_closes:
         if op == "inspect":
-            return {"document": key, "revision": revision_request("current", key),
-                "objects": [], "available": False, "preview": None, "sketch_edit": None,
-                "recovery": _failed_loads[key]}
+            return uncertain_close_state(key)
         if op == "close":
             lease("pre_revision", key, request=request)
             revision_request("check", key, expected_revision=request.get("expected_revision"))

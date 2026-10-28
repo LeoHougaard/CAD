@@ -340,3 +340,93 @@ fn native_external_save_recovery() {
     }
     fs::write(n.output.join("result.json"),serde_json::to_vec_pretty(&json!({"passed":true,"actual_editor_save_recovery":true,"four_native_stages":true,"backup_bytes_restored":true,"same_destination_ctrl_s_retry":true,"physical_gui":false})).unwrap()).unwrap();
 }
+
+fn uncertain_source_close_recovery(pre_effect: bool) {
+    let mut n = Native::new();
+    let source =
+        PathBuf::from(std::env::var_os("CAD_EXTERNAL_FIXTURES").unwrap()).join("component.FCStd");
+    let original = fs::read(&source).unwrap();
+    n.send("new", json!({"name":"UncertainSourceRoot"}));
+    n.send("save", json!({"path":n.output.join("Root.FCStd")}));
+    n.task(
+        json!({"op":"assembly_create","name":"Assembly","joints":"Joints"}),
+        true,
+    );
+    n.editor.start_assembly_task(json!({"op":"assembly_insert","assembly":"Assembly","name":"Instance","external_source":null,"placement":identity_placement()}), "Insert external component");
+    n.editor
+        .browser_picked(file_browser::Purpose::AssemblySource, source.clone());
+    n.receive(true);
+    n.editor.preview();
+    n.click("Apply");
+    n.receive(true);
+    n.send(
+        "close",
+        if pre_effect {
+            json!({"_independent_fault":{"close_fail_files":["component.FCStd"]}})
+        } else {
+            json!({})
+        },
+    );
+    assert!(n.editor.unavailable());
+    assert_eq!(n.editor.state["objects"], json!([]));
+    assert!(n.editor.state["revision"].as_u64().unwrap() > 0);
+    assert_ne!(n.editor.state["document"], "UncertainSourceRoot");
+    assert_eq!(
+        PathBuf::from(n.editor.state["path"].as_str().unwrap()),
+        source
+    );
+    let error = n.editor.error.as_ref().unwrap();
+    assert!(error.contains("R3 source cleanup presence query failure"));
+    if pre_effect {
+        assert!(error.contains("independent Close fault"));
+    }
+    assert_eq!(n.events.last().unwrap()["display_objects"], json!([]));
+    let retained = n.editor.state.clone();
+    n.click_any("Close unavailable document");
+    n.click_any("Cancel");
+    assert_eq!(n.editor.state, retained);
+    assert!(!n.editor.busy);
+    n.click_any("Close unavailable document");
+    n.click_any("Close document and discard");
+    assert!(n.editor.busy);
+    n.receive(false);
+    assert!(n.editor.unavailable());
+    assert_eq!(n.editor.state["objects"], json!([]));
+    assert_eq!(n.editor.state["document"], retained["document"]);
+    assert!(
+        n.editor.state["recovery"]
+            .to_string()
+            .contains("R3 source cleanup presence query failure")
+    );
+    // Fault infrastructure only: remove the injected query failure. The
+    // recovery itself still uses the ordinary visible confirmation below.
+    n.editor
+        .jobs
+        .send(Job {
+            op: "_r3_source_control".into(),
+            parameters: json!({"fault":{"enabled":false,"filename":"component.FCStd"}}),
+        })
+        .unwrap();
+    n.editor.busy = true;
+    n.receive(true);
+    n.click_any("Close unavailable document");
+    n.click_any("Close document and discard");
+    n.receive(true);
+    assert!(n.editor.state.is_null());
+    assert_eq!(fs::read(&source).unwrap(), original);
+    n.send("new", json!({"name":"RecoveredSourceRoot"}));
+    assert_eq!(n.editor.state["document"], "RecoveredSourceRoot");
+    n.send("close", json!({}));
+}
+
+#[test]
+#[ignore = "Requires pinned native source Close/presence fault wrapper"]
+fn uncertain_absent_source_exposes_explicit_close_recovery() {
+    uncertain_source_close_recovery(false);
+}
+
+#[test]
+#[ignore = "Requires pinned native source Close/presence fault wrapper"]
+fn uncertain_live_source_preserves_error_and_explicit_close_recovery() {
+    uncertain_source_close_recovery(true);
+}

@@ -9,6 +9,7 @@ pub(super) struct SketchCreation {
     request: Value,
     pending: bool,
     show_options: bool,
+    waiting_for_guide: bool,
     reversed: bool,
     detach: bool,
     position: [f64; 3],
@@ -132,13 +133,20 @@ impl Editor {
                     .as_deref()
                     .and_then(|name| reference_support(&self.state, &body, name, None))
             });
+        let selected = selected.or_else(|| {
+            self.viewport
+                .selected_standard_plane()
+                .map(|plane| json!({"kind":"origin","role":plane.role()}))
+        });
         let apply = selected.is_some() && !show_options;
+        let waiting_for_guide = create_body && selected.is_none() && !show_options;
         self.sketch_creation = Some(SketchCreation {
             state: self.state.clone(),
             request: json!({"name":name,"body":body,"create_body":create_body,
                 "support":selected.unwrap_or_else(|| json!({"kind":"origin","role":"XY_Plane"}))}),
             pending: false,
             show_options,
+            waiting_for_guide,
             reversed: false,
             detach: false,
             position: [0.; 3],
@@ -151,6 +159,24 @@ impl Editor {
         if apply {
             self.create_attached_sketch();
         }
+    }
+
+    pub(super) fn awaiting_standard_plane(&self) -> bool {
+        self.sketch_creation
+            .as_ref()
+            .is_some_and(|task| task.waiting_for_guide && !task.pending)
+    }
+
+    pub(super) fn choose_standard_plane(&mut self, plane: crate::viewport::StandardPlane) {
+        let Some(task) = &mut self.sketch_creation else {
+            return;
+        };
+        if !task.waiting_for_guide || task.pending {
+            return;
+        }
+        task.request["support"] = json!({"kind":"origin","role":plane.role()});
+        task.waiting_for_guide = false;
+        self.create_attached_sketch();
     }
 
     fn create_attached_sketch(&mut self) {
@@ -179,13 +205,13 @@ impl Editor {
         self.prepare_new_sketch();
         self.selected_object = Some(name.clone());
         self.sketch = Some(name);
-        self.transaction(
-            if request["detach"] == true {
+        self.send(
+            "create_sketch",
+            json!({"label":if request["detach"] == true {
                 "Create unattached sketch"
             } else {
                 "Create attached sketch"
-            },
-            edits,
+            },"edits":edits}),
         );
     }
 
@@ -216,6 +242,24 @@ impl Editor {
         let Some(task) = &mut self.sketch_creation else {
             return;
         };
+        if task.pending {
+            return;
+        }
+        if task.waiting_for_guide {
+            let mut cancel = false;
+            egui::Window::new("Select a sketch plane")
+                .id(egui::Id::new("new_sketch_guide"))
+                .default_pos([180., 85.])
+                .collapsible(false)
+                .show(ctx, |ui| {
+                    ui.label("Select Top, Front or Right in the viewport.");
+                    cancel = ui.button("Cancel").clicked();
+                });
+            if cancel {
+                self.sketch_creation = None;
+            }
+            return;
+        }
         let mut apply = false;
         let mut cancel = false;
         egui::Modal::new(egui::Id::new("new_sketch_support")).show(ctx, |ui| {
@@ -319,6 +363,7 @@ mod tests {
                 "support":{"kind":"origin","role":"XY_Plane"}}),
             pending: false,
             show_options: true,
+            waiting_for_guide: false,
             reversed: false,
             detach: false,
             position: [0.; 3],

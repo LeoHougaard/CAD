@@ -1094,3 +1094,238 @@ fn tutorial_axis_preview_reply_popup_escape_preserves_owner() {
     n.click("Cancel");
     n.receive("preview_cancel", true);
 }
+
+fn default_guide_click(n: &mut Native, plane: crate::viewport::StandardPlane) {
+    n.frame(vec![]);
+    let pos = n
+        .editor
+        .viewport
+        .standard_guide_probe(plane)
+        .expect("visible guide hit target");
+    fs::write(
+        n.folder.join("guide-target.json"),
+        serde_json::to_vec_pretty(&json!({
+            "plane":format!("{plane:?}"), "point":[pos.x,pos.y]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    for pressed in [true, false] {
+        n.frame(vec![
+            egui::Event::PointerMoved(pos),
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+    }
+}
+
+#[test]
+#[ignore = "requires CAD_LIFECYCLE_RUNTIME and CAD_LIFECYCLE_OUTPUT"]
+fn default_guide_preselect_and_command_first_create_native_support() {
+    use crate::viewport::StandardPlane;
+    for (index, plane) in [
+        StandardPlane::Top,
+        StandardPlane::Front,
+        StandardPlane::Right,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        for first_command in [false, true] {
+            let mut n = Native::new(&format!("default-guide-{index}-{first_command}"));
+            n.send(
+                "new",
+                json!({"name":format!("DefaultGuide{index}{first_command}")}),
+                true,
+            );
+            assert!(objects(&n.editor.state).is_empty());
+            let before = n.editor.state.clone();
+            if first_command {
+                n.click("Sketch");
+                assert!(n.editor.awaiting_standard_plane());
+                assert_eq!(n.editor.state, before);
+            }
+            default_guide_click(&mut n, plane);
+            if !first_command {
+                assert_eq!(n.editor.viewport.selected_standard_plane(), Some(plane));
+                assert_eq!(n.editor.state, before);
+                assert!(!n.editor.dirty && n.raw.try_recv().is_err());
+                tutorial_key(&mut n, Key::S, egui::Modifiers::SHIFT);
+            }
+            assert!(
+                n.editor.busy,
+                "native creation must begin on selected guide"
+            );
+            n.receive("transaction", true);
+            n.receive("sketch_begin", true);
+            assert!(n.editor.sketch_creation.is_none());
+            let name = n.editor.sketch.clone().expect("native sketch");
+            let sketch = object(&n.editor.state, &name);
+            assert_eq!(sketch["properties"]["MapMode"], "FlatFace");
+            let support = sketch["properties"]["AttachmentSupport"][0]["link"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            let native_plane = object(&n.editor.state, &support);
+            assert_eq!(native_plane["properties"]["Role"], plane.role());
+            assert_eq!(native_plane["type"], "App::Plane");
+            let expected_rotation = match plane {
+                StandardPlane::Top => json!([0., 0., 0., 1.]),
+                StandardPlane::Front => json!([
+                    f64::from_bits(0x3fe6a09e667f3bcc),
+                    0.,
+                    0.,
+                    f64::from_bits(0x3fe6a09e667f3bcd)
+                ]),
+                StandardPlane::Right => json!([0.5, 0.5, 0.5, 0.5]),
+            };
+            assert_eq!(sketch["global_placement"]["position"], json!([0., 0., 0.]));
+            assert_eq!(sketch["global_placement"]["rotation"], expected_rotation);
+            assert!(n.editor.viewport.selected_standard_plane().is_none());
+            tutorial_key(&mut n, Key::N, egui::Modifiers::NONE);
+            if plane == StandardPlane::Top && !first_command {
+                tutorial_key(&mut n, Key::G, egui::Modifiers::NONE);
+                tutorial_click(&mut n, [0., 0., 0.]);
+                tutorial_click(&mut n, [10., 5., 0.]);
+                n.receive("transaction", true);
+                let sk = &object(&n.editor.state, &name)["sketch"];
+                assert_eq!(sk["geometry_count"], 4);
+                assert!(
+                    sk["constraints"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|c| c["type"] == "Coincident")
+                );
+                n.click("Finish");
+                n.receive("sketch_finish", true);
+                let path = n.save("guide.FCStd");
+                n.send("close", json!({}), true);
+                n.send("open", json!({"path":path}), true);
+                let reopened = object(&n.editor.state, &name);
+                assert_eq!(reopened["properties"]["MapMode"], "FlatFace");
+                assert_eq!(
+                    reopened["properties"]["AttachmentSupport"][0]["link"],
+                    support
+                );
+                assert_eq!(reopened["sketch"]["geometry_count"], 4);
+            } else {
+                n.click("Cancel");
+                n.receive("sketch_cancel", true);
+                n.receive("undo", true);
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires CAD_LIFECYCLE_RUNTIME and CAD_LIFECYCLE_OUTPUT"]
+fn default_guide_cancel_before_choice_preserves_redo_and_state() {
+    let mut n = Native::new("default-guide-cancel");
+    n.send("new", json!({"name":"DefaultGuideCancel"}), true);
+    n.transaction(json!([{"op":"add_object","type":"Part::Box","name":"Box"}]));
+    n.send("undo", json!({}), true);
+    let before = n.editor.state.clone();
+    let dirty = n.editor.dirty;
+    assert!(objects(&before).is_empty() && before["redo_count"].as_u64().unwrap() > 0);
+    n.click("Sketch");
+    assert!(n.editor.awaiting_standard_plane());
+    tutorial_key(&mut n, Key::Escape, egui::Modifiers::NONE);
+    assert!(n.editor.sketch_creation.is_none());
+    assert_eq!(n.editor.state, before);
+    assert_eq!(n.editor.dirty, dirty);
+    assert!(n.raw.try_recv().is_err());
+}
+
+#[test]
+#[ignore = "requires CAD_LIFECYCLE_RUNTIME and CAD_LIFECYCLE_OUTPUT"]
+fn default_guides_busy_help_and_new_reply_cannot_reuse_selection() {
+    use crate::viewport::StandardPlane;
+    let mut n = Native::new("default-guide-ownership");
+    n.send("new", json!({"name":"GuideOwnershipA"}), true);
+    n.frame(vec![]);
+    n.editor.busy = true;
+    default_guide_click(&mut n, StandardPlane::Top);
+    assert!(n.editor.viewport.selected_standard_plane().is_none());
+    n.editor.busy = false;
+    tutorial_key(&mut n, Key::F1, egui::Modifiers::NONE);
+    assert!(workflow_guide::active(&n.ctx));
+    default_guide_click(&mut n, StandardPlane::Top);
+    assert!(n.editor.viewport.selected_standard_plane().is_none());
+    tutorial_key(&mut n, Key::Escape, egui::Modifiers::NONE);
+    default_guide_click(&mut n, StandardPlane::Top);
+    assert_eq!(
+        n.editor.viewport.selected_standard_plane(),
+        Some(StandardPlane::Top)
+    );
+    n.editor.send("new", json!({"name":"GuideOwnershipB"}));
+    let reply = n.raw.recv_timeout(Duration::from_secs(25)).unwrap();
+    assert_eq!(reply.op, "new");
+    assert!(reply.accepted);
+    n.forward.send(reply).unwrap();
+    n.frame(vec![egui::Event::Key {
+        key: Key::S,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::SHIFT,
+    }]);
+    assert!(n.editor.viewport.selected_standard_plane().is_none());
+    assert!(n.editor.sketch_creation.is_none() && n.editor.sketch_ui.session.is_none());
+    assert!(!n.editor.busy && objects(&n.editor.state).is_empty());
+}
+
+#[test]
+#[ignore = "requires lifecycle runtime with genuinely missing checkpoint adapter"]
+fn sketch_creation_missing_checkpoint_preserves_redo_before_native_creation() {
+    let mut n = Native::new("missing-checkpoint-creation");
+    n.send("new", json!({"name":"MissingCheckpointCreation"}), true);
+    n.transaction(json!([
+        {"op":"add_object","type":"Part::Box","name":"PriorBox"},
+        {"op":"set","object":"PriorBox","property":"Length","value":23.75},
+        {"op":"set","object":"PriorBox","property":"Width","value":2.5},
+        {"op":"set","object":"PriorBox","property":"Height","value":3.25}
+    ]));
+    let prior_id = object(&n.editor.state, "PriorBox")["observed_native_id"].clone();
+    assert!(
+        prior_id.as_u64().is_some(),
+        "observer must expose the actual native ID"
+    );
+    n.send("undo", json!({}), true);
+    let before = n.editor.state.clone();
+    let dirty = n.editor.dirty;
+    assert!(objects(&before).is_empty());
+    assert_eq!(before["redo_count"], 1);
+    n.click("Sketch");
+    assert!(n.editor.awaiting_standard_plane());
+    default_guide_click(&mut n, crate::viewport::StandardPlane::Top);
+    n.receive("transaction", false);
+    assert!(n.editor.error.as_deref().is_some_and(|message| {
+        message.contains("Native sketch editing is unavailable")
+            && message.contains("No sketch was created")
+    }));
+    assert_eq!(
+        n.editor.state, before,
+        "rejected creation must preserve full native public state"
+    );
+    assert_eq!(n.editor.dirty, dirty);
+    assert!(n.editor.sketch.is_none() && n.editor.sketch_ui.session.is_none());
+    assert!(!n.editor.busy && !n.editor.sketch_ui.pending_begin);
+    assert!(
+        n.raw.try_recv().is_err(),
+        "no Begin or cleanup Undo may be queued"
+    );
+    n.click("Cancel");
+    assert!(n.editor.sketch_creation.is_none());
+    n.send("redo", json!({}), true);
+    let restored = object(&n.editor.state, "PriorBox");
+    assert_eq!(restored["observed_native_id"], prior_id);
+    assert_eq!(restored["properties"]["Length"], 23.75);
+    assert_eq!(restored["properties"]["Width"], 2.5);
+    assert_eq!(restored["properties"]["Height"], 3.25);
+    assert_eq!(objects(&n.editor.state).len(), 1);
+}

@@ -330,6 +330,33 @@ impl Editor {
         self.begin_dimension(kind, selection);
     }
 
+    pub(super) fn place_dimension(&mut self, position: egui::Pos2) {
+        let selection = self.viewport.sketch_selection.clone();
+        if selection.len() == 2
+            && selection.iter().all(|element| element.point != 0)
+            && let (Some(a), Some(b), Some(cursor)) = (
+                self.viewport.geometry_point(selection[0]),
+                self.viewport.geometry_point(selection[1]),
+                self.viewport.sketch_point(position),
+            )
+        {
+            let inside_x = (a[0].min(b[0])..=a[0].max(b[0])).contains(&cursor[0]);
+            let inside_y = (a[1].min(b[1])..=a[1].max(b[1])).contains(&cursor[1]);
+            let kind = if a[0] == b[0] && a[1] != b[1] {
+                "DistanceY"
+            } else if a[1] == b[1] && a[0] != b[0] || inside_x && !inside_y {
+                "DistanceX"
+            } else if inside_y && !inside_x {
+                "DistanceY"
+            } else {
+                "Distance"
+            };
+            self.begin_dimension(kind, selection);
+            return;
+        }
+        self.smart_dimension();
+    }
+
     pub(super) fn new_dimension(&mut self, kind: &str) {
         if matches!(kind, "Radius" | "Diameter")
             && self.viewport.sketch_selection.len() == 1

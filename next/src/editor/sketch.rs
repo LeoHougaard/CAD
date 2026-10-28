@@ -743,7 +743,7 @@ impl Editor {
                     self.sketch_ui.selected_constraint = None;
                 } else if !self.viewport.sketch_selection.is_empty() {
                     let owner = self.sketch_ui.dimension_tool.take();
-                    self.smart_dimension();
+                    self.place_dimension(pos);
                     self.sketch_ui.dimension_tool = owner;
                 }
             }

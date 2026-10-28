@@ -113,6 +113,10 @@ impl Editor {
                 }
             } else if recovery {
                 ui.heading("Close unavailable document?");
+                ui.label(self.state["document"].as_str().unwrap_or_default());
+                if let Some(path) = self.state["path"].as_str() {
+                    ui.label(path);
+                }
                 ui.label("Recovery failed. Close this document, then use New or Open to continue.");
                 ui.label("Unsaved changes and the active operation will be lost. Saved files will not change.");
             } else {

@@ -1,126 +1,28 @@
 {
-  "time_utc": "2026-10-28T14:17:21.058033+00:00",
-  "state": "PAUSED_AT_USER_WRAP_UP_AFTER_USAGE_RESET",
-  "explicit_resume_required": true,
-  "no_new_heavy_work": true,
-  "usage_observation": {
-    "timestamp": "2026-10-28T14:14:52.527642+00:00",
-    "source": "live account/rateLimits/read",
-    "fresh": true,
-    "windows": {
-      "codex/primary": {
-        "usedPercent": 2,
-        "windowDurationMins": 10080,
-        "resetsAt": 1793774150
-      }
-    },
-    "max_used_percent": 2,
-    "wrap_up": true,
-    "stop_work": false,
-    "reset_observed_this_observation": false,
-    "reset_since_wrap_request": true,
-    "stop_new_heavy_work": true,
-    "policy_thresholds": {
-      "wrap_percent": 98,
-      "stop_percent": 100
-    },
-    "reset_observed_this_run": true,
-    "reset_utc": {
-      "codex/primary": "2026-11-04T06:35:50+00:00"
-    }
-  },
-  "tutorials": {
-    "minimum_target": 100,
-    "video_candidates": 128,
-    "exercise_distinctness_authenticated": false,
-    "ready": 0,
-    "complete_attempts": 0,
-    "complete_verified": 0,
-    "pass_rate": null,
-    "completion_estimate": null
-  },
-  "implemented_private_candidates": [
-    "Onshape G/R/Q sketch shortcuts and native rectangles",
-    "selected-plane Sketch and normal view",
-    "sketch-to-Extrude/Revolve profile handoff and H/V axis picking",
-    "Dimension-first and endpoints-first Arc input",
-    "placement-sensitive horizontal/vertical/direct dimensions",
-    "default-plane guides",
-    "uncertain Close recovery and diagnostic retention"
+  "source6_files": 280,
+  "source6_manifest_sha256": "5f09fa3bcd1749e55196bc6b3039f5f7d6c537e9a29d7901ab14e9ade622cfb0",
+  "compiled_source4_manifest_sha256": "6686f0475972f9340ada139d74fcb5e5dc3d8ebcf0974569782322a233f12af7",
+  "source4_278_entirely_exact": true,
+  "active_tests": [
+    241,
+    0
   ],
-  "placement_suite": {
-    "new_cases_passed": 19,
-    "new_cases_failed": 0,
-    "full_passed": 24,
-    "full_failed": 3,
-    "stock_equalities_passed": 54,
-    "stock_equalities_failed": 11,
-    "ten_free_position_geometry_mismatches": "unresolved"
-  },
-  "grounded_suite": {
-    "editor_passed": 7,
-    "editor_failed": 0,
-    "final_dof": 0,
-    "stock_exact_phase_matches": 42,
-    "stock_phase_comparisons": 42,
-    "stock_roundtrips_passed": 7,
-    "stock_undo_redo_executed": false,
-    "earlier_mismatch_cause_established": false,
-    "packet_manifest_sha256": "15fcfca265be5e3abdb9cecb69f34fcf075a4fe46c662f31aebe33bef5137a59"
-  },
-  "close_retry_fix": {
-    "source_manifest_sha256": "5f5894a8e041ed691a2eb27dc7034424a0c22b382f965f5124bf9ceb880b2865",
-    "packet_manifest_sha256": "ad55df3e13a5b1eac877f84946a762b3aa20e1c101a6a229e63a3bebbe535d24",
-    "cached_editor_passed": 2,
-    "multi_source_cases_passed": 3,
-    "unchanged_R4_strict_diagnostic_audit": "pass",
-    "independent_R5": "not_started_pending_resume",
-    "approved_or_published": false
-  },
-  "pixel": {
-    "lease": "released",
-    "live_runner": false,
-    "bounded_run04_routes": 8,
-    "tested_source": "61a4df32f4df82511612407b6030d987d5931b2c",
-    "new_candidate_physical_tested": false,
-    "new_candidate_preparation": "incomplete; drafts must not execute",
-    "native_graceful_eof": "unmet",
-    "saved_archive_Touched_bit_limits": [
-      "H01",
-      "S01"
-    ]
-  },
-  "blockers": [
-    "Atomic sketch Begin failure can leave created objects",
-    "New sketch creation/Cancel can replace pre-existing native Redo",
-    "Sketch Restore workflow absent",
-    "Ten free-position dimension geometry XML differences remain unattributed",
-    "Gyrosphere exact limiting-radius fillet fails in both host and pinned stock native kernel",
-    "Close retry diagnostic fix needs a NEW independent R5 review",
-    "Complete tutorial fixtures/actions and actual GUI access remain unavailable",
-    "Current combined integration, CI, platform/resource and full parity gates remain open",
-    "Graceful native-child EOF/exit behind Rust remains uncertified"
+  "distinct_current_native_editor": [
+    32,
+    0
   ],
-  "compiler": "free",
-  "native_actors": {
-    "A": "released",
-    "B": "released",
-    "C": "released",
-    "D": "released"
-  },
-  "known_active_child_owners": 0,
-  "github": {
-    "time_utc": "2026-10-28T06:26:47.183897+00:00",
-    "branch": "checkpoints/cad-workflows-20261028-052646",
-    "parent": "d65956c924d435dda7b8335bad8edd8e593f4405",
-    "commit": "e278933faa22e7819696000dc1a5027b6f71ee86",
-    "changed_paths": [
-      "next/DEVELOPMENT-CHECKPOINT-20261028.md",
-      "next/checkpoints/20261028-acceptance.json"
-    ],
-    "application_source_changed": false,
-    "push_exit": 0,
-    "main_head_index_status_preserved": true,
-    "pr_modified": false
-  }
+  "public_control_duplicate": [
+    1,
+    0
+  ],
+  "close_current_editor": [
+    2,
+    0
+  ],
+  "Close_R5_manifest": "42be5721f278c94c82a3d330de99fe59b0de738536de33ae90ac77c4821a8298",
+  "sketch_review_manifest": "c7281a429dcc13892dce803f330963a4fe7819843494f5607c639b9a60ae614f",
+  "both_bounded_reviews_no_new_finding": true,
+  "full_tutorial_credit": 0,
+  "native_graceful_eof_certified": false,
+  "owned_heavy_processes": []
 }

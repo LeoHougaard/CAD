@@ -95,7 +95,15 @@ fn model_thread(
         }
     };
     let mut current = Value::Null;
-    while let Ok(job) = input.recv() {
+    while let Ok(mut job) = input.recv() {
+        // Creation commits a native transaction before Begin. Reject a known
+        // unavailable checkpoint runtime before that transaction can erase Redo
+        // or leave a newly created Body/Sketch behind. This does not claim full
+        // atomicity for other native failures after creation.
+        let creating_sketch = job.op == "create_sketch";
+        if creating_sketch {
+            job.op = "transaction".into();
+        }
         let start = Instant::now();
         let previous = current.clone();
         // Preserve the old document until a replacement loads successfully.
@@ -104,7 +112,16 @@ fn model_thread(
             job.op.as_str(),
             "close_dependent" | "remove_dependent_references"
         );
-        let result = if recovery_action {
+        let result = if creating_sketch
+            && worker.capabilities()["sketch_checkpoints"]["available"] != true
+        {
+            let reason = worker.capabilities()["sketch_checkpoints"]["reason"]
+                .as_str()
+                .unwrap_or("No verified native checkpoint capability was reported");
+            Err(format!(
+                "Native sketch editing is unavailable. No sketch was created: {reason}"
+            ))
+        } else if recovery_action {
             // The UI action is bound to the inspected unavailable owner and an
             // exact dependent revision. The worker still receives ordinary Close.
             let listed = current["close_dependents"]
@@ -169,7 +186,13 @@ fn model_thread(
                 if recovery_action {
                     // Recovering a dependent does not replace the UI's owner.
                 } else if job.op == "close" {
-                    current = Value::Null;
+                    // A closed root may leave a named source Close unresolved.
+                    // Keep its unavailable metadata reachable through the normal
+                    // explicit recovery confirmation. No model is adopted here.
+                    current = result
+                        .get("cleanup_recovery")
+                        .cloned()
+                        .unwrap_or(Value::Null);
                 } else if result.get("state").is_some() {
                     current = result["state"].clone();
                 } else if result.get("objects").is_some() && result.get("document").is_some() {
@@ -563,6 +586,7 @@ impl Editor {
             let units_changed = self.state["units"]["index"] != reply.state["units"]["index"];
             self.error = reply.error;
             self.state = reply.state;
+            self.viewport.reconcile_standard_plane(&self.state);
             if reply.op == "save" && !success && self.state["save_recovery"].is_object() {
                 self.path = self.state["path"].as_str().unwrap_or_default().into();
                 self.file_input = self.path.clone();
@@ -590,6 +614,7 @@ impl Editor {
                     "new" | "open" | "close" => {
                         self.dirty = false;
                         self.reset_document_interaction();
+                        self.viewport.clear_standard_plane();
                         self.viewport.fit();
                         if reply.op != "open" {
                             self.path.clear();
@@ -1229,7 +1254,7 @@ impl Editor {
         }
     }
 
-    fn canvas(&mut self, ui: &mut egui::Ui, sketch_input_blocked: bool) {
+    fn canvas(&mut self, ui: &mut egui::Ui, sketch_input_blocked: bool, guide_input_allowed: bool) {
         let axis_profile = self.property_ui.axis_profile.as_deref();
         let axis_active = !self.unavailable()
             && self.property_ui.axis_pick
@@ -1300,6 +1325,20 @@ impl Editor {
                 self.viewport.set_sketch(None);
             }
         }
+        let guide_available = !self.unavailable()
+            && self.state["recovery_only"] != true
+            && self.state["document"].is_string()
+            && objects(&self.state).is_empty()
+            && self.draft.is_none()
+            && self.sketch_ui.session.is_none()
+            && (self.sketch_creation.is_none() || self.awaiting_standard_plane());
+        if let Some(plane) =
+            self.viewport
+                .standard_guides(ui, &self.state, guide_available, guide_input_allowed)
+            && self.awaiting_standard_plane()
+        {
+            self.choose_standard_plane(plane);
+        }
         if !self.unavailable() {
             self.sketch_canvas(ui, picked, sketch_input_blocked);
         }
@@ -1328,6 +1367,7 @@ impl eframe::App for Editor {
             || self.sketch_ui.dimension.is_some()
             || self.sketch_ui.task.is_some();
         self.poll();
+        self.viewport.reconcile_standard_plane(&self.state);
         if self.draft.is_none() && self.property_ui.axis_profile.is_some() {
             self.property_ui.axis_pick = false;
             self.property_ui.axis_profile = None;
@@ -1441,7 +1481,20 @@ impl eframe::App for Editor {
             .frame(egui::Frame::NONE.fill(Color32::from_rgb(5, 7, 9)))
             .show(ctx, |ui| {
                 ui.add_enabled_ui(!guide_was_open && !workflow_guide::active(ctx), |ui| {
-                    self.canvas(ui, shortcut_blocked)
+                    let guide_input_allowed = !was_busy
+                        && !self.busy
+                        && !guide_was_open
+                        && !workflow_guide::active(ctx)
+                        && !egui::Popup::is_any_open(ctx)
+                        && !self.units_ui.active()
+                        && !self.measurement_is_open()
+                        && self.pending_file.is_none()
+                        && self.file_dialog.is_none()
+                        && !self.overwrite
+                        && !self.exchange_ui.active()
+                        && !self.file_browser.active()
+                        && !ctx.wants_keyboard_input();
+                    self.canvas(ui, shortcut_blocked, guide_input_allowed)
                 });
             });
         if self.source_recovery() && !guide_was_open && !workflow_guide::active(ctx) {
