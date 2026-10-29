@@ -1,7 +1,7 @@
 {
-  "updated_utc": "2026-10-29T08:06:40.249490+00:00",
-  "source_manifest_sha256": "ceeecfa95f86ed92b4efe66e10839301271622269b105dc9b3f73838c7feceae",
-  "source_files": 295,
+  "updated_utc": "2026-10-29T08:52:39.697953+00:00",
+  "source_manifest_sha256": "2dba3a347fa78350e95e5e50e9af15d721adfdf659fbe5d0051af09cc03929a6",
+  "source_files": 296,
   "source_reference": {
     "url": "https://www.youtube.com/watch?v=pcU5-8PkhGg",
     "title": "Onshape Step-By-Step Tutorial / Best Practices Training - Advanced Part Design",
@@ -34,40 +34,38 @@
     253,
     0
   ],
-  "ignored_tests": 155,
+  "ignored_tests": 160,
   "cached_build_commands": [
     9,
     0
   ],
   "focused_native_editor_tests": [
-    18,
-    1
+    25,
+    0
   ],
-  "focused_native_distinct_cases": 19,
-  "expected_open_failure": "Original source10 M16 continuation assertion failed with a pre-layout next-point projection. Source12 restores the strict endpoint assertion after layout settles and passes.",
+  "focused_native_distinct_cases": 25,
+  "expected_open_failure": "Private source Mirror candidate rejects native solve; not composed in this checkpoint.",
   "independent_review": {
-    "scope": "combined current native line input, input ownership, menu preservation, empty camera and test corrections",
-    "source10_original": [
-      3,
-      1
-    ],
-    "matched_source8_baseline": [
-      1,
+    "passive_escape_author": [
+      4,
       0
     ],
-    "source11_affected": [
+    "passive_escape_independent": [
+      4,
+      0
+    ],
+    "passive_escape_seal_sha256": "32f6642a8f71c1b6fd396d3048c04d4a0cf1ac1bd38f97767e32c7ee6144af91",
+    "constraint_name_old": [
+      0,
+      1
+    ],
+    "constraint_name_current": [
       2,
       0
     ],
-    "source12_reviewer_native_run": false,
-    "source12_root_strict_m16_authenticated": [
-      1,
-      0
-    ],
+    "constraint_name_seal_sha256": "5dce5295f088fcb4305341952e294505457ef4e6fabf24fd81bf21d85fc689d2",
     "new_confirmed_findings": 0,
-    "review_manifest_sha256": "4805a766a95762e60f88a8ef2ac24873d79e4fc24c9dd83570fac2101e257dce",
-    "seal_sha256": "d78727e1c19a04698e29f573d28f398e811553ce57ffc2a025482313a9b459b2",
-    "no_full_tutorial_approval": true
+    "scope": "bounded ownership repairs; no complete tutorial or integration approval"
   },
   "physical_current_source": false,
   "pixel_attempt": {
@@ -82,7 +80,7 @@
   "current_ci": "unverified and not inspected",
   "performance": "not measured",
   "open_gates": [
-    "single Escape from passive Line prompt",
+    "Mirror UI and native constrained operation",
     "Gram/default native mass-unit mismatch",
     "S-menu Dimension",
     "remaining source operations and camera gaps",
@@ -95,12 +93,12 @@
   ],
   "extrapolated_completion_limit": null,
   "extrapolation_reason": "No complete tutorial passes and no qualified stable 100-tutorial execution cohort.",
-  "production_editor_sha256": "b6c6c8450a5964e250f640caa07401f628b9196bfa76d7ae2dde8ad0e88a4f83",
-  "test_binary_sha256": "f4baba4fb6a87e2d3671259307602d722a2abdfc2662639c24e990fecb5a3587",
+  "production_editor_sha256": "48b9791b9d8115ce04db6d310385aeb609a5ca0b0c3ba4135b0d198e589a7db6",
+  "test_binary_sha256": "06b79f8ea454f9da1735a9cc8c79b94ddaef7eb178ca997175f667558100bcb1",
   "private_line_length_candidate_included": true,
   "old_attempts_preserved": true,
-  "original_focused_batch_tree": "source10, retained unchanged",
-  "production_compiled_tree_manifest_sha256": "2d3e7375d2f624912f9ce0c616c08a178ac710a1e3ca65e1494631c24bb457d2",
+  "original_focused_batch_tree": "source14, fresh combined 25-case run",
+  "production_compiled_tree_manifest_sha256": "2dba3a347fa78350e95e5e50e9af15d721adfdf659fbe5d0051af09cc03929a6",
   "test_only_batch_commands": [
     5,
     0
@@ -142,8 +140,52 @@
     "dof": 8,
     "typed_62mm_intact": true,
     "camera_gesture_omitted_explicitly": true,
-    "first_product_mismatch": "One Escape keeps Line active; source returns to selection",
+    "first_product_mismatch": "No directly visible Mirror control; stopped before Mirror input.",
     "box_mirror_later_inputs": "untested",
-    "complete_tutorial_credit": 0
-  }
+    "complete_tutorial_credit": 0,
+    "single_escape_select": true,
+    "box_selection": "All eight native curves selected by actual right-to-left drag",
+    "private_mirror_candidate": {
+      "included": false,
+      "native_cases": [
+        2,
+        1
+      ],
+      "source_case": "invalid_model: Native sketch solver rejected the edit",
+      "rollback": "Native sketch and history preserved; revision advances on rejection"
+    }
+  },
+  "current_source14_combined": [
+    25,
+    0
+  ],
+  "passive_escape_repair_included": true,
+  "constraint_name_escape_repair_included": true,
+  "historical_results": {
+    "source10": [
+      18,
+      1
+    ],
+    "source11_affected": [
+      2,
+      0
+    ],
+    "source12_strict_m16": [
+      1,
+      0
+    ],
+    "source13": [
+      24,
+      0
+    ],
+    "original_constraint_name_probe": [
+      0,
+      1
+    ],
+    "obsolete_two_escape_negative_control": [
+      0,
+      1
+    ]
+  },
+  "stop_assertion_tests_in_focused_cohort": 1
 }

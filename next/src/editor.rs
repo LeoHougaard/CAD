@@ -1428,7 +1428,12 @@ impl eframe::App for Editor {
                 ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Escape));
             } else if self.cancel_sketch_name(ctx) {
                 ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Escape));
-            } else if self.inline_line_cancel(ctx) {
+            } else if self.constraint_name_focused(ctx) {
+                // TextEdit may surrender current focus on Escape before this
+                // update; the previous-frame owner still receives the key.
+            } else if self.inline_line_foreign_focus(ctx) {
+                // The other text field receives Escape in its own widget.
+            } else if self.inline_line_cancel(ctx, was_busy) {
                 ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Escape));
             } else if self.unavailable() && !self.source_recovery() {
                 self.pending_file = None;

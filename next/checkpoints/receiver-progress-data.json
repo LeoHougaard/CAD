@@ -23,6 +23,11 @@
       "version": 10,
       "passed": 2,
       "denominator": 2
+    },
+    {
+      "version": 14,
+      "passed": 2,
+      "denominator": 2
     }
   ],
   "full_tutorial_credit": 0,
@@ -34,6 +39,17 @@
     "native3/result.json": "f9614097f6be290bc0f01f242d7ec88891a4eb8b2abd00c86431086f6b650195",
     "controls8b/native1/result.json": "3ed026a50c345db2574c99ad39dc4fc4c2091b5b7b4c7a063bbf36ad84c07f63",
     "controls10/native1/result.json": "980088ba4c8720d9051a98a88f682a76b146de1e11165871bcc558185d2d111e",
-    "receiver-progress.html": "6f305a153c2f5451c091e709d91f54b710e21a24229060fa3eb482490484e77e"
-  }
+    "receiver-progress.html": "6f305a153c2f5451c091e709d91f54b710e21a24229060fa3eb482490484e77e",
+    "controls14/native1/result.json": "c90e2cca9664b46bf4d3c93d319a938d24a39628f1bc032381940610b7e9d2ad",
+    "receiver-progress-v2.html": "3bd8b14a6a4047b2b369b4c3205b3739f45e5261885ffe8a1118d821f1fe596e"
+  },
+  "current_combined_regressions": {
+    "tree": "source14",
+    "passed": 25,
+    "failed": 0,
+    "tutorial_credit": 0,
+    "not_combined_with_fixed_two_case_percentage": true
+  },
+  "provenance_scope": "source_file_hashes name retained private evidence packet artifacts, not paths relative to this published JSON",
+  "published_rendered_html_sha256": "3bd8b14a6a4047b2b369b4c3205b3739f45e5261885ffe8a1118d821f1fe596e"
 }

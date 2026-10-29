@@ -1375,3 +1375,6 @@ mod receiver_shortcut_tests;
 
 #[path = "receiver_master_profile_attempt_tests.rs"]
 mod receiver_master_profile_attempt_tests;
+
+#[path = "receiver_passive_escape_source_tests.rs"]
+mod receiver_passive_escape_source_tests;

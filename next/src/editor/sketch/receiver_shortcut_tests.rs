@@ -519,7 +519,7 @@ fn receiver_inline_passive_shortcuts_and_canvas_click() {
     );
     let after = n.editor.state.clone();
     tutorial_key(&mut n, Key::Escape, egui::Modifiers::NONE);
-    assert_eq!(n.editor.sketch_ui.tool, Tool::Line);
+    assert_eq!(n.editor.sketch_ui.tool, Tool::Select);
     assert!(n.editor.sketch_ui.session.is_some());
     assert_eq!(n.editor.state, after);
     tutorial_key(&mut n, Key::Escape, egui::Modifiers::NONE);
@@ -843,4 +843,287 @@ fn receiver_inline_reference_dimension_moves_with_native_solve() {
     );
     n.events.push(json!({"control":"existing reference value follows new native line length", "before":before,"after":after}));
     n.record();
+}
+
+#[test]
+#[ignore = "passive Line and Polyline Escape through actual Editor and native worker"]
+fn receiver_passive_escape_line_and_polyline_one_key() {
+    let mut n = Native::new("passive-escape-line-polyline");
+    let name = inline_control_start(&mut n);
+    let first = n.editor.state.clone();
+    assert_eq!(n.editor.sketch_ui.tool, Tool::Line);
+    assert!(n.editor.sketch_ui.inline_line.is_some());
+    tutorial_key(&mut n, Key::Escape, egui::Modifiers::NONE);
+    assert_eq!(n.editor.sketch_ui.tool, Tool::Select);
+    assert!(n.editor.sketch_ui.points.is_empty() && n.editor.sketch_ui.snaps.is_empty());
+    assert!(n.editor.sketch_ui.inline_line.is_none() && n.editor.sketch_ui.session.is_some());
+    assert_eq!(n.editor.state, first);
+    n.click("Polyline");
+    assert_eq!(n.editor.sketch_ui.tool, Tool::Polyline);
+    settle(&mut n);
+    let p = n.editor.viewport.sketch_screen_point([0., 0., 0.]);
+    pointer(&mut n, p);
+    let p = n.editor.viewport.sketch_screen_point([-20., 15., 0.]);
+    pointer(&mut n, p);
+    n.receive("transaction", true);
+    assert_eq!(
+        object(&n.editor.state, &name)["sketch"]["geometry_count"],
+        2
+    );
+    let after = n.editor.state.clone();
+    assert!(n.editor.sketch_ui.inline_line.is_some());
+    tutorial_key(&mut n, Key::Escape, egui::Modifiers::NONE);
+    assert_eq!(n.editor.sketch_ui.tool, Tool::Select);
+    assert!(n.editor.sketch_ui.points.is_empty() && n.editor.sketch_ui.snaps.is_empty());
+    assert!(n.editor.sketch_ui.inline_line.is_none() && n.editor.sketch_ui.session.is_some());
+    assert_eq!(n.editor.state, after);
+    n.events.push(
+        json!({"control":"one Escape ends passive Line and Polyline without native mutation"}),
+    );
+    n.record();
+}
+
+#[test]
+#[ignore = "editing Escape retains line and sketch after rejected native units"]
+fn receiver_passive_escape_editing_cancel_preserves_chain() {
+    let mut n = Native::new("passive-escape-editing");
+    let name = inline_control_start(&mut n);
+    let before = n.editor.state.clone();
+    n.frame(vec![egui::Event::Text("17 xyz".into())]);
+    tutorial_key(&mut n, Key::Enter, egui::Modifiers::NONE);
+    n.receive("transaction", false);
+    settle(&mut n);
+    let rejected = n.editor.state.clone();
+    assert_eq!(
+        object(&rejected, &name)["sketch"],
+        object(&before, &name)["sketch"]
+    );
+    assert_eq!(rejected["undo_count"], before["undo_count"]);
+    assert_eq!(rejected["redo_count"], before["redo_count"]);
+    assert!(
+        n.editor
+            .sketch_ui
+            .inline_line
+            .as_ref()
+            .is_some_and(|p| p.editing)
+    );
+    let points = n.editor.sketch_ui.points.clone();
+    let snaps = n.editor.sketch_ui.snaps.clone();
+    tutorial_key(&mut n, Key::Escape, egui::Modifiers::NONE);
+    assert!(n.editor.sketch_ui.inline_line.is_none());
+    assert_eq!(n.editor.sketch_ui.tool, Tool::Line);
+    assert_eq!(n.editor.sketch_ui.points, points);
+    assert_eq!(n.editor.sketch_ui.snaps, snaps);
+    assert!(n.editor.sketch_ui.session.is_some());
+    assert_eq!(n.editor.state, rejected);
+    n.events.push(
+        json!({"control":"invalid units, editing Escape cancels only prompt", "state":rejected}),
+    );
+    n.record();
+}
+
+#[test]
+#[ignore = "popup, sketch-name and busy native reply own Escape before passive line"]
+fn receiver_passive_escape_other_owners_and_busy() {
+    let mut n = Native::new("passive-escape-owners");
+    let _name = inline_control_start(&mut n);
+    let before = n.editor.state.clone();
+    tutorial_key(&mut n, Key::S, egui::Modifiers::NONE);
+    assert!(egui::Popup::is_any_open(&n.ctx));
+    tutorial_key(&mut n, Key::Escape, egui::Modifiers::NONE);
+    assert!(!egui::Popup::is_any_open(&n.ctx));
+    assert_eq!(n.editor.sketch_ui.tool, Tool::Line);
+    assert!(n.editor.sketch_ui.inline_line.is_some());
+    assert_eq!(n.editor.state, before);
+    let field = n
+        .ctx
+        .read_response(egui::Id::new("native_sketch_name"))
+        .unwrap();
+    pointer(&mut n, field.rect.center());
+    n.frame(vec![egui::Event::Text("7".into())]);
+    tutorial_key(&mut n, Key::Escape, egui::Modifiers::NONE);
+    settle(&mut n);
+    assert!(!n.editor.busy);
+    assert_eq!(n.editor.state, before);
+    assert_eq!(n.editor.sketch_ui.tool, Tool::Line);
+    assert!(n.editor.sketch_ui.inline_line.is_some());
+    n.editor.send("inspect", json!({}));
+    assert!(n.editor.busy);
+    tutorial_key(&mut n, Key::Escape, egui::Modifiers::NONE);
+    assert_eq!(n.editor.sketch_ui.tool, Tool::Line);
+    assert!(n.editor.sketch_ui.inline_line.is_some());
+    let reply = n.raw.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert!(reply.accepted);
+    n.forward.send(reply).unwrap();
+    tutorial_key(&mut n, Key::Escape, egui::Modifiers::NONE);
+    assert!(!n.editor.busy);
+    assert_eq!(n.editor.sketch_ui.tool, Tool::Line);
+    assert!(n.editor.sketch_ui.inline_line.is_some());
+    assert_eq!(n.editor.state, before);
+    n.events.push(json!({"control":"popup and name own Escape; native busy and completion frame preserve passive chain"}));
+    n.record();
+}
+
+fn receiver_constraint_owner_capture(
+    n: &mut Native,
+    phase: &str,
+    frame: egui::FullOutput,
+    field: Option<egui::Id>,
+) -> Vec<(String, egui::Rect)> {
+    let text: Vec<_> = frame
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::epaint::Shape::Text(t) => Some((
+                t.galley.text().to_owned(),
+                t.galley.rect.translate(t.pos.to_vec2()),
+            )),
+            _ => None,
+        })
+        .collect();
+    fs::write(
+        n.folder.join(format!("{phase}-actual-frame-shapes.txt")),
+        format!("{:#?}", frame.shapes),
+    )
+    .unwrap();
+    fs::write(
+        n.folder.join(format!("{phase}-actual-ui-text.json")),
+        serde_json::to_vec_pretty(
+            &text
+                .iter()
+                .map(|(t, r)| json!({"text":t,"rect":[r.min.x,r.min.y,r.max.x,r.max.y]}))
+                .collect::<Vec<_>>(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    n.events.push(json!({"phase":phase,"focused":format!("{:?}",n.ctx.memory(|m|m.focused())),"wants_keyboard_input":n.ctx.wants_keyboard_input(),"field_id":field.map(|id|format!("{id:?}")),"field_has_focus":field.map(|id|n.ctx.memory(|m|m.has_focus(id))),"field_had_focus_last_frame":field.map(|id|n.ctx.memory(|m|m.had_focus_last_frame(id))),"tool":format!("{:?}",n.editor.sketch_ui.tool),"inline_prompt":n.editor.sketch_ui.inline_line.is_some(),"inline_editing":n.editor.sketch_ui.inline_line.as_ref().map(|p|p.editing),"constraint_name_draft":n.editor.sketch_ui.constraint_name,"selected_constraint":n.editor.sketch_ui.selected_constraint,"chain_points":n.editor.sketch_ui.points,"session":n.editor.sketch_ui.session,"ui":n.ui_state(),"state":n.editor.state}));
+    n.record();
+    text
+}
+
+#[test]
+#[ignore = "one actual constraint Name TextEdit Escape ownership probe, not tutorial replay"]
+fn receiver_constraint_name_escape_preserves_passive_line_owner() {
+    let mut n = Native::new("constraint-name-escape-owner");
+    let name = inline_control_start(&mut n);
+    assert_eq!(
+        object(&n.editor.state, &name)["sketch"]["constraint_count"],
+        2
+    );
+    assert_eq!(n.editor.sketch_ui.tool, Tool::Line);
+    assert!(
+        n.editor
+            .sketch_ui
+            .inline_line
+            .as_ref()
+            .is_some_and(|p| !p.editing)
+    );
+    let baseline = n.editor.state.clone();
+    let token = n.editor.sketch_ui.session.clone();
+    let points = n.editor.sketch_ui.points.clone();
+    let frame = n.frame(vec![]);
+    receiver_constraint_owner_capture(&mut n, "passive-line-before-controls", frame, None);
+    n.click("Constraints (2)");
+    settle(&mut n);
+    let frame = n.frame(vec![]);
+    receiver_constraint_owner_capture(&mut n, "actual-constraints-open", frame, None);
+    n.click("1  Coincident");
+    settle(&mut n);
+    assert_eq!(n.editor.sketch_ui.selected_constraint, Some(0));
+    assert_eq!(n.editor.sketch_ui.tool, Tool::Line);
+    assert!(
+        n.editor
+            .sketch_ui
+            .inline_line
+            .as_ref()
+            .is_some_and(|p| !p.editing)
+    );
+    assert_eq!(n.editor.state, baseline);
+    let frame = n.frame(vec![]);
+    let text =
+        receiver_constraint_owner_capture(&mut n, "actual-constraint-row-selected", frame, None);
+    let labels: Vec<_> = text.iter().filter(|(t, _)| t == "Name").collect();
+    let rename: Vec<_> = text.iter().filter(|(t, _)| t == "Rename").collect();
+    assert_eq!(labels.len(), 1);
+    assert_eq!(rename.len(), 1);
+    let left = labels[0].1;
+    let right = rename[0].1;
+    let p = egui::pos2((left.max.x + right.min.x) * 0.5, left.center().y);
+    let panel = n
+        .ctx
+        .memory(|m| m.area_rect(egui::Id::new("native_sketch_controls")))
+        .unwrap();
+    assert!(panel.contains(p));
+    n.events.push(json!({"action":"pointer to actual Name TextEdit between visible Name and Rename controls","point":[p.x,p.y],"name_label_rect":[left.min.x,left.min.y,left.max.x,left.max.y],"rename_rect":[right.min.x,right.min.y,right.max.x,right.max.y],"panel":[panel.min.x,panel.min.y,panel.max.x,panel.max.y],"actual_layer":format!("{:?}",n.ctx.layer_id_at(p))}));
+    n.record();
+    pointer(&mut n, p);
+    let field = n
+        .ctx
+        .memory(|m| m.focused())
+        .expect("actual clicked Name field owns focus");
+    assert_ne!(field, egui::Id::new("inline_line_length"));
+    assert_ne!(field, egui::Id::new("native_sketch_name"));
+    let response = n
+        .ctx
+        .read_response(field)
+        .expect("real focused TextEdit response");
+    assert!(response.rect.contains(p));
+    assert!(n.ctx.wants_keyboard_input());
+    n.events.push(json!({"action":"actual focused field verified","field":format!("{field:?}"),"response_rect":[response.rect.min.x,response.rect.min.y,response.rect.max.x,response.rect.max.y],"has_focus":response.has_focus()}));
+    n.record();
+    let draft = "UnsavedConstraintDraft";
+    let frame = n.frame(vec![egui::Event::Text(draft.into())]);
+    let text =
+        receiver_constraint_owner_capture(&mut n, "typed-real-foreign-field", frame, Some(field));
+    assert_eq!(n.editor.sketch_ui.constraint_name, draft);
+    assert!(text.iter().any(|(t, _)| t == draft));
+    assert!(n.ctx.memory(|m| m.has_focus(field)));
+    assert!(n.ctx.wants_keyboard_input());
+    assert_eq!(n.editor.sketch_ui.tool, Tool::Line);
+    assert!(
+        n.editor
+            .sketch_ui
+            .inline_line
+            .as_ref()
+            .is_some_and(|p| !p.editing)
+    );
+    assert_eq!(n.editor.sketch_ui.session, token);
+    assert_eq!(n.editor.state, baseline);
+    let frame = n.frame(vec![]);
+    receiver_constraint_owner_capture(&mut n, "before-one-Escape", frame, Some(field));
+    let frame = n.frame(vec![egui::Event::Key {
+        key: Key::Escape,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    }]);
+    receiver_constraint_owner_capture(&mut n, "after-Escape-down", frame, Some(field));
+    let frame = n.frame(vec![egui::Event::Key {
+        key: Key::Escape,
+        physical_key: None,
+        pressed: false,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    }]);
+    receiver_constraint_owner_capture(&mut n, "after-Escape-up", frame, Some(field));
+    settle(&mut n);
+    let frame = n.frame(vec![]);
+    receiver_constraint_owner_capture(&mut n, "after-Escape-settled", frame, Some(field));
+    let preserved = n.editor.sketch_ui.tool == Tool::Line
+        && n.editor
+            .sketch_ui
+            .inline_line
+            .as_ref()
+            .is_some_and(|p| !p.editing)
+        && n.editor.sketch_ui.points == points
+        && n.editor.sketch_ui.session == token
+        && n.editor.state == baseline;
+    n.events.push(json!({"finding":if preserved {"PASS: actual foreign Name field Escape preserves passive Line owner"} else {"P2: actual foreign Name field Escape changed passive Line/session/native owner"},"owner_preserved":preserved,"tool":format!("{:?}",n.editor.sketch_ui.tool),"prompt":n.editor.sketch_ui.inline_line.is_some(),"chain_points":n.editor.sketch_ui.points,"session_unchanged":n.editor.sketch_ui.session==token,"native_unchanged":n.editor.state==baseline,"field_focus_after":n.ctx.memory(|m|m.has_focus(field)),"draft_after":n.editor.sketch_ui.constraint_name,"draft_reset_semantics_asserted":false,"tutorial_claim":false,"source_and_product_changes":0}));
+    n.record();
+    assert!(
+        preserved,
+        "one Escape from the actual foreign constraint Name TextEdit must not end Line, alter its prompt/chain/session, or mutate native state"
+    );
 }

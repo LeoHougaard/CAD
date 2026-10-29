@@ -203,6 +203,23 @@ fn related_geometry(snapshot: &Value, constraint: &Value) -> Vec<SketchElement> 
 }
 
 impl Editor {
+    fn constraint_name_id(&self, index: usize) -> egui::Id {
+        egui::Id::new("native_constraint_name")
+            .with(self.state["document"].as_str().unwrap_or_default())
+            .with(self.sketch.as_deref().unwrap_or_default())
+            .with(self.sketch_ui.session.as_deref().unwrap_or_default())
+            .with(index)
+    }
+
+    pub(super) fn constraint_name_focused(&self, ctx: &egui::Context) -> bool {
+        let Some(index) = self.sketch_ui.selected_constraint else {
+            return false;
+        };
+        let id = self.constraint_name_id(index);
+        self.sketch_ui.session.is_some()
+            && ctx.memory(|m| m.has_focus(id) || m.had_focus_last_frame(id))
+    }
+
     fn constraint_editable(&self) -> bool {
         !self.busy
             && self.draft.is_none()
@@ -730,7 +747,8 @@ impl Editor {
                     ui.add_enabled_ui(can_edit, |ui| {
                         ui.horizontal(|ui| {
                             ui.label("Name");
-                            let response = ui.add(egui::TextEdit::singleline(&mut self.sketch_ui.constraint_name).desired_width(115.));
+                            let name_id = self.constraint_name_id(index);
+                            let response = ui.add(egui::TextEdit::singleline(&mut self.sketch_ui.constraint_name).id(name_id).desired_width(115.));
                             if ui.small_button("Rename").clicked() || response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
                                 edits.push(json!({"op":"constraint_state","object":snapshot["name"],"index":index,"name":self.sketch_ui.constraint_name.trim()}));
                             }

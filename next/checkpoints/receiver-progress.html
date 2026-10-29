@@ -31,7 +31,7 @@ html,body{margin:0;background:transparent;color:var(--foreground);font-family:va
 <script>
 (() => {
  const root=document.getElementById('receiver-progress');
- const data=[{version:2,ui:0,passed:0},{version:3,ui:50,passed:1},{version:8,ui:100,passed:2},{version:10,ui:100,passed:2}];
+ const data=[{version:2,ui:0,passed:0},{version:3,ui:50,passed:1},{version:8,ui:100,passed:2},{version:10,ui:100,passed:2},{version:14,ui:100,passed:2}];
  const ns='http://www.w3.org/2000/svg';
  function add(parent,tag,attrs,text){const n=document.createElementNS(ns,tag);for(const [k,v] of Object.entries(attrs))n.setAttribute(k,v);if(text!==undefined)n.textContent=text;parent.appendChild(n);return n;}
  function draw(id,kind){
@@ -42,7 +42,7 @@ html,body{margin:0;background:transparent;color:var(--foreground);font-family:va
   const x=i=>left+12+i*(pw-24)/(observations.length-1);const y=v=>top+ph-10-(v-low)/(high-low)*(ph-20);
   add(svg,'rect',{x:left,y:top,width:pw,height:ph,fill:'none',stroke:'var(--border)','stroke-width':1,'data-chart-frame':''});
   for(const tick of [0,50,100]){const yy=y(tick);add(svg,'line',{x1:left,x2:w-right,y1:yy,y2:yy,stroke:'var(--border)','stroke-width':1});add(svg,'text',{x:left-10,y:yy+4,'text-anchor':'end'},kind==='ui'?tick+'%':String(tick));}
-  observations.forEach(d=>add(svg,'text',{x:x(d.x),y:h-27,'text-anchor':d.x===0?'start':d.x===3?'end':'middle'},'V'+d.version));
+  observations.filter(d=>w>=500 || d.x!==2).forEach(d=>add(svg,'text',{x:x(d.x),y:h-27,'text-anchor':d.x===0?'start':d.x===observations.length-1?'end':'middle'},'V'+d.version));
   add(svg,'text',{x:left+pw/2,y:h-6,'text-anchor':'middle',class:'axis-title','data-axis':'x'},'Candidate iteration');
   add(svg,'text',{transform:`translate(15 ${top+ph/2}) rotate(-90)`,'text-anchor':'middle',class:'axis-title','data-axis':'y'},kind==='ui'?'Fixed checks passed (%)':'Tutorials verified (count)');
   if(kind!=='ui'){add(svg,'line',{x1:left+1,x2:w-right-1,y1:y(100),y2:y(100),stroke:'var(--muted-foreground)','stroke-width':1,'stroke-dasharray':'4 4'});add(svg,'text',{x:w-right-6,y:y(100)-7,'text-anchor':'end'},'Target 100');}

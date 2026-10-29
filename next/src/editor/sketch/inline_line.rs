@@ -205,19 +205,33 @@ impl Editor {
             }
         }
     }
-    pub(in crate::editor) fn inline_line_cancel(&mut self, ctx: &egui::Context) -> bool {
-        if self.busy
-            || self.sketch_ui.inline_line.is_none()
-            || (ctx.wants_keyboard_input()
-                && ctx.memory(|m| {
-                    m.focused()
-                        .is_some_and(|id| id != egui::Id::new("inline_line_length"))
-                }))
-        {
+    pub(in crate::editor) fn inline_line_foreign_focus(&self, ctx: &egui::Context) -> bool {
+        self.sketch_ui.inline_line.is_some()
+            && ctx.wants_keyboard_input()
+            && ctx.memory(|m| {
+                m.focused()
+                    .is_some_and(|id| id != egui::Id::new("inline_line_length"))
+            })
+    }
+    pub(in crate::editor) fn inline_line_cancel(
+        &mut self,
+        ctx: &egui::Context,
+        was_busy: bool,
+    ) -> bool {
+        let Some(prompt) = &self.sketch_ui.inline_line else {
             return false;
+        };
+        if self.busy || was_busy {
+            return true;
         }
-        self.sketch_ui.inline_line = None;
-        ctx.memory_mut(|m| m.surrender_focus(egui::Id::new("inline_line_length")));
+        if prompt.editing {
+            self.sketch_ui.inline_line = None;
+            ctx.memory_mut(|m| m.surrender_focus(egui::Id::new("inline_line_length")));
+        } else {
+            // An untouched prompt is part of the drawing command, so the
+            // same Escape ends Line and clears its unfinished chain.
+            self.sketch_escape();
+        }
         true
     }
     pub(in crate::editor) fn inline_line_ui(&mut self, ctx: &egui::Context, was_busy: bool) {
