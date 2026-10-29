@@ -1,15 +1,26 @@
-<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CAD verification progress</title>
+﻿<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
-body{margin:0;color:var(--foreground);font-family:var(--font-sans);font-size:14px}h2{font-size:18px;font-weight:500;margin:0 96px 12px 0}p{margin:8px 0 16px;line-height:1.5}svg{display:block;width:100%;height:354px}svg text{fill:var(--foreground);font-size:12px}small{font-size:12px;color:var(--muted-foreground)}.legend{display:flex;gap:20px;flex-wrap:wrap;font-size:12px;margin:10px 0}.key{display:inline-block;width:12px;height:12px;margin-right:5px;vertical-align:-2px}.pass{background:var(--chart-1)}.fail{background:var(--destructive)}.summary{border-top:1px solid var(--border);padding-top:14px;margin-top:16px}strong{font-weight:500}a{color:var(--foreground)}
-</style></head><body>
-<h2>CAD verification progress</h2>
-<p><strong>Full tutorials verified: 0 of at least 100.</strong><br>Focused checks measure specific behavior. Their changing scope cannot predict completion of the full tutorial goal.</p>
-<div class="legend"><span><i class="key pass"></i>Passed</span><span><i class="key fail"></i>Failed, retained</span></div>
-<svg id="checks" role="img" aria-label="Separate verification cohorts. Current build 247 passed, zero failed. Current Editor 15 passed, zero failed. Prior source6 Editor 32 passed, zero failed. Placement Editor 24 passed, 3 failed. Placement stock 54 passed, 11 failed. Grounded stock 42 passed, zero failed."><title>Success by separate verification cohort</title></svg>
-<p><small>Each bar is a separate cohort and source tree. Failure classification does not remove a failed assertion. No pooled rate or extrapolated limit is calculated.</small></p>
-<div class="summary"><strong>New combined code</strong><p>Continuous Line, P plane visibility and Windows native EOF cleanup passed the combined build and focused Editor checks. Independent integration review found no new confirmed defect within its scope.</p>
-<strong>Still open</strong><p>Atomic new-sketch Begin/Cancel/Redo/Restore, negative whole-edge spacing, ten free-position geometry differences, current Pixel acceptance and full tutorial coverage. Unix graceful shutdown is unsupported; its original forced cleanup remains.</p></div>
-<script>
-(()=>{const rows=[['Current build',247,0],['Current Editor',15,0],['Prior source6 Editor',32,0],['Placement Editor',24,3],['Placement stock',54,11],['Grounded stock',42,0]];const svg=document.getElementById('checks'),NS='http://www.w3.org/2000/svg';const make=(n,a,t)=>{const e=document.createElementNS(NS,n);for(const k in a)e.setAttribute(k,a[k]);if(t!==undefined)e.textContent=t;svg.append(e);return e};function draw(){svg.replaceChildren();const w=svg.getBoundingClientRect().width,h=354,left=8,right=64,plotW=w-left-right;svg.setAttribute('viewBox',`0 0 ${w} ${h}`);rows.forEach((r,i)=>{const y=18+i*50,total=r[1]+r[2],p=r[1]/total;make('text',{x:left,y},`${r[0]}  |  ${r[1]} / ${total}`);make('rect',{x:left,y:y+9,width:plotW*p,height:14,fill:'var(--chart-1)'});if(r[2])make('rect',{x:left+plotW*p,y:y+9,width:plotW*(1-p),height:14,fill:'var(--destructive)'});make('text',{x:w-2,y:y+20,'text-anchor':'end'},`${(p*100).toFixed(p===1?0:1)}%`)});make('line',{x1:left,y1:321,x2:left+plotW,y2:321,stroke:'var(--border)'});make('text',{x:left,y:340,class:'axis-title','data-axis':'x'},'Share of checks passing (%)');make('text',{x:left+plotW,y:340,'text-anchor':'end'},'100')};new ResizeObserver(draw).observe(svg);draw()})();
+html,body{margin:0;background:transparent;color:var(--foreground,CanvasText);font-family:var(--font-sans,system-ui);font-size:14px}
+#cad-verification{background:transparent}h2{font-size:18px;font-weight:500;margin:0 0 12px}.target{display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap}.target strong{font-weight:500;font-variant-numeric:tabular-nums}.track{height:7px;background:var(--secondary,ButtonFace);margin:10px 0 16px}.sub{color:var(--muted-foreground,GrayText);margin:8px 0;font-size:12px;line-height:1.5}.legend{display:flex;gap:18px;flex-wrap:wrap;font-size:12px}.legend span{display:inline-flex;align-items:center;gap:6px}.swatch{width:12px;height:8px;background:var(--chart-1,LinkText)}.swatch.fail{background:var(--destructive,Mark)}svg{display:block;width:100%;height:482px}svg text{fill:var(--foreground,CanvasText);font-size:12px}svg .grid{stroke:var(--border,GrayText);stroke-width:1;opacity:.45}.counts{font-variant-numeric:tabular-nums}
+</style></head><body><main id="cad-verification">
+<h2>Verification by cohort</h2>
+<div class="target"><span>Complete tutorials verified</span><strong>0 / 100 target</strong></div>
+<div class="track" role="progressbar" aria-label="Complete tutorials verified" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+<div class="legend"><span><i class="swatch" aria-hidden="true"></i>Passed</span><span><i class="swatch fail" aria-hidden="true"></i>Retained failed checks</span></div>
+<svg role="img" aria-label="Separate evidence cohorts. Current source5 active tests253 of253, Editor checks8 of8; source9 first-cube prefix1 of1, cube stock24 of24. Prior placement Editor24 of27 and stock54 of65, grounded stock42 of42, ellipse primitive28 of31. These are not complete tutorial counts."></svg>
+<p class="sub">Counts are passed / executed within each named cohort. Old failures remain retained. The cube is a tutorial prefix, not a complete tutorial.</p>
+<p class="sub">Cohorts differ, so these bars are not a convergence curve. There is no defensible completion-limit estimate yet.</p>
+</main><script>
+(()=>{const root=document.getElementById('cad-verification'),svg=root.querySelector('svg');const rows=[
+{label:['Source5 active tests'],pass:253,fail:0},{label:['Source5 Editor checks'],pass:8,fail:0},{label:['Source9 cube prefix'],pass:1,fail:0},{label:['Cube stock checks'],pass:24,fail:0},
+{label:['Prior placement','Editor'],pass:24,fail:3},{label:['Prior placement','stock phases'],pass:54,fail:11},
+{label:['Grounded stock','phases'],pass:42,fail:0},{label:['Ellipse primitive'],pass:28,fail:3}];
+const NS='http://www.w3.org/2000/svg';function el(tag,attrs,text){const e=document.createElementNS(NS,tag);for(const[k,v]of Object.entries(attrs))e.setAttribute(k,String(v));if(text!==undefined)e.textContent=text;svg.appendChild(e);return e}
+function draw(){const w=Math.max(300,root.clientWidth),h=482,L=w<480?138:174,R=52,T=18,B=50,span=w-L-R;svg.setAttribute('viewBox',`0 0 ${w} ${h}`);svg.replaceChildren();el('title',{},'Verification by separate source-bound cohorts');el('rect',{'data-chart-frame':'',x:L,y:T,width:span,height:h-T-B,fill:'none',stroke:'var(--border,GrayText)','stroke-width':1});
+for(const tick of [0,50,100]){const x=L+span*tick/100;el('line',{x1:x,x2:x,y1:T,y2:h-B,class:'grid'});el('text',{x,y:h-B+20,'text-anchor':tick===0?'start':tick===100?'end':'middle'},String(tick));}
+rows.forEach((r,i)=>{const total=r.pass+r.fail,y=T+27+i*50,p=100*r.pass/total;const label=el('text',{x:L-12,y:y-(r.label.length-1)*7,'text-anchor':'end'});r.label.forEach((line,j)=>{const t=document.createElementNS(NS,'tspan');t.setAttribute('x',String(L-12));t.setAttribute('dy',j?'15':'0');t.textContent=line;label.appendChild(t)});
+el('rect',{x:L,y:y-8,width:span,height:16,fill:'var(--secondary,ButtonFace)',opacity:.5});el('rect',{x:L,y:y-8,width:span*p/100,height:16,fill:'var(--chart-1,LinkText)'});if(r.fail)el('rect',{x:L+span*p/100,y:y-8,width:span*(100-p)/100,height:16,fill:'var(--destructive,Mark)'});el('text',{x:L+span+7,y:y+4,class:'counts'},`${r.pass}/${total}`);});
+el('text',{x:L+span/2,y:h-7,'text-anchor':'middle',class:'axis-title','data-axis':'x'},'Checks passed (%)');}
+new ResizeObserver(draw).observe(root);draw();})();
 </script></body></html>

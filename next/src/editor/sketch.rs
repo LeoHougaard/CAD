@@ -14,6 +14,10 @@ pub(super) struct SketchUi {
     pub(super) dimension_tool: Option<DimensionTool>,
     pub(super) selected_constraint: Option<usize>,
     pub(super) constraint_name: String,
+    pub(super) name_text: String,
+    pub(super) name_owner: Option<Value>,
+    pub(super) pending_name_finish: Option<Value>,
+    pub(super) name_input_blocked: bool,
     pub(super) session: Option<String>,
     pub(super) drag: Option<Drag>,
     pub(super) trim: bool,
@@ -42,6 +46,10 @@ impl Default for SketchUi {
             dimension_tool: None,
             selected_constraint: None,
             constraint_name: String::new(),
+            name_text: String::new(),
+            name_owner: None,
+            pending_name_finish: None,
+            name_input_blocked: false,
             session: None,
             drag: None,
             trim: false,
@@ -156,6 +164,26 @@ fn external_indices(snapshot: &Value, selection: &[SketchElement], deleting: boo
 }
 
 impl Editor {
+    pub(super) fn sketch_name_focused(&self, ctx: &egui::Context) -> bool {
+        ctx.memory(|memory| memory.has_focus(egui::Id::new("native_sketch_name")))
+    }
+
+    pub(super) fn cancel_sketch_name(&mut self, ctx: &egui::Context) -> bool {
+        let id = egui::Id::new("native_sketch_name");
+        let owned_focus =
+            ctx.memory(|memory| memory.has_focus(id) || memory.had_focus_last_frame(id));
+        if self.sketch_ui.session.is_none() || self.sketch_ui.name_owner.is_none() || !owned_focus {
+            return false;
+        }
+        self.sketch_ui.name_text = self
+            .sketch_snapshot()
+            .and_then(|snapshot| snapshot["label"].as_str().map(str::to_owned))
+            .unwrap_or_default();
+        self.sketch_ui.name_owner = None;
+        ctx.memory_mut(|memory| memory.surrender_focus(egui::Id::new("native_sketch_name")));
+        true
+    }
+
     pub(super) fn start_dimension_tool(&mut self) {
         if self.busy
             || self.sketch_ui.session.is_none()
@@ -294,6 +322,28 @@ impl Editor {
         if op == "transaction" && self.sketch_ui.drag.as_ref().is_some_and(|d| d.released) {
             self.sketch_ui.drag = None;
         }
+        if op == "transaction"
+            && let Some(owner) = self.sketch_ui.pending_name_finish.take()
+        {
+            let same_owner = owner["document"] == self.state["document"]
+                && owner["sketch"].as_str() == self.sketch.as_deref()
+                && owner["token"].as_str() == self.sketch_ui.session.as_deref();
+            let applied = self
+                .sketch_snapshot()
+                .is_some_and(|s| s["label"] == owner["label"]);
+            if success && same_owner && applied {
+                self.finish_sketch(true);
+            } else {
+                self.sketch_ui.after_finish = None;
+                if !success && same_owner {
+                    self.sketch_ui.name_text = owner["label"].as_str().unwrap_or_default().into();
+                    self.sketch_ui.name_owner = Some(json!({"document":self.state["document"],
+                        "revision":self.state["revision"],"sketch":self.sketch,"token":self.sketch_ui.session}));
+                } else if success {
+                    self.error = Some("The sketch changed; it was not finished".into());
+                }
+            }
+        }
         if success && matches!(op, "sketch_finish" | "sketch_cancel") {
             let cancel = op == "sketch_cancel";
             let finished_profile = self.sketch.clone();
@@ -362,6 +412,37 @@ impl Editor {
             || self.sketch_ui.task.is_some()
         {
             return;
+        }
+        if commit
+            && let Some(owner) = self.sketch_ui.name_owner.as_ref()
+            && let Some(snapshot) = self.sketch_snapshot()
+        {
+            let label = self.sketch_ui.name_text.trim();
+            if label != snapshot["label"].as_str().unwrap_or_default() {
+                let current = json!({"document":self.state["document"],"revision":self.state["revision"],
+                    "sketch":snapshot["name"],"token":self.sketch_ui.session});
+                if owner != &current {
+                    self.error = Some("The sketch changed; its name was not applied".into());
+                    return;
+                }
+                if label.is_empty() {
+                    self.error = Some("Sketch name cannot be empty".into());
+                    return;
+                }
+                self.sketch_ui.pending_name_finish =
+                    Some(json!({"document":self.state["document"],
+                    "sketch":snapshot["name"],"token":self.sketch_ui.session,"label":label}));
+                let edit =
+                    json!({"op":"set","object":snapshot["name"],"property":"Label","value":label});
+                let name_owner = self.sketch_ui.name_owner.take();
+                self.transaction("Rename sketch", vec![edit]);
+                if !self.busy {
+                    self.sketch_ui.name_owner = name_owner;
+                    self.sketch_ui.pending_name_finish = None;
+                    self.sketch_ui.after_finish = None;
+                }
+                return;
+            }
         }
         if let Some(token) = self.sketch_ui.session.clone() {
             self.send(
@@ -704,7 +785,11 @@ impl Editor {
         native_pick: bool,
         input_blocked: bool,
     ) {
-        if !ui.is_enabled() || self.sketch_ui.session.is_none() || self.draft.is_some() {
+        if !ui.is_enabled()
+            || self.sketch_ui.session.is_none()
+            || self.draft.is_some()
+            || self.sketch_name_focused(ui.ctx())
+        {
             return;
         }
         let Some(response) = self.viewport.response.clone() else {

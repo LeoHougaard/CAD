@@ -927,6 +927,7 @@ impl Editor {
                         .color(Color32::from_rgb(110, 182, 177)),
                 );
                 ui.separator();
+                self.workspace_units_controls(ui);
                 let idle = self.sketch_ui.task.is_none()
                     && self.sketch_ui.drag.is_none()
                     && self.sketch_ui.dimension.is_none()
@@ -1286,7 +1287,9 @@ impl Editor {
             && !self.sketch_ui.split
             && self.sketch_ui.task.is_none();
         let before = self.viewport.selected.clone();
+        self.viewport.view_cube_input_enabled = !sketch_input_blocked && !self.busy;
         let picked = self.viewport.ui(ui).is_some();
+        let cube_owns_pointer = self.viewport.view_cube_owns_pointer();
         if self.viewport.selected != before {
             if !self.measurement_keeps_selection(ui.input(|i| i.modifiers.shift)) {
                 self.body_ui.selected.clear();
@@ -1298,6 +1301,7 @@ impl Editor {
                 .map(|selection| selection.object.clone());
         }
         if axis_active
+            && !cube_owns_pointer
             && !self.busy
             && self.draft.is_some()
             && self.viewport.response.as_ref().is_some_and(|r| r.clicked())
@@ -1332,14 +1336,16 @@ impl Editor {
             && self.draft.is_none()
             && self.sketch_ui.session.is_none()
             && (self.sketch_creation.is_none() || self.awaiting_standard_plane());
-        if let Some(plane) =
-            self.viewport
-                .standard_guides(ui, &self.state, guide_available, guide_input_allowed)
-            && self.awaiting_standard_plane()
+        if let Some(plane) = self.viewport.standard_guides(
+            ui,
+            &self.state,
+            guide_available,
+            guide_input_allowed && !cube_owns_pointer,
+        ) && self.awaiting_standard_plane()
         {
             self.choose_standard_plane(plane);
         }
-        if !self.unavailable() {
+        if !self.unavailable() && !cube_owns_pointer {
             self.sketch_canvas(ui, picked, sketch_input_blocked);
         }
     }
@@ -1377,6 +1383,7 @@ impl eframe::App for Editor {
             workflow_guide::open(ctx);
         }
         let guide_was_open = workflow_guide::active(ctx);
+        self.units_ui.workspace_input_blocked = was_busy || self.busy || guide_was_open;
         if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close {
             if self.unavailable() && !self.source_recovery() && !self.busy {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -1410,6 +1417,8 @@ impl eframe::App for Editor {
                 egui::Popup::close_all(ctx);
                 ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Escape));
             } else if self.measurement_escape() {
+                ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Escape));
+            } else if self.cancel_sketch_name(ctx) {
                 ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Escape));
             } else if self.unavailable() && !self.source_recovery() {
                 self.pending_file = None;
@@ -1449,6 +1458,7 @@ impl eframe::App for Editor {
         {
             self.property_ui.axis_pick = true;
         }
+        self.sketch_ui.name_input_blocked = shortcut_blocked || workflow_guide::active(ctx);
         self.toolbar(ctx);
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
             if self.unavailable() && !self.source_recovery() {

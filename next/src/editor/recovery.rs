@@ -19,6 +19,7 @@ impl Editor {
 
     pub(super) fn reset_document_interaction(&mut self) {
         self.measurement_ui = measurements::MeasurementUi::default();
+        self.units_ui = units::UnitsUi::default();
         self.sketch = None;
         self.selected_object = None;
         self.sketch_ui = SketchUi::default();

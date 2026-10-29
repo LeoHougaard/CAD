@@ -312,6 +312,8 @@ impl Editor {
             && ["circle", "arc"].contains(&geometry_kind(selection[0]))
         {
             "Radius"
+        } else if crate::sketch_commands::parallel_lines(&snapshot, &selection) {
+            "Distance"
         } else if selection.len() == 3
             || selection.len() == 2
                 && selection
@@ -646,11 +648,53 @@ impl Editor {
             .cloned()
             .unwrap_or_default();
         let mut edits = Vec::new();
+        let mut name_submission_owner = None;
         egui::Window::new("Sketch")
             .id(egui::Id::new("native_sketch_controls"))
             .default_pos([175., 85.]).default_width(235.)
             .resizable(false).collapsible(true)
             .show(ctx, |ui| {
+                let name_id = egui::Id::new("native_sketch_name");
+                let accepted_name = snapshot["label"].as_str().unwrap_or_default();
+                let owner = json!({"document":self.state["document"],"revision":self.state["revision"],
+                    "sketch":snapshot["name"],"token":self.sketch_ui.session});
+                if !self.sketch_name_focused(ctx)
+                    && self.sketch_ui.name_owner.is_none()
+                    && self.sketch_ui.pending_name_finish.is_none()
+                {
+                    self.sketch_ui.name_text = accepted_name.into();
+                    self.sketch_ui.name_owner = None;
+                }
+                ui.horizontal(|ui| {
+                    ui.label("Sketch name");
+                    let response = ui.add_enabled(
+                        can_edit && !self.sketch_ui.name_input_blocked,
+                        egui::TextEdit::singleline(&mut self.sketch_ui.name_text)
+                            .id(name_id).desired_width(140.),
+                    );
+                    if response.gained_focus() {
+                        self.sketch_ui.name_owner = Some(owner.clone());
+                    }
+                    if response.lost_focus() {
+                        let enter = ui.input_mut(|input| input.consume_key(input.modifiers, egui::Key::Enter));
+                        let changed = self.sketch_ui.name_text != accepted_name;
+                        if changed && can_edit && !self.sketch_ui.name_input_blocked {
+                            if self.sketch_ui.name_owner.as_ref() != Some(&owner) {
+                                self.error = Some("The sketch changed; its name was not applied".into());
+                            } else if self.sketch_ui.name_text.trim().is_empty() {
+                                self.error = Some("Sketch name cannot be empty".into());
+                            } else {
+                                name_submission_owner = self.sketch_ui.name_owner.clone();
+                                edits.push(json!({"op":"set","object":snapshot["name"],
+                                    "property":"Label","value":self.sketch_ui.name_text.trim()}));
+                            }
+                        }
+                        self.sketch_ui.name_owner = None;
+                        if enter {
+                            response.surrender_focus();
+                        }
+                    }
+                });
                 let freedom = snapshot["sketch"]["degrees_of_freedom"].as_i64().unwrap_or(0);
                 ui.colored_label(if freedom == 0 { Color32::from_rgb(110, 182, 177) } else { ui.visuals().text_color() },
                     if freedom == 0 { "Fully constrained".into() } else { format!("{freedom} degrees of freedom") });
@@ -716,7 +760,18 @@ impl Editor {
                 }
             });
         if !edits.is_empty() {
-            self.transaction("Edit sketch constraint", edits);
+            let label = if edits
+                .iter()
+                .all(|edit| edit["op"] == "set" && edit["property"] == "Label")
+            {
+                "Rename sketch"
+            } else {
+                "Edit sketch constraint"
+            };
+            self.transaction(label, edits);
+            if !self.busy && name_submission_owner.is_some() {
+                self.sketch_ui.name_owner = name_submission_owner;
+            }
         }
         self.dimension_dialog(ctx, &snapshot);
     }

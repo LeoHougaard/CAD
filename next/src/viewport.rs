@@ -10,6 +10,7 @@ mod gl_renderer;
 mod navigation;
 mod references;
 mod standard_planes;
+mod view_cube;
 pub use standard_planes::StandardPlane;
 mod select_other;
 #[cfg(test)]
@@ -75,6 +76,10 @@ pub struct Viewport {
     scale: f32,
     rect: Rect,
     pub response: Option<egui::Response>,
+    pub view_cube_input_enabled: bool,
+    cube_pointer_owned: bool,
+    cube_action_owned: bool,
+    cube_consumed: bool,
     pub selected: Option<Selection>,
     pub selections: Vec<Selection>,
     pub sketch_selection: Vec<SketchElement>,
@@ -113,6 +118,10 @@ impl Default for Viewport {
             scale: 8.,
             rect: Rect::from_min_size(Pos2::ZERO, Vec2::splat(600.)),
             response: None,
+            view_cube_input_enabled: true,
+            cube_pointer_owned: false,
+            cube_action_owned: false,
+            cube_consumed: false,
             selected: None,
             selections: vec![],
             sketch_selection: vec![],
@@ -680,18 +689,19 @@ impl Viewport {
         let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         self.rect = rect;
         self.validate_other_picker(ui.is_enabled());
+        self.view_cube_input(ui);
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 0., Color32::from_rgb(8, 10, 12));
         let delta = ui.input(|i| i.pointer.delta());
-        if response.dragged_by(egui::PointerButton::Secondary) {
+        if !self.cube_consumed && response.dragged_by(egui::PointerButton::Secondary) {
             let yaw = Quat::from_axis_angle(Vec3::Z, -delta.x * 0.008);
             let pitch = Quat::from_axis_angle(self.rotation * Vec3::X, -delta.y * 0.008);
             self.rotation = (yaw * pitch * self.rotation).normalize();
         }
-        if response.dragged_by(egui::PointerButton::Middle) {
+        if !self.cube_consumed && response.dragged_by(egui::PointerButton::Middle) {
             self.center -= self.rotation * Vec3::new(delta.x, -delta.y, 0.) / self.scale;
         }
-        if response.hovered() {
+        if !self.cube_consumed && response.hovered() {
             let scroll = ui.input(|i| i.smooth_scroll_delta.y);
             if scroll != 0. {
                 let anchor = ui.input(|i| i.pointer.hover_pos()).unwrap_or(rect.center());
@@ -813,7 +823,8 @@ impl Viewport {
             );
         }
         let mut selection = None;
-        if response.clicked()
+        if !self.cube_consumed
+            && response.clicked()
             && let Some(pos) = response.interact_pointer_pos()
         {
             if self.sketch.is_some() && !self.solid_select_in_sketch {
@@ -841,9 +852,12 @@ impl Viewport {
                 selection = self.selected.clone();
             }
         }
-        if let Some(hit) = self.select_other_menu(ui, &response, &triangles) {
+        if (!self.cube_consumed || egui::Popup::is_any_open(ui.ctx()))
+            && let Some(hit) = self.select_other_menu(ui, &response, &triangles)
+        {
             selection = Some(hit);
         }
+        self.draw_view_cube(ui);
         self.response = Some(response);
         selection
     }

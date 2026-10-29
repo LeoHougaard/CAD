@@ -1077,6 +1077,11 @@ def apply_native_edit(doc, edit):
                     and not native_angle
                     and quantity.Unit != obj.getDatum(index).Unit):
                 fail("dimension_mismatch", "Datum unit does not match the native constraint dimension")
+            native_constraint = obj.Constraints[index]
+            if (quantity.Value < 0 and native_constraint.Type == "Distance"
+                    and native_constraint.FirstPos != 0 and native_constraint.SecondPos == 0
+                    and native_constraint.Second != -2000):
+                fail("unsupported_signed_distance", "Negative distances between these elements are not supported yet. Enter a positive distance.")
             obj.setDatum(index, quantity)
         elif op == "move_geometry":
             point, relative = edit["point"], edit.get("relative", False)

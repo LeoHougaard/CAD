@@ -533,6 +533,91 @@ fn point_args(first: SketchElement, second: SketchElement) -> Value {
     json!([first.index, first.point, second.index, second.point])
 }
 
+/// Whether two whole native lines retain the same orientation through active
+/// native constraints. This reads constraint identities; it does not solve them.
+fn constrained_parallel(snapshot: &Value, first: i32, second: i32) -> bool {
+    let mut relations = vec![(-1, -2, true)];
+    for constraint in snapshot["sketch"]["constraints"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        if constraint["active"] == false || constraint["driving"] == false {
+            continue;
+        }
+        let Some(a) = constraint["first"]
+            .as_i64()
+            .and_then(|i| i32::try_from(i).ok())
+        else {
+            continue;
+        };
+        if constraint["first_pos"].as_i64().unwrap_or(0) != 0 {
+            continue;
+        }
+        match constraint["type"].as_str().unwrap_or_default() {
+            "Horizontal" => relations.push((a, -1, false)),
+            "Vertical" => relations.push((a, -2, false)),
+            "Parallel" | "Perpendicular" => {
+                if constraint["second_pos"].as_i64().unwrap_or(0) == 0
+                    && let Some(b) = constraint["second"]
+                        .as_i64()
+                        .and_then(|i| i32::try_from(i).ok())
+                {
+                    relations.push((a, b, constraint["type"] == "Perpendicular"));
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut reached = vec![(first, false)];
+    let mut cursor = 0;
+    while cursor < reached.len() {
+        let (node, perpendicular) = reached[cursor];
+        if node == second {
+            return !perpendicular;
+        }
+        for &(a, b, turn) in &relations {
+            let next = if a == node {
+                Some(b)
+            } else if b == node {
+                Some(a)
+            } else {
+                None
+            };
+            if let Some(next) = next
+                && !reached.iter().any(|(old, _)| *old == next)
+            {
+                reached.push((next, perpendicular ^ turn));
+            }
+        }
+        cursor += 1;
+    }
+    false
+}
+
+/// Smart Dimension's whole-line spacing case. Unconstrained lines must be
+/// exactly parallel in the solved native snapshot, never merely close by angle.
+/// Applying the dimension also adds a genuine native Parallel constraint when
+/// the snapshot does not already prove the retained orientation.
+pub fn parallel_lines(snapshot: &Value, selection: &[SketchElement]) -> bool {
+    let Ok(sketch) = Sketch::new(snapshot) else {
+        return false;
+    };
+    let Ok((first, second)) = pair(selection) else {
+        return false;
+    };
+    if first == second || first.point != 0 || second.point != 0 {
+        return false;
+    }
+    let (Ok(a), Ok(b)) = (sketch.line(first), sketch.line(second)) else {
+        return false;
+    };
+    let left = a[0] * b[1];
+    let right = a[1] * b[0];
+    constrained_parallel(snapshot, first.index, second.index)
+        || left.is_finite() && right.is_finite() && left == right
+}
+
 /// Build a constraint from the current solved object snapshot. Dimensional
 /// constraints start at the measured native value, then an optional `datum`
 /// edit applies the user's explicit unit string in the same transaction.
@@ -543,6 +628,10 @@ pub fn constrain(
     value: Option<&str>,
 ) -> Result<Vec<Value>, String> {
     let sketch = Sketch::new(snapshot)?;
+    let whole_parallel_lines = kind == "Distance"
+        && selection.len() == 2
+        && selection.iter().all(|element| element.point == 0)
+        && parallel_lines(snapshot, selection);
     if selection.is_empty() {
         return Err("Select sketch geometry or points first".into());
     }
@@ -844,7 +933,18 @@ pub fn constrain(
                     (args, measure(kind, [point[0], point[1]]))
                 } else {
                     let (mut first, mut second) = pair(selection)?;
-                    if kind == "Distance" && (first.point == 0 || second.point == 0) {
+                    if whole_parallel_lines {
+                        let point = vector(&sketch.geometry(first)?["start"])?;
+                        let direction = sketch.line(second)?;
+                        let start = vector(&sketch.geometry(second)?["start"])?;
+                        let offset = delta(start, point);
+                        let distance = (direction[0] * offset[1] - direction[1] * offset[0]).abs()
+                            / length(direction);
+                        (
+                            vec![json!(first.index), json!(1), json!(second.index)],
+                            distance,
+                        )
+                    } else if kind == "Distance" && (first.point == 0 || second.point == 0) {
                         if first.point == 0 {
                             std::mem::swap(&mut first, &mut second);
                         }
@@ -884,6 +984,16 @@ pub fn constrain(
         }
     };
     let mut edits = vec![constraint(sketch.name, kind, args)];
+    if whole_parallel_lines
+        && !constrained_parallel(snapshot, selection[0].index, selection[1].index)
+        && selection.iter().any(|element| element.index >= 0)
+    {
+        edits.push(constraint(
+            sketch.name,
+            "Parallel",
+            json!([selection[0].index, selection[1].index]),
+        ));
+    }
     if let Some(value) = value {
         edits.push(json!({"op":"datum", "object":sketch.name, "index":sketch.constraints, "value":value.trim()}));
     }
@@ -1098,6 +1208,72 @@ mod tests {
         assert_eq!(projected[0]["args"], json!([0, 1, 0, 2, 3.]));
         let center = constrain(&sketch(), "DistanceX", &[e(2, 3)], None).unwrap();
         assert_eq!(center[0]["args"], json!([2, 3, 4.]));
+    }
+
+    #[test]
+    fn whole_parallel_lines_use_native_point_line_and_retained_parallelism() {
+        let mut snapshot = json!({"name":"Sketch","sketch":{"constraint_count":0,"constraints":[],"geometry":[
+            {"index":0,"kind":"line","start":[2,3,0],"end":[12,13,0]},
+            {"index":1,"kind":"line","start":[2,8,0],"end":[12,18,0]}
+        ]}});
+        let selection = [e(0, 0), e(1, 0)];
+        assert!(parallel_lines(&snapshot, &selection));
+        let edits = constrain(&snapshot, "Distance", &selection, Some("10 mm")).unwrap();
+        assert_eq!(edits.len(), 3);
+        assert_eq!(edits[0]["kind"], "Distance");
+        assert_eq!(
+            &edits[0]["args"].as_array().unwrap()[..3],
+            &[json!(0), json!(1), json!(1)]
+        );
+        assert_eq!(
+            edits[1],
+            json!({"op":"constraint","object":"Sketch","kind":"Parallel","args":[0,1]})
+        );
+        assert_eq!(
+            edits[2],
+            json!({"op":"datum","object":"Sketch","index":0,"value":"10 mm"})
+        );
+        snapshot["sketch"]["constraints"] =
+            json!([{"type":"Parallel","first":0,"second":1,"active":true,"driving":true}]);
+        snapshot["sketch"]["constraint_count"] = json!(1);
+        let edits = constrain(&snapshot, "Distance", &selection, None).unwrap();
+        assert_eq!(
+            edits.len(),
+            1,
+            "retained native relation must not be added twice"
+        );
+        snapshot["sketch"]["geometry"][1]["end"][1] = json!(18.000000000000004);
+        assert!(
+            parallel_lines(&snapshot, &selection),
+            "authoritative native relation survives solved floating residue"
+        );
+        snapshot["sketch"]["constraints"][0]["active"] = json!(false);
+        assert!(
+            !parallel_lines(&snapshot, &selection),
+            "almost parallel without an active native relation remains an angle"
+        );
+    }
+
+    #[test]
+    fn whole_line_spacing_uses_transitive_native_orientation_without_extra_parallel() {
+        let snapshot = json!({"name":"Sketch","sketch":{"constraint_count":3,"constraints":[
+            {"type":"Horizontal","first":0,"active":true,"driving":true},
+            {"type":"Vertical","first":2,"active":true,"driving":true},
+            {"type":"Perpendicular","first":2,"second":1,"active":true,"driving":true}],"geometry":[
+            {"index":0,"kind":"line","start":[0,0,0],"end":[10,0,0]},
+            {"index":1,"kind":"line","start":[0,5,0],"end":[10,5,0]},
+            {"index":2,"kind":"line","start":[0,0,0],"end":[0,10,0]}
+        ]}});
+        for selection in [[e(0, 0), e(1, 0)], [e(1, 0), e(0, 0)]] {
+            let edits = constrain(&snapshot, "Distance", &selection, None).unwrap();
+            assert_eq!(edits.len(), 1);
+            assert_eq!(edits[0]["args"].as_array().unwrap().last().unwrap(), 5.);
+        }
+        assert!(!parallel_lines(&snapshot, &[e(0, 0), e(2, 0)]));
+        assert!(
+            constrain(&snapshot, "Angle", &[e(0, 0), e(2, 0)], None).is_ok(),
+            "explicit Angle remains available"
+        );
     }
 
     #[test]

@@ -42,6 +42,7 @@ impl Editor {
                 ("Top", StandardView::Top),
                 ("Bottom", StandardView::Bottom),
                 ("Isometric", StandardView::Isometric),
+                ("Trimetric", StandardView::Trimetric),
             ] {
                 if ui.button(label).clicked() {
                     self.viewport.set_view(view);

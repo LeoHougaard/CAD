@@ -8,8 +8,38 @@ pub(super) struct UnitsUi {
     selection: Option<u64>,
     document: Value,
     revision: Value,
+    workspace: bool,
+    pub(super) workspace_input_blocked: bool,
     pub(super) fields: BTreeMap<String, Value>,
     pending: Option<(bool, Vec<String>, bool)>,
+}
+
+fn workspace_unit_name(unit: &str) -> &str {
+    match unit {
+        "mm" => "Millimeter",
+        "in" => "Inch",
+        "kg" => "Kilogram",
+        "lb" => "Pound",
+        "deg" | "\u{b0}" | "\u{c2}\u{b0}" => "Degree",
+        other => other,
+    }
+}
+
+// These two native formats supply the decimal length choices. Their indices
+// and all physical values come from the current native enumeration/metadata.
+fn workspace_length_choices(state: &Value) -> Vec<&Value> {
+    state["units"]["choices"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|choice| {
+            let label = choice["label"].as_str().unwrap_or_default();
+            let unit = choice["workspace_defaults"]["length"]["default_unit"].as_str();
+            choice["index"].as_u64().is_some()
+                && (label.starts_with("Standard (") && unit == Some("mm")
+                    || label.starts_with("Imperial decimal (") && unit == Some("in"))
+        })
+        .collect()
 }
 
 /// Keep the original numeric value until a human actually changes this field.
@@ -55,6 +85,29 @@ impl UnitsUi {
 }
 
 impl Editor {
+    fn open_units_dialog(&mut self, workspace: bool) {
+        self.units_ui.selection = self.state["units"]["index"].as_u64();
+        self.units_ui.document = self.state["document"].clone();
+        self.units_ui.revision = self.state["revision"].clone();
+        self.units_ui.workspace = workspace;
+    }
+
+    pub(super) fn workspace_units_controls(&mut self, ui: &mut egui::Ui) {
+        let available = self.units_available()
+            && !self.units_ui.active()
+            && !self.units_ui.workspace_input_blocked
+            && !self.measurement_is_open()
+            && !super::workflow_guide::active(ui.ctx());
+        ui.add_enabled_ui(available, |ui| {
+            ui.menu_button("Document", |ui| {
+                if ui.button("Workspace units...").clicked() {
+                    self.open_units_dialog(true);
+                    ui.close();
+                }
+            });
+        });
+    }
+
     pub(super) fn quantity_reply(&mut self, data: &Value) {
         if let Some((package, paths, resume)) = self.units_ui.pending.take() {
             for (i, path) in paths.iter().enumerate() {
@@ -158,9 +211,7 @@ impl Editor {
                         .unwrap_or("Native document units"),
                 );
                 if ui.button("Document units...").clicked() {
-                    self.units_ui.selection = self.state["units"]["index"].as_u64();
-                    self.units_ui.document = self.state["document"].clone();
-                    self.units_ui.revision = self.state["revision"].clone();
+                    self.open_units_dialog(false);
                     ui.close();
                 }
             });
@@ -177,37 +228,118 @@ impl Editor {
         }
         let mut apply = false;
         let mut cancel = false;
+        let workspace = self.units_ui.workspace;
+        let popup_was_open = egui::Popup::is_any_open(ctx);
         egui::Modal::new(egui::Id::new("document_units")).show(ctx, |ui| {
-            ui.heading("Document units");
-            ui.label("Saved with this native document.");
-            ui.weak("Apply changes the setting directly. Native Undo/Redo leaves it in place.");
+            ui.heading(if workspace {
+                "Workspace units"
+            } else {
+                "Document units"
+            });
+            if workspace {
+                ui.label("Saved with this document.");
+                ui.weak("Length, angle and mass use the selected unit system.");
+            } else {
+                ui.label("Saved with this native document.");
+                ui.weak("Apply changes the setting directly. Native Undo/Redo leaves it in place.");
+            }
             ui.add_enabled_ui(!self.busy, |ui| {
-                for choice in self.state["units"]["choices"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                {
-                    if let (Some(index), Some(label)) =
-                        (choice["index"].as_u64(), choice["label"].as_str())
+                if workspace {
+                    let choices = workspace_length_choices(&self.state);
+                    let selected_unit = self.state["units"]["choices"]
+                        .as_array()
+                        .and_then(|choices| {
+                            choices
+                                .iter()
+                                .find(|choice| choice["index"].as_u64() == Some(selected))
+                        })
+                        .and_then(|choice| {
+                            choice["workspace_defaults"]["length"]["default_unit"].as_str()
+                        })
+                        .unwrap_or("Unavailable");
+                    ui.horizontal(|ui| {
+                        ui.label("Default length unit");
+                        egui::ComboBox::from_id_salt("workspace_length_unit")
+                            .selected_text(workspace_unit_name(selected_unit))
+                            .show_ui(ui, |ui| {
+                                for choice in &choices {
+                                    ui.selectable_value(
+                                        &mut selected,
+                                        choice["index"].as_u64().unwrap(),
+                                        workspace_unit_name(
+                                            choice["workspace_defaults"]["length"]["default_unit"]
+                                                .as_str()
+                                                .unwrap(),
+                                        ),
+                                    );
+                                }
+                            });
+                    });
+                    if let Some(choice) =
+                        self.state["units"]["choices"]
+                            .as_array()
+                            .and_then(|choices| {
+                                choices
+                                    .iter()
+                                    .find(|choice| choice["index"].as_u64() == Some(selected))
+                            })
                     {
-                        ui.radio_value(&mut selected, index, label);
+                        for (label, kind) in [
+                            ("Default angle unit", "angle"),
+                            ("Default mass unit", "mass"),
+                        ] {
+                            ui.horizontal(|ui| {
+                                ui.label(label);
+                                ui.label(workspace_unit_name(
+                                    choice["workspace_defaults"][kind]["default_unit"]
+                                        .as_str()
+                                        .unwrap_or("Unavailable"),
+                                ));
+                            });
+                        }
+                        ui.weak(choice["label"].as_str().unwrap_or_default());
                     }
+                    ui.horizontal(|ui| {
+                        apply = ui
+                            .add_enabled(!choices.is_empty(), egui::Button::new("\u{2713}"))
+                            .on_hover_text("Accept workspace units")
+                            .clicked();
+                        cancel = ui.button("Cancel workspace units").clicked();
+                    });
+                } else {
+                    for choice in self.state["units"]["choices"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                    {
+                        if let (Some(index), Some(label)) =
+                            (choice["index"].as_u64(), choice["label"].as_str())
+                        {
+                            ui.radio_value(&mut selected, index, label);
+                        }
+                    }
+                    ui.horizontal(|ui| {
+                        apply = ui.button("Apply units").clicked();
+                        cancel = ui.button("Cancel units").clicked();
+                    });
                 }
-                ui.horizontal(|ui| {
-                    apply = ui.button("Apply units").clicked();
-                    cancel = ui.button("Cancel units").clicked();
-                });
             });
         });
         self.units_ui.selection = Some(selected);
-        if cancel
-            || !self.busy
-                && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
-        {
+        let escape = !self.busy
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+        if cancel || escape && !popup_was_open {
             self.units_ui = UnitsUi::default();
         } else if apply && self.units_available() {
             if self.units_ui.revision != self.state["revision"] {
-                self.error = Some("Document changed. Close and reopen Document units.".into());
+                self.error = Some(
+                    if workspace {
+                        "Document changed. Close and reopen Workspace units."
+                    } else {
+                        "Document changed. Close and reopen Document units."
+                    }
+                    .into(),
+                );
                 return;
             }
             match crate::document_units::settings(&self.state, selected) {

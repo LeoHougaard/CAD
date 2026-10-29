@@ -121,7 +121,10 @@ def schema(cached, doc, values):
 def settings(doc):
     selected = index(doc)
     return dict(index=selected, label=doc.UnitSystem,
-                choices=[dict(index=i, label=label) for i, label in enumerate(doc.getEnumerationsOfProperty('UnitSystem'))],
+                choices=[dict(index=i, label=label, workspace_defaults={
+                    kind: describe(native(0, unit), i)
+                    for kind, unit in (('length', 'mm'), ('angle', 'deg'), ('mass', 'kg'))})
+                    for i, label in enumerate(doc.getEnumerationsOfProperty('UnitSystem'))],
                 defaults={unit: describe(native(0, unit), selected) for unit in ('mm', 'deg', 'rad', 'mm^2', 'mm^3')},
                 undoable=False)
 

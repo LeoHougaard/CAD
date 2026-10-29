@@ -11,6 +11,7 @@ pub enum StandardView {
     Top,
     Bottom,
     Isometric,
+    Trimetric,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DisplayMode {
@@ -39,6 +40,11 @@ impl Viewport {
                 self.rotation = Quat::from_rotation_z(std::f32::consts::FRAC_PI_4)
                     * Quat::from_rotation_x(54.73561_f32.to_radians());
                 return;
+            }
+            StandardView::Trimetric => {
+                let toward = Vec3::new(1., -2., 3.).normalize();
+                let right = Vec3::Z.cross(toward).normalize();
+                (right, toward.cross(right))
             }
         };
         self.rotation = Quat::from_mat3(&Mat3::from_cols(right, up, right.cross(up))).normalize();
@@ -159,6 +165,32 @@ mod tests {
     use super::*;
     use crate::viewport::Selection;
     use serde_json::json;
+    #[test]
+    fn trimetric_has_three_distinct_axis_scales_and_preserves_target_and_zoom() {
+        let mut viewport = Viewport {
+            center: Vec3::new(12., -7., 5.),
+            scale: 11.,
+            ..Viewport::default()
+        };
+        let isometric = viewport.rotation;
+        let center = viewport.center;
+        let scale = viewport.scale;
+        viewport.set_view(StandardView::Trimetric);
+        let axis_scales = [Vec3::X, Vec3::Y, Vec3::Z].map(|axis| {
+            (viewport.rotation.conjugate() * axis)
+                .truncate()
+                .length_squared()
+        });
+        assert!(
+            axis_scales
+                .iter()
+                .all(|scale| scale.is_finite() && *scale > 0.)
+        );
+        assert!(axis_scales[0] > axis_scales[1] && axis_scales[1] > axis_scales[2]);
+        assert_ne!(viewport.rotation, isometric);
+        assert_eq!(viewport.center, center);
+        assert_eq!(viewport.scale, scale);
+    }
     #[test]
     fn orthographic_views_preserve_expected_front_and_up_axes() {
         let mut viewport = Viewport::default();

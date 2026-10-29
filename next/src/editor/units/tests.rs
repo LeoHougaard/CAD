@@ -581,3 +581,9 @@ mod settings_guard_tests;
 
 #[path = "open_cleanup_tests.rs"]
 mod open_cleanup_tests;
+
+#[path = "workspace_tests.rs"]
+mod workspace_tests;
+
+#[path = "workspace_review.rs"]
+mod workspace_review;

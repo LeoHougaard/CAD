@@ -1331,3 +1331,21 @@ fn sketch_creation_missing_checkpoint_preserves_redo_before_native_creation() {
     assert_eq!(restored["properties"]["Height"], 3.25);
     assert_eq!(objects(&n.editor.state).len(), 1);
 }
+
+#[path = "sketch_name_tests.rs"]
+mod sketch_name_tests;
+
+#[path = "parallel_distance_tests.rs"]
+mod parallel_distance_tests;
+
+#[path = "trimetric_tests.rs"]
+mod trimetric_tests;
+
+#[path = "view_cube_tests.rs"]
+mod view_cube_tests;
+
+#[path = "block_tutorial_tests.rs"]
+mod block_tutorial_tests;
+
+#[path = "loft_tutorial_tests.rs"]
+mod loft_tutorial_tests;
