@@ -11,6 +11,7 @@ mod measurements;
 mod profile_references;
 mod properties;
 mod recovery;
+mod shortcut_menu;
 mod sketch;
 mod sketch_creation;
 mod sketch_tools;
@@ -919,7 +920,7 @@ impl Editor {
     }
 
     fn toolbar(&mut self, ctx: &egui::Context) {
-        egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
+        let toolbar = egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
                     RichText::new("CAD")
@@ -928,7 +929,8 @@ impl Editor {
                 );
                 ui.separator();
                 self.workspace_units_controls(ui);
-                let idle = self.sketch_ui.task.is_none()
+                let idle = !self.units_ui.active()
+                    && self.sketch_ui.task.is_none()
                     && self.sketch_ui.drag.is_none()
                     && self.sketch_ui.dimension.is_none()
                     && !self.busy
@@ -985,6 +987,9 @@ impl Editor {
                     }
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if self.units_ui.active() {
+                        ui.disable();
+                    }
                     if ui.button("Fit").clicked() {
                         self.viewport.fit();
                     }
@@ -1005,7 +1010,8 @@ impl Editor {
             });
             ui.horizontal_wrapped(|ui| {
                 ui.add_enabled_ui(
-                    !self.busy
+                    !self.units_ui.active()
+                        && !self.busy
                         && (!self.unavailable() || self.source_recovery())
                         && self.sketch_ui.drag.is_none()
                         && self.sketch_ui.dimension.is_none()
@@ -1074,6 +1080,7 @@ impl Editor {
                 }
             });
         });
+        ctx.data_mut(|d| d.insert_temp(egui::Id::new("main_toolbar_rect"), toolbar.response.rect));
     }
 
     fn panels(&mut self, ctx: &egui::Context) {
@@ -1357,6 +1364,7 @@ impl eframe::App for Editor {
     }
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let was_busy = self.busy;
+        let shortcut_menu_was_open = shortcut_menu::is_open(ctx);
         let shortcut_blocked = self.busy
             || egui::Popup::is_any_open(ctx)
             || self.unavailable()
@@ -1440,6 +1448,7 @@ impl eframe::App for Editor {
                 self.sketch_escape();
             }
         }
+        self.shortcut_menu(ctx, was_busy, shortcut_blocked);
         if !was_busy
             && !self.busy
             && !self.units_ui.active()
@@ -1490,22 +1499,29 @@ impl eframe::App for Editor {
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(Color32::from_rgb(5, 7, 9)))
             .show(ctx, |ui| {
-                ui.add_enabled_ui(!guide_was_open && !workflow_guide::active(ctx), |ui| {
-                    let guide_input_allowed = !was_busy
-                        && !self.busy
+                ui.add_enabled_ui(
+                    !self.units_ui.active()
                         && !guide_was_open
                         && !workflow_guide::active(ctx)
-                        && !egui::Popup::is_any_open(ctx)
-                        && !self.units_ui.active()
-                        && !self.measurement_is_open()
-                        && self.pending_file.is_none()
-                        && self.file_dialog.is_none()
-                        && !self.overwrite
-                        && !self.exchange_ui.active()
-                        && !self.file_browser.active()
-                        && !ctx.wants_keyboard_input();
-                    self.canvas(ui, shortcut_blocked, guide_input_allowed)
-                });
+                        && !shortcut_menu_was_open
+                        && !shortcut_menu::is_open(ctx),
+                    |ui| {
+                        let guide_input_allowed = !was_busy
+                            && !self.busy
+                            && !guide_was_open
+                            && !workflow_guide::active(ctx)
+                            && !egui::Popup::is_any_open(ctx)
+                            && !self.units_ui.active()
+                            && !self.measurement_is_open()
+                            && self.pending_file.is_none()
+                            && self.file_dialog.is_none()
+                            && !self.overwrite
+                            && !self.exchange_ui.active()
+                            && !self.file_browser.active()
+                            && !ctx.wants_keyboard_input();
+                        self.canvas(ui, shortcut_blocked, guide_input_allowed)
+                    },
+                );
             });
         if self.source_recovery() && !guide_was_open && !workflow_guide::active(ctx) {
             self.panels(ctx);

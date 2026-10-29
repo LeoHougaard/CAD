@@ -491,6 +491,7 @@ impl Editor {
         let all = bodies(&self.state);
         egui::Window::new("Features")
             .id(egui::Id::new("features"))
+            .enabled(!self.units_ui.active())
             .default_pos([10., 82.])
             .default_width(145.)
             .resizable(false)

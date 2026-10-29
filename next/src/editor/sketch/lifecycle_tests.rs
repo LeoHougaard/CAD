@@ -1349,3 +1349,9 @@ mod block_tutorial_tests;
 
 #[path = "loft_tutorial_tests.rs"]
 mod loft_tutorial_tests;
+
+#[path = "receiver_input_tests.rs"]
+mod receiver_input_tests;
+
+#[path = "receiver_shortcut_tests.rs"]
+mod receiver_shortcut_tests;

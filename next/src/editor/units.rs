@@ -94,14 +94,16 @@ impl Editor {
 
     pub(super) fn workspace_units_controls(&mut self, ui: &mut egui::Ui) {
         let available = self.units_available()
-            && !self.units_ui.active()
+            && (!self.units_ui.active() || self.units_ui.workspace)
             && !self.units_ui.workspace_input_blocked
             && !self.measurement_is_open()
             && !super::workflow_guide::active(ui.ctx());
         ui.add_enabled_ui(available, |ui| {
             ui.menu_button("Document", |ui| {
                 if ui.button("Workspace units...").clicked() {
-                    self.open_units_dialog(true);
+                    if !self.units_ui.active() {
+                        self.open_units_dialog(true);
+                    }
                     ui.close();
                 }
             });
@@ -230,7 +232,7 @@ impl Editor {
         let mut cancel = false;
         let workspace = self.units_ui.workspace;
         let popup_was_open = egui::Popup::is_any_open(ctx);
-        egui::Modal::new(egui::Id::new("document_units")).show(ctx, |ui| {
+        let content = |ui: &mut egui::Ui| {
             ui.heading(if workspace {
                 "Workspace units"
             } else {
@@ -324,7 +326,18 @@ impl Editor {
                     });
                 }
             });
-        });
+        };
+        if workspace {
+            egui::Window::new("Workspace units")
+                .id(egui::Id::new("document_units"))
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .collapsible(false)
+                .resizable(false)
+                .title_bar(false)
+                .show(ctx, content);
+        } else {
+            egui::Modal::new(egui::Id::new("document_units")).show(ctx, content);
+        }
         self.units_ui.selection = Some(selected);
         let escape = !self.busy
             && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));

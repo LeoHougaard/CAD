@@ -1,118 +1,87 @@
 {
-  "time_utc": "2026-10-29T04:49:57.796029+00:00",
-  "source_files": 290,
-  "source_version": "source9; product byte-exact to reviewed source5, only tutorial test differs",
-  "source_manifest_sha256": "6f6042e34bc8cc9358ee0afdcd32fe9462d5106496f8e315c76903ec72a6a654",
-  "reviewed_product_manifest_sha256": "4db97fff3e6b5dd6fe186203208001ce7a51e86f5d45387bfb870138b7f672c2",
+  "updated_utc": "2026-10-29T06:57:32.650310+00:00",
+  "source_manifest_sha256": "71d98baab1ace5a0c81b27079fc90aadbd0a5b5010cc17c163806288f963236b",
+  "source_files": 293,
+  "source_reference": {
+    "url": "https://www.youtube.com/watch?v=pcU5-8PkhGg",
+    "title": "Onshape Step-By-Step Tutorial / Best Practices Training - Advanced Part Design",
+    "creator": "Too Tall Toby",
+    "start": "genuinely empty document",
+    "media": "video-only, no audio playback",
+    "complete_physical_input_trace": false,
+    "complete_reference_gaps_resolved": false
+  },
+  "full_tutorial_credit": 0,
+  "requested_minimum_tutorials": 100,
+  "selected_tutorials": 1,
+  "fixed_source_ui_cohort": {
+    "cases": [
+      "Document menu while Workspace units remains open",
+      "Front selection then plain S tool menu"
+    ],
+    "baseline": [
+      0,
+      2
+    ],
+    "current": [
+      2,
+      0
+    ],
+    "denominator": 2,
+    "not_an_overall_tutorial_success_rate": true
+  },
   "active_tests": [
     253,
     0
   ],
-  "ignored_tests": 143,
-  "full_build_source5_commands": [
+  "ignored_tests": 149,
+  "cached_build_commands": [
     9,
     0
   ],
-  "test_only_build_source9_commands": [
-    5,
-    0
+  "focused_native_editor_tests": [
+    11,
+    1
   ],
-  "distinct_source5_editor_checks": [
-    8,
-    0
-  ],
-  "prior_source4_editor_checks": [
-    16,
-    0
-  ],
-  "source9_first_cube_prefix": [
-    1,
-    0
-  ],
-  "first_cube_stock_checks": [
-    24,
-    0
-  ],
-  "first_cube_saved_sha256": "41209117a2ceb4fac3f91d31b2374101fcbf789470fa4c33777fda2ff5d49e72",
-  "first_cube_difference_volumes": [
-    0,
-    0
-  ],
-  "first_cube_volume": 28316846.591999985,
-  "first_cube_area": 557418.2399999999,
-  "independent_combined_review": {
-    "manifest_sha256": "8bb00d54e860ade384233b64013adb3491642c1aadb4c5b7ca347f9dfb40753d",
-    "scope": "source5 bounded; no new confirmed remaining defect"
+  "focused_native_distinct_cases": 12,
+  "expected_open_failure": "M16: no automatic post-Line numeric field; rough native line remains unchanged after typing62",
+  "independent_review": {
+    "scope": "bounded combined S and Workspace units ownership/recovery",
+    "fresh_editor_cases": [
+      4,
+      0
+    ],
+    "overlap_focused_cases": true,
+    "new_confirmed_findings": 0,
+    "review_manifest_sha256": "df4dc0eac6447ed6f583bb156c0253380598ef01e082b1ef1f101d5c6e4c2d1e",
+    "seal_sha256": "66aed1d35698c777eae9633a4ff4b9faaaacaff8e1d4a16559aacbb308deba62"
   },
-  "independent_stock_review": {
-    "manifest_sha256": "50aeaea7aab6d354ab39b5f8a3fda98969fba810aede9488b41a297d6c3a4d7a",
-    "scope": "first-cube saved geometry only; not complete tutorial/parity"
+  "physical_current_source": false,
+  "pixel_attempt": {
+    "outcome": "stopped at Android locked/unknown guard before Linux entry",
+    "transfer": false,
+    "build": false,
+    "gui_input": false,
+    "lease_released_ack": 1379,
+    "hold_restored": true
   },
-  "artifacts": {
-    "production": {
-      "cad-next-editor.exe": {
-        "bytes": 17159680,
-        "sha256": "eaaaeb50175d25d5764d204665cc8f9defac2a49ae908e33b415686a06df88fc"
-      },
-      "cad-next-editor.rmeta": {
-        "bytes": 0,
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      "cad-next-tests.exe": {
-        "bytes": 20847104,
-        "sha256": "aebc011dd984f84c3eecddb7fcb8c9acb9fefd8e09c2e89ac53ad9bdd036db24"
-      },
-      "clippy-lib.rmeta": {
-        "bytes": 1374854,
-        "sha256": "7acb558fb0f2fac073bc581c5ea977acec6ae04cbf337883d027abdbd1bf7101"
-      },
-      "clippy-tests.rmeta": {
-        "bytes": 0,
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      "libcad_next.rlib": {
-        "bytes": 41025224,
-        "sha256": "a03f51dea7300aa941dd50395fe492ba0bf50df0fdede95baf1a86d67aceede6"
-      }
-    },
-    "source9_tests": {
-      "cad-next-tests.exe": {
-        "bytes": 20856320,
-        "sha256": "3f66653260398cda67fed91b65d14a5c688161eccf5a7d3be9f722a333c10ec6"
-      },
-      "clippy-tests.rmeta": {
-        "bytes": 0,
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      }
-    }
-  },
-  "full_tutorial_credit": 0,
-  "full_tutorial_target": 100,
-  "sourced_prefixes_exercised": 2,
-  "prefix_scope": [
-    "Block through first cube, native geometry verified; later stages untested",
-    "Loft through real ellipse creation, blocked at automatic size prompt"
+  "native_graceful_child_eof": "uncertified",
+  "current_ci": "not executed",
+  "performance": "not measured",
+  "open_gates": [
+    "automatic line-length input",
+    "Gram/default native mass-unit mismatch",
+    "remaining source operations and camera input gaps",
+    "independent final model geometry and persistence",
+    "atomic Sketch Begin/Cancel/Redo/Restore",
+    "native graceful EOF",
+    "current CI",
+    "physical desktop acceptance"
   ],
-  "exact_onshape_transient_parity": false,
-  "first_dimension_scaling_reference_gap": true,
-  "profile_prefill_default_recorded": true,
-  "automatic_native_preview_waits_not_extra_user_actions": true,
-  "evidence_save_not_tutorial_action": true,
-  "old_failures_not_reclassified": true,
-  "old_free_position_failures_unresolved": 10,
-  "native_rust_child_os_eof": "UNKNOWN",
-  "direct_stock_native_exit": 0,
-  "current_pixel_physical_pass": false,
-  "production_release_approval": false,
-  "unresolved": [
-    "Dynamic Begin and new-sketch Cancel/Redo/Restore atomicity",
-    "First-dimension scaling and fresh Onshape reference",
-    "Full Block/Loft tutorial routes",
-    "Ellipse automatic inputs and geometry helper semantics",
-    "Negative edge spacing",
-    "Full units/cube/navigation parity",
-    "Ten old free-position geometry mismatches",
-    "Current Pixel/platform CI/resource gates",
-    "Native child graceful OS EOF"
-  ]
+  "extrapolated_completion_limit": null,
+  "extrapolation_reason": "No complete tutorial passes and no qualified stable 100-tutorial execution cohort.",
+  "production_editor_sha256": "ee2615814c279809b4e8979cf874e6dfb7bac31cd6fc56af01f1c87809d80e78",
+  "test_binary_sha256": "765fc2b8301f20863f3957ad5c9ee733bc7f52984513bbd050c7a65f0f2d7d2a",
+  "private_line_length_candidate_included": false,
+  "old_attempts_preserved": true
 }

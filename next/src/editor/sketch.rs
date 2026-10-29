@@ -455,6 +455,21 @@ impl Editor {
             );
         }
     }
+    pub(super) fn activate_sketch_drawing_tool(&mut self, tool: Tool) {
+        if tool != Tool::Select {
+            self.viewport.clear_sketch_selection();
+            self.sketch_ui.selected_constraint = None;
+        }
+        self.sketch_ui.external = false;
+        self.sketch_ui.split = false;
+        self.sketch_ui.tool = if tool == Tool::Line && self.sketch_ui.tool == tool {
+            Tool::Select
+        } else {
+            tool
+        };
+        self.sketch_ui.trim = false;
+        self.sketch_ui.clear_points();
+    }
     pub(super) fn sketch_toolbar(&mut self, ui: &mut egui::Ui) {
         let ready = self.sketch_ui.session.is_some()
             && self.sketch_ui.drag.is_none()
@@ -481,19 +496,7 @@ impl Editor {
                     )
                     .clicked()
                 {
-                    if tool != Tool::Select {
-                        self.viewport.clear_sketch_selection();
-                        self.sketch_ui.selected_constraint = None;
-                    }
-                    self.sketch_ui.external = false;
-                    self.sketch_ui.split = false;
-                    self.sketch_ui.tool = if tool == Tool::Line && self.sketch_ui.tool == tool {
-                        Tool::Select
-                    } else {
-                        tool
-                    };
-                    self.sketch_ui.trim = false;
-                    self.sketch_ui.clear_points();
+                    self.activate_sketch_drawing_tool(tool);
                 }
             }
             ui.menu_button("Curves", |ui| {
