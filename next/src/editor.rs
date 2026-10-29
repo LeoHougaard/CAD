@@ -920,7 +920,7 @@ impl Editor {
     }
 
     fn toolbar(&mut self, ctx: &egui::Context) {
-        let toolbar = egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
+        egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
                     RichText::new("CAD")
@@ -1080,7 +1080,6 @@ impl Editor {
                 }
             });
         });
-        ctx.data_mut(|d| d.insert_temp(egui::Id::new("main_toolbar_rect"), toolbar.response.rect));
     }
 
     fn panels(&mut self, ctx: &egui::Context) {
@@ -1381,6 +1380,7 @@ impl eframe::App for Editor {
             || self.sketch_ui.dimension.is_some()
             || self.sketch_ui.task.is_some();
         self.poll();
+        self.inline_line_input(ctx, was_busy);
         self.viewport.reconcile_standard_plane(&self.state);
         if self.draft.is_none() && self.property_ui.axis_profile.is_some() {
             self.property_ui.axis_pick = false;
@@ -1427,6 +1427,8 @@ impl eframe::App for Editor {
             } else if self.measurement_escape() {
                 ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Escape));
             } else if self.cancel_sketch_name(ctx) {
+                ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Escape));
+            } else if self.inline_line_cancel(ctx) {
                 ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Escape));
             } else if self.unavailable() && !self.source_recovery() {
                 self.pending_file = None;
@@ -1533,6 +1535,7 @@ impl eframe::App for Editor {
             self.sketch_creation_dialog(ctx);
             self.exchange_dialog(ctx);
             self.file_browser_ui(ctx);
+            self.inline_line_ui(ctx, was_busy);
             self.sketch_pump(ctx, shortcut_blocked || egui::Popup::is_any_open(ctx));
         }
         if !guide_was_open && !workflow_guide::active(ctx) {

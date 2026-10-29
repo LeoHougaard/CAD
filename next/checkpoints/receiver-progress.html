@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+html,body{margin:0;background:transparent;color:var(--foreground);font-family:var(--font-sans)}
+#receiver-progress{--viz-series-1:var(--chart-1)}
+#receiver-progress h2,#receiver-progress h3{font-weight:500;margin:0 0 12px}
+#receiver-progress figure{margin:0 0 22px}
+#receiver-progress svg{display:block;width:100%;height:220px;overflow:visible}
+#receiver-progress svg text{fill:var(--foreground);font-size:12px;font-weight:400}
+#receiver-progress .legend{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 12px}
+#receiver-progress .note{color:var(--muted-foreground);margin:4px 0 18px}
+</style>
+</head>
+<body>
+<section id="receiver-progress" aria-label="Receiver tutorial verification progress">
+<h2>Receiver verification progress</h2>
+<div class="legend">Selected tutorial: Too Tall Toby's Receiver, starting blank</div>
+<figure>
+<h3>Same two source UI checks</h3>
+<svg id="receiver-ui-plot" role="img" aria-label="Two fixed UI checks improve from zero of two to two of two. These are Document menu over Workspace units and Front then S tool menu."></svg>
+</figure>
+<figure>
+<h3>Complete tutorials verified</h3>
+<svg id="receiver-tutorial-plot" role="img" aria-label="Complete tutorials verified remain zero out of the requested target of one hundred. The one selected tutorial is not complete."></svg>
+</figure>
+<p class="note">Two UI checks passing does not establish a complete tutorial pass. Completion extrapolation is unavailable.</p>
+</section>
+<script>
+(() => {
+ const root=document.getElementById('receiver-progress');
+ const data=[{version:2,ui:0,passed:0},{version:3,ui:50,passed:1},{version:8,ui:100,passed:2},{version:10,ui:100,passed:2}];
+ const ns='http://www.w3.org/2000/svg';
+ function add(parent,tag,attrs,text){const n=document.createElementNS(ns,tag);for(const [k,v] of Object.entries(attrs))n.setAttribute(k,v);if(text!==undefined)n.textContent=text;parent.appendChild(n);return n;}
+ function draw(id,kind){
+  const svg=root.querySelector('#'+id);const w=svg.getBoundingClientRect().width;const h=220;svg.replaceChildren();svg.setAttribute('viewBox',`0 0 ${w} ${h}`);
+  const left=64,right=22,top=24,bottom=46;const pw=w-left-right,ph=h-top-bottom;
+  const observations=data.map((d,i)=>({x:i,y:kind==='ui'?d.ui:0,...d}));
+  const bounds=observations.map(d=>d.y).concat([0,100]);const low=Math.min(...bounds),high=Math.max(...bounds);
+  const x=i=>left+12+i*(pw-24)/(observations.length-1);const y=v=>top+ph-10-(v-low)/(high-low)*(ph-20);
+  add(svg,'rect',{x:left,y:top,width:pw,height:ph,fill:'none',stroke:'var(--border)','stroke-width':1,'data-chart-frame':''});
+  for(const tick of [0,50,100]){const yy=y(tick);add(svg,'line',{x1:left,x2:w-right,y1:yy,y2:yy,stroke:'var(--border)','stroke-width':1});add(svg,'text',{x:left-10,y:yy+4,'text-anchor':'end'},kind==='ui'?tick+'%':String(tick));}
+  observations.forEach(d=>add(svg,'text',{x:x(d.x),y:h-27,'text-anchor':d.x===0?'start':d.x===3?'end':'middle'},'V'+d.version));
+  add(svg,'text',{x:left+pw/2,y:h-6,'text-anchor':'middle',class:'axis-title','data-axis':'x'},'Candidate iteration');
+  add(svg,'text',{transform:`translate(15 ${top+ph/2}) rotate(-90)`,'text-anchor':'middle',class:'axis-title','data-axis':'y'},kind==='ui'?'Fixed checks passed (%)':'Tutorials verified (count)');
+  if(kind!=='ui'){add(svg,'line',{x1:left+1,x2:w-right-1,y1:y(100),y2:y(100),stroke:'var(--muted-foreground)','stroke-width':1,'stroke-dasharray':'4 4'});add(svg,'text',{x:w-right-6,y:y(100)-7,'text-anchor':'end'},'Target 100');}
+  add(svg,'path',{d:observations.map((d,i)=>(i?'L':'M')+x(d.x)+','+y(d.y)).join(' '),fill:'none',stroke:'var(--viz-series-1)','stroke-width':2});
+  observations.forEach(d=>{const g=add(svg,'g',{});add(g,'circle',{cx:x(d.x),cy:y(d.y),r:4,fill:'var(--viz-series-1)'});add(g,'circle',{cx:x(d.x),cy:y(d.y),r:18,fill:'transparent','data-chart-hit':'','data-tooltip':kind==='ui'?`V${d.version}: ${d.passed}/2 fixed source UI checks passed. Document menu over units and Front → S menu.`:`V${d.version}: 0 complete tutorial passes. Target 100; no qualified 100-tutorial execution cohort yet.`});});
+  const last=observations.at(-1);add(svg,'text',{x:x(last.x)-8,y:y(last.y)+(kind==='ui'?22:-13),'text-anchor':'end'},kind==='ui'?'2/2':'0 verified');
+ }
+ function redraw(){draw('receiver-ui-plot','ui');draw('receiver-tutorial-plot','tutorial');}
+ new ResizeObserver(redraw).observe(root);redraw();
+})();
+</script>
+</body>
+</html>

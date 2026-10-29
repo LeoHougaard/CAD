@@ -1,0 +1,39 @@
+{
+  "fixed_source_ui_cases": [
+    "editor::sketch::lifecycle_tests::receiver_input_tests::receiver_document_menu_can_reopen_above_workspace_units",
+    "editor::sketch::lifecycle_tests::receiver_input_tests::receiver_s_opens_sketch_shortcut_menu_from_empty_studio"
+  ],
+  "observations": [
+    {
+      "version": 2,
+      "passed": 0,
+      "denominator": 2
+    },
+    {
+      "version": 3,
+      "passed": 1,
+      "denominator": 2
+    },
+    {
+      "version": 8,
+      "passed": 2,
+      "denominator": 2
+    },
+    {
+      "version": 10,
+      "passed": 2,
+      "denominator": 2
+    }
+  ],
+  "full_tutorial_credit": 0,
+  "requested_tutorial_target": 100,
+  "qualified_100_tutorial_execution_cohort": false,
+  "completion_limit_extrapolation": null,
+  "source_file_hashes": {
+    "native2/result.json": "4fbb0ae4a1d8b3a1505b40fb6fd8952054b3d0122bf6cc3a281a27573d055b91",
+    "native3/result.json": "f9614097f6be290bc0f01f242d7ec88891a4eb8b2abd00c86431086f6b650195",
+    "controls8b/native1/result.json": "3ed026a50c345db2574c99ad39dc4fc4c2091b5b7b4c7a063bbf36ad84c07f63",
+    "controls10/native1/result.json": "980088ba4c8720d9051a98a88f682a76b146de1e11165871bcc558185d2d111e",
+    "receiver-progress.html": "6f305a153c2f5451c091e709d91f54b710e21a24229060fa3eb482490484e77e"
+  }
+}

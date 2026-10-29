@@ -234,7 +234,7 @@ fn receiver_s_menu_blocks_fields_units_measure_popups_and_reply_frames() {
 }
 
 #[test]
-#[ignore = "diagnostic next Receiver M16 source step; expected unsupported inline line-length input is not repaired by S menu"]
+#[ignore = "Receiver M16 native line length with passive optional input"]
 fn receiver_next_step_m16_62mm_line_input_diagnostic() {
     let mut n = Native::new("receiver-next-m16-line62-diagnostic");
     n.send("new", json!({"name":"ReceiverLine62"}), true);
@@ -316,7 +316,39 @@ fn receiver_next_step_m16_62mm_line_input_diagnostic() {
     let field_before = n.ctx.wants_keyboard_input();
     let dimension_before = n.editor.sketch_ui.dimension.is_some();
     let before = n.editor.state.clone();
-    n.frame(vec![egui::Event::Text("62".into())]);
+    let before_sketch = object(&before, &name)["sketch"].clone();
+    for (key, digit) in [(Key::Num6, "6"), (Key::Num2, "2")] {
+        n.frame(vec![
+            egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::Text(digit.into()),
+        ]);
+        if key == Key::Num6 {
+            assert!(
+                n.ctx.wants_keyboard_input(),
+                "first digit must give the real input field keyboard ownership"
+            );
+            assert!(
+                n.editor
+                    .sketch_ui
+                    .inline_line
+                    .as_ref()
+                    .is_some_and(|p| p.editing)
+            );
+        }
+        n.frame(vec![egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: false,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+    }
     tutorial_key(&mut n, Key::Enter, egui::Modifiers::NONE);
     settle(&mut n);
     if n.editor.busy {
@@ -335,16 +367,480 @@ fn receiver_next_step_m16_62mm_line_input_diagnostic() {
         .sum::<f64>()
         .sqrt();
     n.events.push(json!({"source_video":"pcU5-8PkhGg","step":"M16","seconds":[485.333,486.167],
-        "actual_input":"Text 62 then Enter, source NumEnter normalized to platform Enter", "inline_keyboard_owner_before":field_before,
+        "actual_input":"separate Num6 and Num2 key-down/Text/key-up, then Enter; keypad digits and NumEnter normalized by egui", "inline_keyboard_owner_before":field_before,
         "dimension_editor_before":dimension_before,"native_length_after":length,"native_state_unchanged_after_text":n.editor.state==before,
         "state":n.editor.state,"full_tutorial_credit":0,"later_source_steps":"untested"}));
     n.record();
+    assert!(!field_before, "idle input must not own keyboard shortcuts");
     assert!(
-        field_before,
-        "Receiver M16 requires automatic line-length input after rough second vertex; S menu does not repair this next gap"
+        (length - 62.).abs() < 1e-7,
+        "M16 native vertical length: {length}"
+    );
+    let after = object(&n.editor.state, &name)["sketch"].clone();
+    assert_eq!(
+        after["geometry"][0], before_sketch["geometry"][0],
+        "horizontal source line moved"
     );
     assert_eq!(
-        length, 62.,
-        "Receiver source entered62mm must drive the actual native vertical line"
+        after["native_xml"]["persistent_ids"],
+        before_sketch["native_xml"]["persistent_ids"]
     );
+    assert_eq!(
+        after["constraint_count"].as_u64(),
+        before_sketch["constraint_count"].as_u64().map(|v| v + 1)
+    );
+    assert_eq!(
+        after["degrees_of_freedom"].as_i64(),
+        before_sketch["degrees_of_freedom"].as_i64().map(|v| v - 1)
+    );
+    let solved_end = after["geometry"][1]["end"].clone();
+    // Establish the UI seed before the next native solve. Free geometry may
+    // move during that solve; native Coincident must retain the chain.
+    settle(&mut n);
+    assert_eq!(json!(n.editor.sketch_ui.points[0]), solved_end);
+    assert_eq!(
+        n.editor.sketch_ui.snaps[0],
+        Some(SketchElement { index: 1, point: 2 })
+    );
+    // Separate continuing-chain control, not another claimed source step.
+    let next = n.editor.viewport.sketch_screen_point([-20., 20., 0.]);
+    pointer(&mut n, next);
+    assert!(n.editor.busy, "one canvas click must draw the next segment");
+    n.receive("transaction", true);
+    let continued = object(&n.editor.state, &name)["sketch"].clone();
+    assert_eq!(continued["geometry_count"], 3);
+    assert_eq!(
+        continued["geometry"][2]["start"], solved_end,
+        "chain must start at the solved endpoint"
+    );
+    assert_eq!(
+        continued["geometry"][2]["start"], continued["geometry"][1]["end"],
+        "native chain endpoints must remain exactly coincident after solve"
+    );
+    assert!(
+        continued["constraints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["type"] == "Coincident"
+                && c["first"] == 2
+                && c["first_pos"] == 1
+                && c["second"] == 1
+                && c["second_pos"] == 2)
+    );
+    n.events
+        .push(json!({"control":"one next canvas click after M16", "sketch":continued}));
+    // Separate history/persistence controls after the source prefix.
+    tutorial_key(&mut n, Key::Z, egui::Modifiers::COMMAND);
+    n.receive("undo", true);
+    assert_eq!(
+        object(&n.editor.state, &name)["sketch"]["native_xml"],
+        after["native_xml"]
+    );
+    tutorial_key(&mut n, Key::Z, egui::Modifiers::COMMAND);
+    n.receive("undo", true);
+    assert_eq!(
+        object(&n.editor.state, &name)["sketch"]["native_xml"],
+        before_sketch["native_xml"]
+    );
+    let redo = egui::Modifiers {
+        shift: true,
+        ..egui::Modifiers::COMMAND
+    };
+    tutorial_key(&mut n, Key::Z, redo);
+    n.receive("redo", true);
+    assert_eq!(
+        object(&n.editor.state, &name)["sketch"]["native_xml"],
+        after["native_xml"]
+    );
+    tutorial_key(&mut n, Key::Z, redo);
+    n.receive("redo", true);
+    assert_eq!(
+        object(&n.editor.state, &name)["sketch"]["native_xml"],
+        continued["native_xml"]
+    );
+    n.click("Finish");
+    n.receive("sketch_finish", true);
+    let saved = object(&n.editor.state, &name)["sketch"].clone();
+    let path = n.save("inline-length.FCStd");
+    n.send("close", json!({}), true);
+    n.send("open", json!({"path":path}), true);
+    assert_eq!(
+        object(&n.editor.state, &name)["sketch"]["native_xml"],
+        saved["native_xml"]
+    );
+    n.events
+        .push(json!({"control":"native undo/redo and save/reopen after M16"}));
+    n.record();
+}
+
+fn inline_control_start(n: &mut Native) -> String {
+    n.send("new", json!({"name":"InlineControl"}), true);
+    start(n);
+    tutorial_key(n, Key::N, egui::Modifiers::NONE);
+    settle(n);
+    tutorial_key(n, Key::S, egui::Modifiers::NONE);
+    menu_click(n, "Line");
+    settle(n);
+    let first = n.editor.viewport.sketch_screen_point([0., 0., 0.]);
+    let second = n.editor.viewport.sketch_screen_point([-35., 0., 0.]);
+    pointer(n, first);
+    pointer(n, second);
+    n.receive("transaction", true);
+    settle(n);
+    n.editor.sketch.clone().unwrap()
+}
+
+#[test]
+#[ignore = "native optional line prompt, shortcut and one-click controls"]
+fn receiver_inline_passive_shortcuts_and_canvas_click() {
+    let mut n = Native::new("inline-passive-controls");
+    let name = inline_control_start(&mut n);
+    assert!(n.editor.sketch_ui.inline_line.is_some());
+    assert!(!n.ctx.wants_keyboard_input());
+    let before = n.editor.state.clone();
+    tutorial_key(&mut n, Key::Q, egui::Modifiers::NONE);
+    assert!(n.editor.sketch_ui.construction);
+    assert_eq!(n.editor.state, before);
+    tutorial_key(&mut n, Key::S, egui::Modifiers::NONE);
+    assert!(egui::Popup::is_id_open(
+        &n.ctx,
+        egui::Id::new("tool_shortcut_menu")
+    ));
+    tutorial_key(&mut n, Key::Escape, egui::Modifiers::NONE);
+    assert_eq!(n.editor.state, before);
+    let p = n.editor.viewport.sketch_screen_point([-35., 20., 0.]);
+    pointer(&mut n, p);
+    assert!(n.editor.busy, "one canvas click must draw");
+    n.receive("transaction", true);
+    assert_eq!(
+        object(&n.editor.state, &name)["sketch"]["geometry_count"],
+        2
+    );
+    let after = n.editor.state.clone();
+    tutorial_key(&mut n, Key::Escape, egui::Modifiers::NONE);
+    assert_eq!(n.editor.sketch_ui.tool, Tool::Line);
+    assert!(n.editor.sketch_ui.session.is_some());
+    assert_eq!(n.editor.state, after);
+    tutorial_key(&mut n, Key::Escape, egui::Modifiers::NONE);
+    assert_eq!(n.editor.sketch_ui.tool, Tool::Select);
+    assert!(n.editor.sketch_ui.session.is_some());
+    assert_eq!(n.editor.state, after);
+    n.events
+        .push(json!({"control":"Q, S, one click, two Escape presses", "state":after}));
+    n.record();
+}
+
+#[test]
+#[ignore = "native invalid units and editable recovery for line prompt"]
+fn receiver_inline_invalid_units_remain_editable() {
+    let mut n = Native::new("inline-invalid-units");
+    let name = inline_control_start(&mut n);
+    let baseline = n.editor.state.clone();
+    n.frame(vec![egui::Event::Text("17 xyz".into())]);
+    tutorial_key(&mut n, Key::Enter, egui::Modifiers::NONE);
+    n.receive("transaction", false);
+    assert!(
+        n.editor
+            .sketch_ui
+            .inline_line
+            .as_ref()
+            .is_some_and(|p| p.editing)
+    );
+    assert_eq!(
+        object(&n.editor.state, &name)["sketch"],
+        object(&baseline, &name)["sketch"]
+    );
+    assert_eq!(n.editor.state["undo_count"], baseline["undo_count"]);
+    assert_eq!(n.editor.state["redo_count"], baseline["redo_count"]);
+    settle(&mut n);
+    assert!(n.ctx.wants_keyboard_input());
+    tutorial_key(&mut n, Key::A, egui::Modifiers::COMMAND);
+    n.frame(vec![egui::Event::Text("25 mm".into())]);
+    tutorial_key(&mut n, Key::Enter, egui::Modifiers::NONE);
+    n.receive("transaction", true);
+    let sketch = &object(&n.editor.state, &name)["sketch"];
+    assert!(
+        sketch["constraints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["type"] == "Distance" && c["value"] == 25.)
+    );
+    n.events
+        .push(json!({"control":"invalid unit rejected, corrected explicit mm", "sketch":sketch}));
+    // This click snaps the second endpoint onto the vertical axis. The
+    // other endpoint is fixed at x=-25, so 20 mm cannot be solved.
+    let origin = n.editor.viewport.sketch_screen_point([0., 0., 0.]);
+    pointer(&mut n, origin);
+    n.receive("transaction", true);
+    let fixed = n.editor.state.clone();
+    let constraints = object(&fixed, &name)["sketch"]["constraints"]
+        .as_array()
+        .unwrap();
+    assert!(
+        constraints.iter().any(|c| c["type"] == "PointOnObject"
+            && c["first"] == 1
+            && c["first_pos"] == 2
+            && c["second"] == -2),
+        "conflict setup requires endpoint on native vertical axis"
+    );
+    n.frame(vec![egui::Event::Text("20".into())]);
+    tutorial_key(&mut n, Key::Enter, egui::Modifiers::NONE);
+    n.receive("transaction", false);
+    assert!(
+        n.editor
+            .sketch_ui
+            .inline_line
+            .as_ref()
+            .is_some_and(|p| p.editing)
+    );
+    assert_eq!(
+        object(&n.editor.state, &name)["sketch"],
+        object(&fixed, &name)["sketch"]
+    );
+    assert_eq!(n.editor.state["undo_count"], fixed["undo_count"]);
+    assert_eq!(n.editor.state["redo_count"], fixed["redo_count"]);
+    n.events.push(json!({"control":"native conflicting length rejected with prompt retained", "state":n.editor.state}));
+    n.record();
+}
+
+fn inline_modified_text(n: &mut Native, modifiers: egui::Modifiers) {
+    n.time += 0.1;
+    let mut frame = eframe::Frame::_new_kittest();
+    let _ = n.ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1280., 850.),
+            )),
+            time: Some(n.time),
+            modifiers,
+            events: vec![
+                egui::Event::Key {
+                    key: Key::Num6,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                },
+                egui::Event::Text("6".into()),
+            ],
+            ..Default::default()
+        },
+        |ctx| eframe::App::update(&mut n.editor, ctx, &mut frame),
+    );
+}
+
+#[test]
+#[ignore = "native inline owner blocked by other UI owners, modifiers and busy replies"]
+fn receiver_inline_other_input_owners_and_busy() {
+    let mut n = Native::new("inline-other-owners");
+    let _name = inline_control_start(&mut n);
+    let baseline = n.editor.state.clone();
+    let passive = |n: &Native| {
+        n.editor
+            .sketch_ui
+            .inline_line
+            .as_ref()
+            .is_some_and(|p| !p.editing)
+    };
+    assert!(passive(&n));
+    for mods in [
+        egui::Modifiers::SHIFT,
+        egui::Modifiers::CTRL,
+        egui::Modifiers::ALT,
+    ] {
+        inline_modified_text(&mut n, mods);
+        assert!(passive(&n), "modified digit must not acquire input");
+        assert_eq!(n.editor.state, baseline);
+        settle(&mut n);
+    }
+    n.click("View");
+    assert!(egui::Popup::is_any_open(&n.ctx));
+    n.frame(vec![egui::Event::Text("7".into())]);
+    assert!(passive(&n));
+    tutorial_key(&mut n, Key::Escape, egui::Modifiers::NONE);
+    tutorial_key(&mut n, Key::F1, egui::Modifiers::NONE);
+    assert!(super::super::super::workflow_guide::active(&n.ctx));
+    n.frame(vec![egui::Event::Text("7".into())]);
+    assert!(passive(&n));
+    tutorial_key(&mut n, Key::Escape, egui::Modifiers::NONE);
+    settle(&mut n);
+    let field = n
+        .ctx
+        .read_response(egui::Id::new("native_sketch_name"))
+        .unwrap();
+    pointer(&mut n, field.rect.center());
+    assert!(n.ctx.wants_keyboard_input());
+    n.frame(vec![egui::Event::Text("7".into())]);
+    assert!(passive(&n));
+    tutorial_key(&mut n, Key::Escape, egui::Modifiers::NONE);
+    settle(&mut n);
+    n.events.push(json!({"checkpoint":"after Escape from sketch-name field", "passive":passive(&n), "inline_present":n.editor.sketch_ui.inline_line.is_some(), "focus":format!("{:?}", n.ctx.memory(|m| m.focused())), "name_owner":n.editor.sketch_ui.name_owner, "ui":n.ui_state()}));
+    n.record();
+    assert!(
+        passive(&n),
+        "sketch-name Escape must preserve the optional line owner"
+    );
+    assert!(!n.editor.busy, "Escape must not issue a sketch rename");
+    assert_eq!(n.editor.state, baseline);
+    // Workspace units is disabled while a sketch session is active.
+    n.click("Document");
+    assert!(!n.editor.units_ui.active());
+    assert!(!egui::Popup::is_any_open(&n.ctx));
+    assert!(passive(&n));
+    settle(&mut n);
+    assert_eq!(n.editor.state, baseline);
+    n.editor.send("inspect", json!({}));
+    assert!(n.editor.busy);
+    n.frame(vec![egui::Event::Text("7".into())]);
+    assert!(passive(&n));
+    let reply = n.raw.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert!(reply.accepted);
+    n.forward.send(reply).unwrap();
+    n.frame(vec![egui::Event::Text("7".into())]);
+    assert!(
+        !n.editor.busy && passive(&n),
+        "reply completion frame must not steal input"
+    );
+    assert_eq!(n.editor.state, baseline);
+    n.events.push(json!({"control":"modified digits, popup, Help, sketch-name field, disabled Units entry, busy and native completion frame"}));
+    n.record();
+}
+
+#[test]
+#[ignore = "native inline owner rejects changed document, revision, session and geometry ID"]
+fn receiver_inline_wrong_owner_invalidated() {
+    let mut n = Native::new("inline-wrong-owner");
+    let name = inline_control_start(&mut n);
+    for (case, target) in [
+        ("document", [-30., 15., 0.]),
+        ("revision", [-20., 20., 0.]),
+        ("session", [-15., 10., 0.]),
+        ("geometry_id", [-10., 5., 0.]),
+    ] {
+        let state = n.editor.state.clone();
+        let session = n.editor.sketch_ui.session.clone();
+        match case {
+            "document" => n.editor.state["document"] = json!("different document"),
+            "revision" => n.editor.state["revision"] = json!(999999),
+            "session" => n.editor.sketch_ui.session = Some("different session".into()),
+            "geometry_id" => {
+                let index = object(&state, &name)["sketch"]["geometry_count"]
+                    .as_u64()
+                    .unwrap() as usize
+                    - 1;
+                let object_index = n.editor.state["objects"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .position(|o| o["name"] == name)
+                    .unwrap();
+                n.editor.state["objects"][object_index]["sketch"]["geometry"][index]["persistent_id"] =
+                    json!(999999);
+            }
+            _ => unreachable!(),
+        }
+        n.frame(vec![egui::Event::Text("7".into())]);
+        assert!(
+            n.editor.sketch_ui.inline_line.is_none(),
+            "{case} must invalidate owner"
+        );
+        assert!(!n.editor.busy, "{case} must not send a model transaction");
+        n.editor.state = state.clone();
+        n.editor.sketch_ui.session = session;
+        settle(&mut n);
+        assert_eq!(n.editor.state, state);
+        let p = n.editor.viewport.sketch_screen_point(target);
+        pointer(&mut n, p);
+        assert!(
+            n.editor.busy,
+            "control must create next line via one canvas click"
+        );
+        n.receive("transaction", true);
+        settle(&mut n);
+        assert!(n.editor.sketch_ui.inline_line.is_some());
+        n.events
+            .push(json!({"control":"wrong owner invalidated before typing", "case":case}));
+        n.record();
+    }
+}
+
+#[test]
+#[ignore = "native reference dimension follows new inline line length"]
+fn receiver_inline_reference_dimension_moves_with_native_solve() {
+    let mut n = Native::new("inline-reference-movement");
+    let name = inline_control_start(&mut n);
+    n.frame(vec![egui::Event::Text("25".into())]);
+    tutorial_key(&mut n, Key::Enter, egui::Modifiers::NONE);
+    n.receive("transaction", true);
+    settle(&mut n);
+    let sketch = &object(&n.editor.state, &name)["sketch"];
+    assert_eq!(sketch["constraint_count"], 3);
+    assert_eq!(sketch["constraints"][2]["type"], "Distance");
+    assert_eq!(sketch["constraints"][2]["value"], 25.);
+    n.click("Constraints (3)");
+    settle(&mut n);
+    let ui = n.frame(vec![]);
+    let rows: Vec<_> = ui
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::epaint::Shape::Text(t) if t.galley.text().starts_with("3  Distance") => {
+                Some(t.galley.rect.translate(t.pos.to_vec2()).center())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(rows.len(), 1, "one visible native distance row");
+    pointer(&mut n, rows[0]);
+    n.click("Driving");
+    n.receive("transaction", true);
+    settle(&mut n);
+    let reference = &object(&n.editor.state, &name)["sketch"]["constraints"][2];
+    assert_eq!(reference["driving"], false);
+    assert_eq!(reference["value"], 25.);
+    assert_eq!(n.editor.sketch_ui.tool, Tool::Line);
+    let origin = n.editor.viewport.sketch_screen_point([0., 0., 0.]);
+    let canvas = n.editor.viewport.response.as_ref().unwrap().layer_id;
+    let target = (-5..=5)
+        .flat_map(|dy| (-5..=5).map(move |dx| egui::vec2(dx as f32, dy as f32)))
+        .map(|offset| origin + offset)
+        .find(|p| {
+            n.ctx.layer_id_at(*p) == Some(canvas)
+                && n.editor.viewport.sketch_hit(*p) == Some(SketchElement { index: 0, point: 1 })
+        })
+        .expect("finite unoccluded hit for existing origin endpoint");
+    pointer(&mut n, target);
+    n.receive("transaction", true);
+    let before = object(&n.editor.state, &name)["sketch"].clone();
+    assert_eq!(before["constraints"][2]["value"], 25.);
+    assert_eq!(
+        before["constraints"].as_array().unwrap().last().unwrap()["type"],
+        "Coincident"
+    );
+    n.frame(vec![egui::Event::Text("30".into())]);
+    tutorial_key(&mut n, Key::Enter, egui::Modifiers::NONE);
+    n.receive("transaction", true);
+    let after = object(&n.editor.state, &name)["sketch"].clone();
+    assert_eq!(after["constraints"][2]["driving"], false);
+    assert!((after["constraints"][2]["value"].as_f64().unwrap() - 30.).abs() < 1e-7);
+    assert_eq!(
+        after["native_xml"]["persistent_ids"],
+        before["native_xml"]["persistent_ids"]
+    );
+    let end = after["geometry"][1]["end"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_f64().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        n.editor.sketch_ui.points[0].to_vec(),
+        end,
+        "continuation must use the solved endpoint"
+    );
+    n.events.push(json!({"control":"existing reference value follows new native line length", "before":before,"after":after}));
+    n.record();
 }

@@ -490,13 +490,18 @@ impl Viewport {
         self.fit_points(points);
     }
     pub fn fit_sketch(&mut self) {
-        let points = self
+        let points: Vec<Vec3> = self
             .curves
             .iter()
             .flat_map(|curve| curve.points.iter().copied())
             .filter(|point| point.is_finite())
             .collect();
-        self.fit_points(points);
+        if points.is_empty() && self.rect.is_finite() && self.rect.is_positive() {
+            self.center = self.sketch_origin;
+            self.scale = (self.rect.height() / 250.).clamp(0.0001, 100000.);
+        } else {
+            self.fit_points(points);
+        }
     }
     fn fit_points(&mut self, points: Vec<Vec3>) {
         if points.is_empty() {

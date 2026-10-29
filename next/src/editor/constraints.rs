@@ -100,7 +100,7 @@ fn dimension_unit<'a>(state: &'a Value, edit: &DimensionEdit) -> &'a str {
         .unwrap_or("")
 }
 
-fn dimension_context(edits: &mut [Value], default: &str) {
+pub(super) fn dimension_context(edits: &mut [Value], default: &str) {
     for edit in edits {
         if matches!(edit["op"].as_str(), Some("datum" | "via_point")) && edit.get("value").is_some()
         {

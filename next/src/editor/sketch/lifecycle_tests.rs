@@ -782,11 +782,28 @@ fn tutorial_revolve_tab_axis_and_enter_commit() {
     }
     tutorial_key(&mut n, Key::Tab, egui::Modifiers::NONE);
     assert!(n.editor.property_ui.axis_pick);
-    let point = [7., 0., 0.];
+    // Fixture coordinates are not source dimensions. Select the same native
+    // H axis at a visible point outside the sketch's endpoint hit regions.
+    let axis_candidates = [[-20., 0., 0.], [-40., 0., 0.], [20., 0., 0.], [40., 0., 0.]];
+    let point = axis_candidates
+        .into_iter()
+        .find(|point| {
+            let screen = n.editor.viewport.sketch_screen_point(*point);
+            n.editor.viewport.response.as_ref().is_some_and(|r| {
+                r.rect.shrink(6.).contains(screen)
+                    && n.ctx.layer_id_at(screen) == Some(r.layer_id)
+                    && n.editor.viewport.sketch_hit(screen)
+                        == Some(SketchElement {
+                            index: -1,
+                            point: 0,
+                        })
+            })
+        })
+        .expect("visible unobstructed native horizontal axis point");
     let screen = n.editor.viewport.sketch_screen_point(point);
     let hit = n.editor.viewport.sketch_hit(screen);
     fs::write(n.folder.join("axis-before-click.json"), serde_json::to_vec_pretty(&json!({
-        "point":point, "screen":[screen.x,screen.y], "hit":hit,
+        "point":point, "candidates":axis_candidates, "screen":[screen.x,screen.y], "hit":hit,
         "axis_pick":n.editor.property_ui.axis_pick,
         "response_rect":n.editor.viewport.response.as_ref().map(|r| json!([r.rect.min.x,r.rect.min.y,r.rect.max.x,r.rect.max.y]))
     })).unwrap()).unwrap();
@@ -1355,3 +1372,6 @@ mod receiver_input_tests;
 
 #[path = "receiver_shortcut_tests.rs"]
 mod receiver_shortcut_tests;
+
+#[path = "receiver_master_profile_attempt_tests.rs"]
+mod receiver_master_profile_attempt_tests;

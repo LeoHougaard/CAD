@@ -1,7 +1,9 @@
 //! Interaction state only: every accepted geometry change is solved natively.
+mod inline_line;
 use super::{Editor, constraints::DimensionEdit};
 use crate::sketch_commands::{SketchElement, Tool, draw_snapped_edits};
 use eframe::egui::{self, Color32, Key};
+use inline_line::InlineLine;
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 
@@ -32,6 +34,7 @@ pub(super) struct SketchUi {
     cleanup: bool,
     after_finish: Option<String>,
     continuation: Option<usize>,
+    inline_line: Option<InlineLine>,
     box_start: Option<egui::Pos2>,
     pub(super) branch_pending: bool,
 }
@@ -64,6 +67,7 @@ impl Default for SketchUi {
             cleanup: false,
             after_finish: None,
             continuation: None,
+            inline_line: None,
             box_start: None,
             branch_pending: false,
         }
@@ -112,6 +116,7 @@ impl SketchUi {
         self.points.clear();
         self.snaps.clear();
         self.continuation = None;
+        self.inline_line = None;
     }
 }
 pub(super) struct DimensionTool {
@@ -263,6 +268,7 @@ impl Editor {
         self.begin_sketch();
     }
     pub(super) fn sketch_reply(&mut self, op: &str, success: bool) {
+        self.inline_line_reply(op, success);
         self.dimension_reply(op, success);
         if op == "preview_commit" && success && self.sketch_ui.task.is_some() {
             self.sketch_ui.branch_pending = false;
@@ -297,6 +303,7 @@ impl Editor {
                 if let Some(point) = self.viewport.geometry_point(element) {
                     self.sketch_ui.points = vec![point];
                     self.sketch_ui.snaps = vec![Some(element)];
+                    self.inline_line_begin(index);
                 }
             }
         }
@@ -966,9 +973,18 @@ impl Editor {
                 self.sketch_ui.box_start = Some(start);
             }
         }
+        if self
+            .sketch_ui
+            .inline_line
+            .as_ref()
+            .is_some_and(|p| p.editing)
+        {
+            return;
+        }
         if response.clicked()
             && let Some(pos) = pos
         {
+            self.sketch_ui.inline_line = None;
             if self.sketch_ui.trim {
                 if let Some(hit) = self.viewport.sketch_hit(pos).filter(|h| h.index >= 0)
                     && let Some(position) = self.viewport.sketch_point(pos)

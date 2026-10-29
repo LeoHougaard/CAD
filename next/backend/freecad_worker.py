@@ -607,7 +607,8 @@ def oriented_normal(face, u, v):
 
 
 def sketch_geometry(obj):
-    return [SketchGeometry.geometry_entry(geo, index, obj.getConstruction(index), sketch=obj)
+    return [{**SketchGeometry.geometry_entry(geo, index, obj.getConstruction(index), sketch=obj),
+             "persistent_id": obj.getGeometryId(index)}
             for index, geo in enumerate(obj.Geometry)]
 
 
