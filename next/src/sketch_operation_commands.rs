@@ -22,6 +22,89 @@ fn geometry(snapshot: &Value, index: i32) -> Option<&Value> {
         .find(|g| g["index"].as_i64() == Some(index as i64))
 }
 
+/// Slot around one selected native line. The original line keeps its geometry
+/// ID and construction state; the generated boundary is solver-coupled to it.
+pub fn selected_line_slot(
+    snapshot: &Value,
+    selection: &[SketchElement],
+) -> Result<Vec<Value>, String> {
+    let object = snapshot["name"]
+        .as_str()
+        .filter(|name| {
+            !name.is_empty()
+                && name.chars().enumerate().all(|(i, c)| {
+                    c.is_ascii_alphabetic() || c == '_' || i > 0 && c.is_ascii_digit()
+                })
+        })
+        .ok_or("Choose a native sketch")?;
+    let [selected] = selection else {
+        return Err("Select one whole native sketch line".into());
+    };
+    let line = geometry(snapshot, selected.index)
+        .filter(|g| {
+            selected.index >= 0
+                && selected.point == 0
+                && g["kind"] == "line"
+                && g["editable"] == true
+                && !g["persistent_id"].is_null()
+        })
+        .ok_or("Select one whole editable native sketch line")?;
+    let native_point = |p: &Value| {
+        p.as_array().is_some_and(|v| {
+            v.len() == 3
+                && v.iter().all(|x| x.as_f64().is_some_and(f64::is_finite))
+                && v[2].as_f64().is_some_and(|z| z.abs() < 1e-9)
+        })
+    };
+    if !native_point(&line["start"]) || !native_point(&line["end"]) {
+        return Err("The selected line has invalid native endpoints".into());
+    }
+    let a = [
+        line["start"][0].as_f64().unwrap(),
+        line["start"][1].as_f64().unwrap(),
+    ];
+    let b = [
+        line["end"][0].as_f64().unwrap(),
+        line["end"][1].as_f64().unwrap(),
+    ];
+    let dx = b[0] - a[0];
+    let dy = b[1] - a[1];
+    let length = dx.hypot(dy);
+    if !length.is_finite() || length <= 1e-9 {
+        return Err("The selected line has zero length".into());
+    }
+    let (ux, uy) = (dx / length, dy / length);
+    let (nx, ny) = (-uy * 10., ux * 10.);
+    let point = |p: [f64; 2], x: f64, y: f64| json!([p[0] + x, p[1] + y, 0.]);
+    let first = snapshot["sketch"]["geometry_count"]
+        .as_u64()
+        .and_then(|n| i32::try_from(n).ok())
+        .filter(|n| *n <= i32::MAX - 4)
+        .ok_or("The native geometry count is unavailable")?;
+    if selected.index >= first {
+        return Err("The selected line changed; select it again".into());
+    }
+    let mut edits = vec![
+        json!({"op":"geometry","object":object,"kind":"arc","start":point(a,nx,ny),"mid":point(a,-ux*10.,-uy*10.),"end":point(a,-nx,-ny)}),
+        json!({"op":"geometry","object":object,"kind":"arc","start":point(b,-nx,-ny),"mid":point(b,ux*10.,uy*10.),"end":point(b,nx,ny)}),
+        json!({"op":"geometry","object":object,"kind":"line","start":point(a,nx,ny),"end":point(b,nx,ny)}),
+        json!({"op":"geometry","object":object,"kind":"line","start":point(a,-nx,-ny),"end":point(b,-nx,-ny)}),
+    ];
+    for (kind, args) in [
+        ("Tangent", json!([first, 1, first + 2, 1])),
+        ("Tangent", json!([first, 2, first + 3, 1])),
+        ("Tangent", json!([first + 1, 2, first + 2, 2])),
+        ("Tangent", json!([first + 1, 1, first + 3, 2])),
+        ("Equal", json!([first, first + 1])),
+        ("Coincident", json!([first, 3, selected.index, 1])),
+        ("Coincident", json!([first + 1, 3, selected.index, 2])),
+        ("Diameter", json!([first, 20.])),
+    ] {
+        edits.push(json!({"op":"constraint","object":object,"kind":kind,"args":args}));
+    }
+    Ok(edits)
+}
+
 fn mirror_geometry(snapshot: &Value, index: i32) -> Option<&Value> {
     geometry(snapshot, index).or_else(|| {
         snapshot["sketch"]["externals"]
@@ -405,6 +488,28 @@ pub fn build(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slot_uses_one_owned_native_line_and_keeps_its_mode() {
+        let mut s = json!({"name":"Sketch","sketch":{"geometry_count":1,"geometry":[
+            {"index":0,"persistent_id":17,"editable":true,"kind":"line",
+             "start":[3.,-5.,0.],"end":[3.,25.,0.],"construction":false}]}});
+        let line = SketchElement { index: 0, point: 0 };
+        let edits = selected_line_slot(&s, &[line]).unwrap();
+        assert_eq!(edits.len(), 12);
+        assert_eq!(edits[0]["kind"], "arc");
+        assert_eq!(edits[0]["start"], json!([-7., -5., 0.]));
+        assert_eq!(edits[0]["mid"], json!([3., -15., 0.]));
+        assert_eq!(edits[4]["kind"], "Tangent");
+        assert_eq!(edits[9]["args"], json!([1, 3, 0, 1]));
+        assert_eq!(edits[11]["args"], json!([1, 20.]));
+        assert!(!edits.iter().any(|e| e["op"] == "construction"));
+        assert!(selected_line_slot(&s, &[]).is_err());
+        assert!(selected_line_slot(&s, &[SketchElement { index: 0, point: 1 }]).is_err());
+        assert!(selected_line_slot(&s, &[line, line]).is_err());
+        s["sketch"]["geometry"][0]["persistent_id"] = Value::Null;
+        assert!(selected_line_slot(&s, &[line]).is_err());
+    }
     fn snapshot() -> Value {
         json!({"name":"Sketch","sketch":{"geometry":[{"index":0,"kind":"line"},{"index":1,"kind":"arc"},{"index":2,"kind":"bspline","poles":[[0,0,0],[1,2,0],[3,0,0]]}]}})
     }

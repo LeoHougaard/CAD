@@ -45,6 +45,7 @@ impl Editor {
                 .find(|o| o["name"] == draft.parameters["name"])
         {
             let reference_profile = draft.parameters.get("reference_choice").is_some();
+            let plane_point = draft.parameters.get("plane_point").is_some();
             let inactive_literals =
                 crate::hole_commands::inactive_literals(object, &draft.parameters);
             if let Some(changes) = draft.parameters["properties"].as_object_mut() {
@@ -58,6 +59,9 @@ impl Editor {
                         return false;
                     }
                     if reference_profile && property == "Profile" {
+                        return true;
+                    }
+                    if plane_point && matches!(property.as_str(), "AttachmentSupport" | "MapMode") {
                         return true;
                     }
                     if let Some(native) = object["properties"].get(property) {
@@ -167,6 +171,44 @@ impl Editor {
                 return;
             }
         };
+        let mut plane_point = None;
+        if type_id == "PartDesign::Plane" && selections.len() == 2 {
+            let first = objects(&self.state)
+                .iter()
+                .find(|o| o["name"] == selections[0].0);
+            let second = objects(&self.state)
+                .iter()
+                .find(|o| o["name"] == selections[1].0);
+            if first.is_some_and(|o| {
+                matches!(o["type"].as_str(), Some("App::Plane" | "PartDesign::Plane"))
+            }) && second.is_some_and(|o| o["type"] == "Sketcher::SketchObject")
+                && selections[1].1.starts_with("Vertex")
+            {
+                let selection = crate::viewport::Selection {
+                    object: selections[1].0.clone(),
+                    subelement: selections[1].1.clone(),
+                };
+                let Some((mapped, revision)) = self.viewport.scene_vertex_identity(&selection)
+                else {
+                    self.error =
+                        Some("The selected sketch vertex has no current native identity".into());
+                    return;
+                };
+                if Some(revision) != self.state["revision"].as_u64() || mapped.is_empty() {
+                    self.error = Some("The selected sketch vertex is stale".into());
+                    return;
+                }
+                properties.insert(
+                    "AttachmentSupport".into(),
+                    json!([
+                    {"link":selections[0].0,"subelements":[]},
+                    {"link":selections[1].0,"subelements":[selections[1].1]}]),
+                );
+                properties.insert("MapMode".into(), json!("ParallelPlane"));
+                plane_point = Some(json!({"plane":selections[0].0,"object":selections[1].0,
+                    "subelement":selections[1].1,"mapped_name":mapped,"body":body}));
+            }
+        }
         if definition.preferred_properties.contains(&"Profile")
             && let Some(source) = selected.as_deref().and_then(|name| {
                 objects(&self.state).iter().find(|object| {
@@ -200,6 +242,9 @@ impl Editor {
             deferred: self.state["redo_count"].as_u64().unwrap_or(0) > 0,
             committing: false,
         });
+        if let Some(guard) = plane_point {
+            self.draft.as_mut().unwrap().parameters["plane_point"] = guard;
+        }
         if let Some(draft) = &mut self.draft {
             let profile = draft.parameters["properties"]["Profile"].clone();
             self.property_ui
@@ -334,6 +379,18 @@ impl Editor {
         }
         if self.property_ui.schema.is_null() {
             ui.weak("Native property schema unavailable");
+            return;
+        }
+        if let Some(point) = draft.parameters.get("plane_point") {
+            ui.label("Plane point");
+            ui.label(format!(
+                "Plane: {}",
+                point["plane"].as_str().unwrap_or_default()
+            ));
+            ui.label(format!(
+                "Vertex: {}",
+                point["object"].as_str().unwrap_or_default()
+            ));
             return;
         }
         ui.horizontal(|ui| {

@@ -1059,6 +1059,9 @@ impl Editor {
                         if ui.button("Revolve").clicked() {
                             self.feature_from_sketch("feature.revolution");
                         }
+                        if self.sketch_ui.session.is_none() && ui.button("Plane").clicked() {
+                            self.start_native_feature("PartDesign::Plane");
+                        }
                         if self.sketch_ui.session.is_none() && ui.button("Fillet").clicked() {
                             self.start_feature("feature.fillet");
                         }
@@ -1309,8 +1312,54 @@ impl Editor {
             && !self.sketch_ui.split
             && self.sketch_ui.task.is_none();
         let before = self.viewport.selected.clone();
+        let before_picks = self.viewport.selections.clone();
         self.viewport.view_cube_input_enabled = !sketch_input_blocked && !self.busy;
         let picked = self.viewport.ui(ui).is_some();
+        // A plane followed by a visible sketch vertex is a common two-click
+        // attachment selection. Preserve the first pick without a modifier.
+        if !sketch_input_blocked
+            && !self.busy
+            && self.draft.is_none()
+            && self.sketch_ui.session.is_none()
+            && !self.viewport.view_cube_owns_pointer()
+            && before_picks.len() == 1
+            && objects(&self.state).iter().any(|o| {
+                o["name"] == before_picks[0].object
+                    && matches!(o["type"].as_str(), Some("App::Plane" | "PartDesign::Plane"))
+            })
+            && self.viewport.response.as_ref().is_some_and(|r| r.clicked())
+            && ui.input(|i| i.modifiers == egui::Modifiers::NONE)
+            && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
+        {
+            let hits: Vec<_> = self
+                .viewport
+                .scene_vertices_at(pos)
+                .into_iter()
+                .filter(|hit| {
+                    hit.revision == self.state["revision"].as_u64()
+                        && hit.mapped_name.as_ref().is_some_and(|m| !m.is_empty())
+                        && objects(&self.state).iter().any(|o| {
+                            o["name"] == hit.object
+                                && o["type"] == "Sketcher::SketchObject"
+                                && o["effective_visibility"] == true
+                        })
+                })
+                .collect();
+            if hits.len() == 1 {
+                let vertex = crate::viewport::Selection {
+                    object: hits[0].object.clone(),
+                    subelement: hits[0].subelement.clone(),
+                };
+                self.viewport.selections = vec![before_picks[0].clone(), vertex.clone()];
+                self.viewport.selected = Some(vertex);
+                self.error = None;
+            } else if hits.len() > 1 {
+                self.viewport.selections = before_picks;
+                self.viewport.selected = self.viewport.selections.last().cloned();
+                self.error =
+                    Some("More than one visible sketch vertex is under the pointer".into());
+            }
+        }
         if axis_active && let Some(profile) = axis_profile {
             self.viewport
                 .draw_construction_axes(ui.painter(), &self.state, profile);
@@ -1454,6 +1503,17 @@ impl eframe::App for Editor {
             workflow_guide::open(ctx);
         }
         let guide_was_open = workflow_guide::active(ctx);
+        if !was_busy
+            && !shortcut_blocked
+            && !guide_was_open
+            && !ctx.wants_keyboard_input()
+            && self.sketch_ui.session.is_none()
+            && consume_exact_key(ctx, egui::Modifiers::NONE, Key::Space)
+        {
+            self.viewport.clear_selection();
+            self.body_ui.selected.clear();
+            self.selected_object = None;
+        }
         self.units_ui.workspace_input_blocked = was_busy || self.busy || guide_was_open;
         if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close {
             if self.unavailable() && !self.source_recovery() && !self.busy {

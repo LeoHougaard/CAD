@@ -55,6 +55,7 @@ EDIT_OPERATIONS += sorted(AssemblyAuthoring.OPERATIONS)
 EDIT_OPERATIONS += list(SketchOperations.OPERATIONS)
 EDIT_OPERATIONS += list(FeatureHistory.OPERATIONS)
 EDIT_OPERATIONS += list(ProfileReferences.OPERATIONS)
+EDIT_OPERATIONS += ["validate_plane_point"]
 OBJECT_TYPES = {
     "App::Part", "Part::Feature", "PartDesign::Body", "Sketcher::SketchObject",
     "PartDesign::Pad", "PartDesign::Pocket", "PartDesign::Fillet",
@@ -1012,6 +1013,21 @@ def apply_native_edit(doc, edit):
             obj.MapMode = "FlatFace"
         return {"object": obj.Name}
     obj = object_in(doc, edit["object"])
+    if op == "validate_plane_point":
+        plane = object_in(doc, edit.get("plane"))
+        body = object_in(doc, edit.get("body"))
+        subelement, mapped = edit.get("subelement"), edit.get("mapped_name")
+        if (not body.isDerivedFrom("PartDesign::Body") or obj.TypeId != "Sketcher::SketchObject"
+                or owner_body(obj) != body or not effective_visibility(obj)):
+            fail("invalid_geometry", "Choose a visible sketch vertex in the active Body")
+        if not ((plane.isDerivedFrom("App::Plane") and plane in body.Origin.OriginFeatures)
+                or (plane.TypeId == "PartDesign::Plane" and owner_body(plane) == body)):
+            fail("invalid_geometry", "Choose a native plane in the active Body")
+        if (not isinstance(subelement, str) or re.fullmatch(r"Vertex[1-9][0-9]*", subelement) is None
+                or not isinstance(mapped, str) or not mapped or obj.Shape.isNull()
+                or obj.Shape.getElementMappedName(subelement) != mapped):
+            fail("stale_reference", "Native source vertex identity changed or is unavailable")
+        return {"object": obj.Name}
     if op == "auto_external_coincident":
         if not obj.isDerivedFrom("Sketcher::SketchObject"):
             fail("invalid_request", "Automatic projection requires a native SketchObject")

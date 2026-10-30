@@ -55,6 +55,42 @@ pub fn writable(schema: &Value, property: &str) -> bool {
 /// Only changed values are written. Native computed/default properties never
 /// round-trip through the UI, and clearing an expression precedes its new value.
 pub fn build(parameters: &Value) -> Result<Vec<Value>, String> {
+    if let Some(point) = parameters.get("plane_point") {
+        let plane = point["plane"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .ok_or("Choose a plane")?;
+        let object = point["object"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .ok_or("Choose a vertex owner")?;
+        let subelement = point["subelement"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .ok_or("Choose a vertex")?;
+        let mapped = point["mapped_name"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .ok_or("Vertex identity is unavailable")?;
+        if parameters["create"] != true
+            || parameters["type"] != "PartDesign::Plane"
+            || parameters["body"] != point["body"]
+            || parameters["properties"]["MapMode"] != "ParallelPlane"
+            || parameters["properties"]["AttachmentSupport"]
+                != json!([
+                {"link":plane,"subelements":[]}, {"link":object,"subelements":[subelement]}])
+        {
+            return Err("Plane point references changed; select them again".into());
+        }
+        let mut candidate = parameters.clone();
+        candidate.as_object_mut().unwrap().remove("plane_point");
+        let mut edits = vec![
+            json!({"op":"validate_plane_point","object":object,"plane":plane,
+            "body":point["body"],"subelement":subelement,"mapped_name":mapped}),
+        ];
+        edits.extend(build(&candidate)?);
+        return Ok(edits);
+    }
     if let Some(selection) = parameters.get("extrusion_selection") {
         if !crate::extrusion_commands::supported(parameters["type"].as_str().unwrap_or_default()) {
             return Err("Termination selection requires Pad or Pocket".into());

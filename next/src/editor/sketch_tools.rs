@@ -227,6 +227,18 @@ impl Editor {
         {
             self.direct_mirror();
         }
+        ui.menu_button("Offset", |ui| {
+            let menu_ready = !was_busy
+                && !ui.ctx().wants_keyboard_input()
+                && !super::workflow_guide::active(ui.ctx());
+            if ui
+                .add_enabled(menu_ready, egui::Button::new("Slot"))
+                .clicked()
+            {
+                self.selected_line_slot();
+                ui.close();
+            }
+        });
         ui.menu_button("Edit tools", |ui| {
             if ui
                 .selectable_label(self.sketch_ui.split, "Split curve")
@@ -261,6 +273,36 @@ impl Editor {
                 }
             }
         });
+    }
+    fn selected_line_slot(&mut self) {
+        if self.busy
+            || self.sketch_ui.session.is_none()
+            || self.sketch_ui.tool != Tool::Select
+            || self.sketch_ui.drag.is_some()
+            || self.sketch_ui.dimension.is_some()
+            || self.sketch_ui.dimension_tool.is_some()
+            || self.sketch_ui.task.is_some()
+            || self.draft.is_some()
+            || self.sketch_ui.trim
+            || self.sketch_ui.external
+            || self.sketch_ui.split
+        {
+            return;
+        }
+        let Some(snapshot) = self.sketch_snapshot() else {
+            return;
+        };
+        if !self.mirror_selection_owned() {
+            self.error = Some("Select one current native sketch line".into());
+            return;
+        }
+        match sketch_operation_commands::selected_line_slot(
+            &snapshot,
+            &self.viewport.sketch_selection,
+        ) {
+            Ok(edits) => self.transaction("Create slot", edits),
+            Err(error) => self.error = Some(error),
+        }
     }
     fn direct_mirror(&mut self) {
         if self.busy

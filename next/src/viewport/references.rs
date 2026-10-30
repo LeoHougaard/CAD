@@ -97,6 +97,21 @@ impl Viewport {
         self.cancel_other_picker();
         let revision = state["revision"].as_u64();
         let mut revisions = BTreeMap::new();
+        // Origin planes are infinite. Give their display a useful extent in
+        // an existing model so their selectable area is not buried in a solid.
+        let model_extent = state["objects"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .flat_map(|object| {
+                (0..3).filter_map(move |axis| {
+                    let min = object["shape"]["bounds"]["min"][axis].as_f64()?;
+                    let max = object["shape"]["bounds"]["max"][axis].as_f64()?;
+                    let extent = (max - min) as f32;
+                    (extent.is_finite() && extent > 0.).then_some(extent)
+                })
+            })
+            .fold(0_f32, f32::max);
         let references = state["objects"]
             .as_array()
             .into_iter()
@@ -132,10 +147,14 @@ impl Viewport {
                 }
                 let name = object["name"].as_str()?;
                 let (origin, rotation) = placement(&descriptor["placement"]);
-                let size = Vec2::new(
+                let mut size = Vec2::new(
                     descriptor["size"][0].as_f64().unwrap_or(20.) as f32,
                     descriptor["size"][1].as_f64().unwrap_or(20.) as f32,
                 );
+                if kind == "plane" && object["type"] == "App::Plane" {
+                    size.x = size.x.max(model_extent * 1.25);
+                    size.y = size.y.max(model_extent * 1.25);
+                }
                 if !origin.is_finite() || !size.is_finite() || size.x <= 0. || size.y <= 0. {
                     return None;
                 }

@@ -67,6 +67,7 @@ impl Editor {
             Sketch,
             Extrude,
             Revolve,
+            Plane,
             Draw(Tool),
             Dimension,
         }
@@ -118,6 +119,7 @@ impl Editor {
                             ("Sketch", Action::Sketch),
                             ("Extrude", Action::Extrude),
                             ("Revolve", Action::Revolve),
+                            ("Plane", Action::Plane),
                         ] {
                             if ui.button(label).clicked() {
                                 action = Some(command);
@@ -131,6 +133,7 @@ impl Editor {
             Some(Action::Sketch) => self.new_sketch(),
             Some(Action::Extrude) => self.feature_from_sketch("feature.pad"),
             Some(Action::Revolve) => self.feature_from_sketch("feature.revolution"),
+            Some(Action::Plane) => self.start_native_feature("PartDesign::Plane"),
             Some(Action::Draw(tool)) => self.activate_sketch_drawing_tool(tool),
             Some(Action::Dimension) => self.start_dimension_tool(),
             None => {}

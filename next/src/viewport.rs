@@ -547,6 +547,15 @@ impl Viewport {
         let p = self.rotation.conjugate() * (p - self.center);
         (self.rect.center() + Vec2::new(p.x, -p.y) * self.scale, p.z)
     }
+    #[cfg(test)]
+    pub fn test_world_screen_point(&self, point: [f64; 3]) -> Pos2 {
+        self.project(Vec3::new(point[0] as f32, point[1] as f32, point[2] as f32))
+            .0
+    }
+    #[cfg(test)]
+    pub fn test_scene_pick(&self, pos: Pos2) -> Option<Selection> {
+        self.pick(pos, &self.projected())
+    }
     pub fn sketch_screen_point(&self, point: [f64; 3]) -> Pos2 {
         self.project(
             self.sketch_origin
@@ -625,6 +634,19 @@ impl Viewport {
                 })
             })
             .collect()
+    }
+    pub fn scene_vertex_identity(&self, selection: &Selection) -> Option<(String, u64)> {
+        let vertex = self
+            .vertices
+            .iter()
+            .find(|v| v.object.as_ref() == selection.object && v.name == selection.subelement)?;
+        Some((
+            vertex.mapped_name.clone()?,
+            self.scene_revisions
+                .get(&selection.object)
+                .copied()
+                .flatten()?,
+        ))
     }
     fn edge_visible(
         &self,

@@ -21,6 +21,9 @@ def snapshot_with_native_xml(doc, revision=None):
     for entry in state["objects"]:
         native = doc.getObject(entry["name"])
         entry["test_native_id"] = native.ID
+        if native.TypeId == "PartDesign::Plane":
+            with zipfile.ZipFile(io.BytesIO(native.dumpPropertyContent("AttachmentSupport"))) as archive:
+                entry["test_support_xml"] = archive.read("Persistence.xml").decode("utf-8")
         if native.TypeId == "PartDesign::Revolution" and not native.Shape.isNull():
             entry["test_axis"] = {"base": [native.Base.x, native.Base.y, native.Base.z],
                                   "direction": [native.Axis.x, native.Axis.y, native.Axis.z]}
