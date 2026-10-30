@@ -493,6 +493,13 @@ impl Editor {
             .id(egui::Id::new("features"))
             .enabled(!self.units_ui.active())
             .default_pos([10., 82.])
+            .constrain_to(
+                self.viewport
+                    .response
+                    .as_ref()
+                    .filter(|_| !self.busy)
+                    .map_or_else(|| ctx.content_rect(), |response| response.rect),
+            )
             .default_width(145.)
             .resizable(false)
             .collapsible(true)
@@ -605,7 +612,75 @@ impl Editor {
             .iter()
             .any(|selected| selected == name)
             || self.selected_object.as_deref() == Some(name);
-        let response = ui.selectable_label(selected, text);
+        let mutable = self.tree_mutable();
+        let (response, visibility) = ui
+            .horizontal(|ui| {
+                let mut visibility = None;
+                if let Some(visible) = object["properties"]["Visibility"].as_bool() {
+                    let show = !visible;
+                    let label = format!("{} {}", if show { "Show" } else { "Hide" }, label(object));
+                    let eye = ui
+                        .add_enabled_ui(mutable, |ui| {
+                            let (_, rect) = ui.allocate_space(egui::vec2(20., 18.));
+                            let response = ui.interact(
+                                rect,
+                                egui::Id::new(("feature_visibility", name)),
+                                egui::Sense::click(),
+                            );
+                            response.widget_info(|| {
+                                egui::WidgetInfo::labeled(egui::WidgetType::Button, mutable, &label)
+                            });
+                            let center = rect.center();
+                            let color = if mutable {
+                                ui.visuals().text_color()
+                            } else {
+                                ui.visuals().weak_text_color()
+                            };
+                            let stroke = egui::Stroke::new(1.2_f32, color);
+                            ui.painter().add(egui::Shape::line(
+                                vec![
+                                    center + egui::vec2(-7., 0.),
+                                    center + egui::vec2(-3.5, -3.5),
+                                    center + egui::vec2(0., -4.5),
+                                    center + egui::vec2(3.5, -3.5),
+                                    center + egui::vec2(7., 0.),
+                                    center + egui::vec2(3.5, 3.5),
+                                    center + egui::vec2(0., 4.5),
+                                    center + egui::vec2(-3.5, 3.5),
+                                    center + egui::vec2(-7., 0.),
+                                ],
+                                stroke,
+                            ));
+                            ui.painter().circle_filled(center, 1.8, color);
+                            if !visible {
+                                ui.painter().line_segment(
+                                    [center + egui::vec2(-7., 6.), center + egui::vec2(7., -6.)],
+                                    stroke,
+                                );
+                            }
+                            response.on_hover_text(label)
+                        })
+                        .inner;
+                    if eye.clicked() {
+                        visibility = Some(show);
+                    }
+                }
+                (ui.selectable_label(selected, text), visibility)
+            })
+            .inner;
+        if let Some(show) = visibility {
+            let edits = tree_visibility_edits(&self.state, name, show);
+            if !edits.is_empty() {
+                self.transaction(
+                    if show {
+                        "Show native object"
+                    } else {
+                        "Hide native object"
+                    },
+                    edits,
+                );
+            }
+        }
         if response.clicked() && self.tree_selectable() {
             let additive = ui.input(|input| {
                 input.modifiers.ctrl || input.modifiers.shift || input.modifiers.command
@@ -631,7 +706,6 @@ impl Editor {
                 self.edit_feature(name);
             }
         }
-        let mutable = self.tree_mutable();
         response.context_menu(|ui| {
             ui.add_enabled_ui(mutable, |ui| {
                 if ui.button("Properties").clicked() {

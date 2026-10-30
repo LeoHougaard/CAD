@@ -9,6 +9,8 @@ pub(super) struct DimensionHit {
     index: usize,
     label: Rect,
     segments: Vec<[Pos2; 2]>,
+    #[cfg(test)]
+    text: String,
 }
 
 impl Viewport {
@@ -329,6 +331,16 @@ impl Viewport {
                 })
             })
             .collect()
+    }
+
+    #[cfg(test)]
+    pub fn test_dimension_label(&self, index: usize) -> Option<(Rect, String)> {
+        let mut labels = self.dimension_hits.iter().filter(|hit| hit.index == index);
+        let hit = labels.next()?;
+        if labels.next().is_some() {
+            return None;
+        }
+        Some((hit.label, hit.text.clone()))
     }
 
     pub fn dimension_hit(&self, pos: Pos2) -> Option<usize> {
@@ -963,6 +975,8 @@ impl Viewport {
                 for segment in &segments {
                     painter.line_segment(*segment, stroke);
                 }
+                #[cfg(test)]
+                let rendered_text = text.clone();
                 let label = dimension_label(painter, position, normal, text, color, &mut occupied);
                 if label.center().distance(position) > 2. {
                     segments.push([position, label.center()]);
@@ -971,6 +985,8 @@ impl Viewport {
                     index,
                     label,
                     segments,
+                    #[cfg(test)]
+                    text: rendered_text,
                 });
             }
         }
@@ -1460,6 +1476,47 @@ mod tests {
         assert_eq!(viewport.sketch_selection, vec![point]);
         let label = viewport.dimension_hits[0].label.center();
         assert_eq!(viewport.dimension_hit(label), Some(7));
+    }
+    #[test]
+    fn rendered_native_diameter_label_tracks_text_and_constraint_identity() {
+        for (display, value, driving) in [("13.50 mm", 13.5, true), ("7.25 mm", 7.25, false)] {
+            let mut viewport = viewport();
+            let sketch = json!({"name":"Sketch","sketch":{
+                "geometry":[{"index":0,"kind":"circle","center":[0,0,0],"radius":value/2.}],
+                "constraints":[{"index":12,"type":"Diameter","first":0,"first_pos":0,
+                    "value":value,"driving":driving,"quantity":{"display":display}}]}});
+            viewport.set_sketch(Some(sketch));
+            let ctx = egui::Context::default();
+            let frame = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default()
+                    .show(ctx, |ui| viewport.draw_dimensions(ui.painter()));
+            });
+            let (label, text) = viewport.test_dimension_label(12).expect("one native label");
+            let expected = format!("\u{2300}{display}{}", if driving { "" } else { " ref" });
+            assert_eq!(text, expected);
+            assert_eq!(viewport.dimension_hit(label.center()), Some(12));
+            assert!(viewport.test_dimension_label(13).is_none());
+            let found: Vec<_> = frame
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::epaint::Shape::Text(text) => {
+                        let rect = text.galley.rect.translate(text.pos.to_vec2());
+                        (text.galley.text() == expected
+                            && label.contains(rect.min)
+                            && label.contains(rect.max)
+                            && shape.clip_rect.contains(rect.center()))
+                        .then_some(rect)
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                found.len(),
+                1,
+                "actual rendered text and native label must agree"
+            );
+        }
     }
     #[test]
     fn drawn_dimension_label_and_line_return_native_constraint_index() {

@@ -1046,7 +1046,7 @@ impl Editor {
                                 }
                             });
                         }
-                        if self.sketch.is_some() {
+                        if self.sketch.is_some() && self.sketch_ui.session.is_some() {
                             self.sketch_toolbar(ui, was_busy);
                         }
                         ui.separator();

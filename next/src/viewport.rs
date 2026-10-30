@@ -553,6 +553,22 @@ impl Viewport {
             .0
     }
     #[cfg(test)]
+    pub fn test_scene_vertex_world(&self, object: &str, subelement: &str) -> Option<[f64; 3]> {
+        let vertex = self
+            .vertices
+            .iter()
+            .find(|v| v.object.as_ref() == object && v.name == subelement)?;
+        Some([
+            vertex.point.x as f64,
+            vertex.point.y as f64,
+            vertex.point.z as f64,
+        ])
+    }
+    #[cfg(test)]
+    pub fn test_reference_revision(&self, object: &str) -> Option<u64> {
+        self.reference_revisions.get(object).copied().flatten()
+    }
+    #[cfg(test)]
     pub fn test_scene_pick(&self, pos: Pos2) -> Option<Selection> {
         self.pick(pos, &self.projected())
     }

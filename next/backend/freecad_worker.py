@@ -1069,6 +1069,22 @@ def apply_native_edit(doc, edit):
             if value is None or value == obj or owner_body(value) != owner_body(obj) or obj in value.OutListRecursive:
                 fail("invalid_request", "Boolean base must be an earlier feature in its target Body")
             setattr(obj, prop, value)
+        elif prop == "Visibility" and obj.Visibility != value and "NoModify" in obj.getPropertyStatus(prop):
+            # Native openTransaction is lazy and ignores NoModify properties.
+            # Enroll this actual visibility change in the owned native history;
+            # restore the original property policy before validation or reply.
+            try:
+                obj.setPropertyStatus(prop, "-NoModify")
+                setattr(obj, prop, value)
+            finally:
+                try:
+                    obj.setPropertyStatus(prop, "NoModify")
+                    if "NoModify" not in obj.getPropertyStatus(prop):
+                        raise RuntimeError("Native visibility policy was not restored")
+                except Exception:
+                    lease("poison", doc.Name)
+                    bump(doc)
+                    raise
         else:
             setattr(obj, prop, value)
     elif op == "detach_sketch":
@@ -1586,6 +1602,41 @@ def validate_revolve_axis_preview(edits):
         fail("invalid_request", "The Revolution must use the selected profile and its new axis dependency")
 
 
+def accepted_revolve_axis_master(doc, active):
+    edits = active["edits"]
+    axes = [edit for edit in edits if isinstance(edit, dict) and edit.get("op") == "create_revolve_axis"]
+    if not axes:
+        return None
+    validate_revolve_axis_preview(edits)
+    edit = axes[0]
+    master = object_in(doc, edit["master"])
+    profile = object_in(doc, edit["profile"])
+    body = object_in(doc, edit["body"])
+    datum = object_in(doc, edit["name"])
+    feature_edit = next(item for item in edits if item.get("op") == "add_object"
+                        and item.get("type") == "PartDesign::Revolution")
+    feature = object_in(doc, feature_edit["name"])
+    geometry_id = edit.get("geometry_id")
+    matches = [index for index in range(master.GeometryCount)
+               if master.getGeometryId(index) == geometry_id] if master.TypeId == "Sketcher::SketchObject" else []
+    support = datum.AttachmentSupport if datum.TypeId == "PartDesign::Line" else []
+    reference = feature.ReferenceAxis if feature.TypeId == "PartDesign::Revolution" else None
+    feature_profile = feature.Profile if feature.TypeId == "PartDesign::Revolution" else None
+    if (type(geometry_id) is not int or master == profile or master.TypeId != "Sketcher::SketchObject"
+            or profile.TypeId != "Sketcher::SketchObject" or body.TypeId != "PartDesign::Body"
+            or owner_body(master) != body or owner_body(profile) != body or owner_body(datum) != body
+            or owner_body(feature) != body or not effective_visibility(master) or not master.Visibility
+            or len(matches) != 1 or not master.getConstruction(matches[0])
+            or not isinstance(master.Geometry[matches[0]], Part.LineSegment)
+            or datum.TypeId != "PartDesign::Line" or str(datum.MapMode) != "TwoPointLine"
+            or len(support) != 1 or support[0][0] != master
+            or list(support[0][1]) != ["edge" + str(matches[0] + 1)]
+            or not reference or reference[0] != datum or list(reference[1]) != [""]
+            or not feature_profile or feature_profile[0] != profile):
+        fail("stale_reference", "The accepted Revolution axis dependency changed")
+    return master
+
+
 def preview(doc, request):
     lease("preview_validate", doc.Name, request=request)
     active = _native_previews.get(doc.Name)
@@ -1595,7 +1646,24 @@ def preview(doc, request):
     if op != "preview":
         # Build and serialize the response before committing native history.
         if op == "preview_commit":
-            state = prepare_state(doc)
+            master = accepted_revolve_axis_master(doc, active)
+            if master is None:
+                state = prepare_state(doc)
+            else:
+                previous_visibility = master.Visibility
+                try:
+                    master.Visibility = False
+                    state = prepare_state(doc)
+                except Exception:
+                    try:
+                        master.Visibility = previous_visibility
+                        if master.Visibility != previous_visibility:
+                            raise RuntimeError("Could not restore staged master visibility")
+                    except Exception:
+                        lease("poison", doc.Name)
+                        bump(doc)
+                        traceback.print_exc(file=sys.stderr)
+                    raise
             state["preview"] = None
             try:
                 doc.commitTransaction()

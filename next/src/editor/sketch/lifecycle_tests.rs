@@ -186,6 +186,31 @@ impl Native {
             |ctx| eframe::App::update(&mut self.editor, ctx, &mut frame),
         )
     }
+    fn frame_widget(
+        &mut self,
+        id: egui::Id,
+        modifiers: egui::Modifiers,
+    ) -> (egui::FullOutput, Option<egui::Response>) {
+        self.time += 0.1;
+        let mut frame = eframe::Frame::_new_kittest();
+        let mut response = None;
+        let output = self.ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1280., 850.),
+                )),
+                time: Some(self.time),
+                modifiers,
+                ..Default::default()
+            },
+            |ctx| {
+                eframe::App::update(&mut self.editor, ctx, &mut frame);
+                response = ctx.read_response(id);
+            },
+        );
+        (output, response)
+    }
     fn click(&mut self, label: &str) {
         self.frame(vec![]);
         let frame = self.frame(vec![]);

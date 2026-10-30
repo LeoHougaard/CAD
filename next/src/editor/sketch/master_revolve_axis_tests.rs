@@ -32,6 +32,60 @@ fn click_popup(n: &mut Native, label: &str) {
     }
 }
 
+fn click_eye(n: &mut Native, name: &str) {
+    let (frame, response) = n.frame_widget(
+        egui::Id::new(("feature_visibility", name)),
+        egui::Modifiers::NONE,
+    );
+    let response = response.expect("feature eye must be visible");
+    let rect = response.rect;
+    let feature_rect = n.ctx.memory(|m| m.area_rect(egui::Id::new("features")));
+    let text_rows: Vec<_> = frame
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::epaint::Shape::Text(t) => {
+                let r = t.galley.rect.translate(t.pos.to_vec2());
+                Some(json!({"text":t.galley.text(),"rect":[r.min.x,r.min.y,r.max.x,r.max.y]}))
+            }
+            _ => None,
+        })
+        .collect();
+    let painted_paths = frame
+        .shapes
+        .iter()
+        .filter(|s| match &s.shape {
+            egui::epaint::Shape::Path(p) => p.points.iter().any(|p| rect.expand(1.).contains(*p)),
+            _ => false,
+        })
+        .count();
+    fs::write(n.folder.join("eye-diagnostic.json"),serde_json::to_vec_pretty(&json!({
+        "eye":{"rect":[rect.min.x,rect.min.y,rect.max.x,rect.max.y],"enabled":response.enabled(),
+            "layer":format!("{:?}",response.layer_id),"layer_at_center":format!("{:?}",n.ctx.layer_id_at(rect.center())),
+            "painted_paths_at_rect":painted_paths},
+        "features_rect":feature_rect.map(|r|json!([r.min.x,r.min.y,r.max.x,r.max.y])),
+        "busy":n.editor.busy,"draft":n.editor.draft.is_some(),"session":n.editor.sketch_ui.session,
+        "sketch_creation":n.editor.sketch_creation.is_some(),"drag":n.editor.sketch_ui.drag.is_some(),
+        "dimension":n.editor.sketch_ui.dimension.is_some(),"pending_file":n.editor.pending_file.is_some(),
+        "file_dialog":n.editor.file_dialog.is_some(),"overwrite":n.editor.overwrite,
+        "units_active":n.editor.units_ui.active(),"popup":egui::Popup::is_any_open(&n.ctx),"texts":text_rows
+    })).unwrap()).unwrap();
+    assert!(response.enabled());
+    let pos = response.rect.center();
+    assert_eq!(n.ctx.layer_id_at(pos), Some(response.layer_id));
+    for pressed in [true, false] {
+        n.frame(vec![
+            egui::Event::PointerMoved(pos),
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+    }
+}
+
 fn fixture_and_pick(n: &mut Native, doc: &str) -> (String, i64) {
     n.send("new", json!({"name":doc}), true);
     n.transaction(json!([
@@ -102,6 +156,21 @@ fn fixture_and_pick(n: &mut Native, doc: &str) -> (String, i64) {
     std::thread::sleep(Duration::from_millis(200));
     n.frame(vec![]);
     n.receive("preview", true);
+    assert_eq!(
+        object(&n.editor.state, "Master")["properties"]["Visibility"],
+        true
+    );
+    assert_eq!(
+        object(&n.editor.state, "Master")["effective_visibility"],
+        true
+    );
+    n.frame(vec![]);
+    assert!(
+        !n.ctx
+            .read_response(egui::Id::new(("feature_visibility", "Master")))
+            .expect("master eye exists in preview")
+            .enabled()
+    );
     assert_eq!(object(&n.editor.state, &helper)["type"], "PartDesign::Line");
     assert_eq!(
         object(&n.editor.state, &helper)["properties"]["Visibility"],
@@ -121,6 +190,10 @@ fn actual_master_axis_picker_owns_preview_history_and_reopened_geometry() {
     let (cancelled, id) = fixture_and_pick(&mut n, "AxisCancel");
     n.click("Cancel");
     n.receive("preview_cancel", true);
+    assert_eq!(
+        object(&n.editor.state, "Master")["properties"]["Visibility"],
+        true
+    );
     assert!(
         !objects(&n.editor.state)
             .iter()
@@ -162,7 +235,19 @@ fn actual_master_axis_picker_owns_preview_history_and_reopened_geometry() {
     let native_id = rev["test_native_id"].as_i64().unwrap();
     tutorial_key(&mut n, Key::Enter, egui::Modifiers::NONE);
     n.receive("preview_commit", true);
+    assert_eq!(
+        object(&n.editor.state, "Master")["properties"]["Visibility"],
+        false
+    );
+    assert_eq!(
+        object(&n.editor.state, "Master")["effective_visibility"],
+        false
+    );
     n.send("undo", json!({}), true);
+    assert_eq!(
+        object(&n.editor.state, "Master")["properties"]["Visibility"],
+        true
+    );
     assert!(
         !objects(&n.editor.state)
             .iter()
@@ -173,11 +258,46 @@ fn actual_master_axis_picker_owns_preview_history_and_reopened_geometry() {
         "PartDesign::Line"
     );
     n.send("redo", json!({}), true);
+    assert_eq!(
+        object(&n.editor.state, "Master")["properties"]["Visibility"],
+        false
+    );
     assert_eq!(object(&n.editor.state, &name)["test_native_id"], native_id);
-    let path = n.save("master-axis.FCStd");
+    let path = n.save("master-hidden.FCStd");
     n.send("close", json!({}), true);
     n.send("open", json!({"path":path}), true);
     assert_eq!(object(&n.editor.state, &name)["test_native_id"], native_id);
+    assert_eq!(
+        object(&n.editor.state, "Master")["properties"]["Visibility"],
+        false
+    );
+    click_eye(&mut n, "Master");
+    n.receive("transaction", true);
+    assert_eq!(
+        object(&n.editor.state, "Master")["properties"]["Visibility"],
+        true
+    );
+    assert_eq!(
+        object(&n.editor.state, "Master")["effective_visibility"],
+        true
+    );
+    n.send("undo", json!({}), true);
+    assert_eq!(
+        object(&n.editor.state, "Master")["properties"]["Visibility"],
+        false
+    );
+    n.send("redo", json!({}), true);
+    assert_eq!(
+        object(&n.editor.state, "Master")["properties"]["Visibility"],
+        true
+    );
+    let path = n.save("master-shown.FCStd");
+    n.send("close", json!({}), true);
+    n.send("open", json!({"path":path}), true);
+    assert_eq!(
+        object(&n.editor.state, "Master")["properties"]["Visibility"],
+        true
+    );
     n.transaction(json!([{"op":"delete_geometry","object":"Master","index":0}]));
     let selected = &object(&n.editor.state, "Master")["sketch"]["geometry"][0];
     assert_eq!(selected["persistent_id"], id);
