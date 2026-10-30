@@ -715,10 +715,10 @@ fn receiver_inline_wrong_owner_invalidated() {
     let mut n = Native::new("inline-wrong-owner");
     let name = inline_control_start(&mut n);
     for (case, target) in [
-        ("document", [-30., 15., 0.]),
-        ("revision", [-20., 20., 0.]),
-        ("session", [-15., 10., 0.]),
-        ("geometry_id", [-10., 5., 0.]),
+        ("document", [-60., 50., 0.]),
+        ("revision", [-20., 90., 0.]),
+        ("session", [20., 50., 0.]),
+        ("geometry_id", [60., 90., 0.]),
     ] {
         let state = n.editor.state.clone();
         let session = n.editor.sketch_ui.session.clone();
@@ -752,7 +752,32 @@ fn receiver_inline_wrong_owner_invalidated() {
         n.editor.sketch_ui.session = session;
         settle(&mut n);
         assert_eq!(n.editor.state, state);
+        let before_sketch = object(&state, &name)["sketch"].clone();
+        let count = before_sketch["geometry_count"].as_u64().unwrap() as usize;
+        let previous_end = before_sketch["geometry"][count - 1]["end"].clone();
+        let previous = std::array::from_fn(|i| previous_end[i].as_f64().unwrap());
         let p = n.editor.viewport.sketch_screen_point(target);
+        let previous_screen = n.editor.viewport.sketch_screen_point(previous);
+        let delta = p - previous_screen;
+        let response = n.editor.viewport.response.as_ref().unwrap();
+        let hit = n.editor.viewport.sketch_hit(p);
+        let unprojected = n.editor.viewport.sketch_point(p).unwrap();
+        n.events.push(json!({"control":"wrong-owner filler before one click","case":case,
+            "intended_local":target,"unprojected_native_target":unprojected,
+            "screen":[p.x,p.y],"previous_screen":[previous_screen.x,previous_screen.y],
+            "pixel_delta":[delta.x,delta.y],"native_hit":hit,
+            "viewport":[response.rect.min.x,response.rect.min.y,response.rect.max.x,response.rect.max.y],
+            "canvas_layer":format!("{:?}",response.layer_id),
+            "actual_layer":format!("{:?}",n.ctx.layer_id_at(p)),
+            "state":n.editor.state,"session":n.editor.sketch_ui.session}));
+        n.record();
+        assert!(response.rect.shrink(8.).contains(p));
+        assert_eq!(n.ctx.layer_id_at(p), Some(response.layer_id));
+        assert!(hit.is_none() && n.editor.viewport.dimension_hit(p).is_none());
+        assert!(
+            delta.x.abs() > 12. && delta.y.abs() > 12.,
+            "filler must be outside handle and H/V inference thresholds"
+        );
         pointer(&mut n, p);
         assert!(
             n.editor.busy,
@@ -761,6 +786,36 @@ fn receiver_inline_wrong_owner_invalidated() {
         n.receive("transaction", true);
         settle(&mut n);
         assert!(n.editor.sketch_ui.inline_line.is_some());
+        let after_sketch = object(&n.editor.state, &name)["sketch"].clone();
+        assert_eq!(after_sketch["geometry_count"], json!(count + 1));
+        assert_eq!(after_sketch["geometry"][count]["start"], previous_end);
+        let requested_point = json!(unprojected);
+        // The native observer proves the raw requested point survives native
+        // construction exactly. Public reply numbers have passed this same
+        // serde JSON parser; compare that phase, retaining the raw distinction.
+        let public_reply_point: Value =
+            serde_json::from_str(&serde_json::to_string(&requested_point).unwrap()).unwrap();
+        n.events.push(
+            json!({"control":"filler coordinate transport phase","case":case,
+            "raw_requested_point":requested_point,"expected_public_reply_point":public_reply_point,
+            "actual_public_reply_point":after_sketch["geometry"][count]["end"],
+            "raw_to_public_exact":requested_point==after_sketch["geometry"][count]["end"]}),
+        );
+        n.record();
+        assert_eq!(after_sketch["geometry"][count]["end"], public_reply_point);
+        assert_eq!(
+            after_sketch["native_xml"]["persistent_ids"]
+                .as_array()
+                .unwrap()[..count],
+            before_sketch["native_xml"]["persistent_ids"]
+                .as_array()
+                .unwrap()[..]
+        );
+        n.events.push(
+            json!({"control":"wrong-owner filler after native click","case":case,
+            "native_geometry":after_sketch["geometry"][count],"native_sketch":after_sketch}),
+        );
+        n.record();
         n.events
             .push(json!({"control":"wrong owner invalidated before typing", "case":case}));
         n.record();

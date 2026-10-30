@@ -919,7 +919,7 @@ impl Editor {
         }
     }
 
-    fn toolbar(&mut self, ctx: &egui::Context) {
+    fn toolbar(&mut self, ctx: &egui::Context, was_busy: bool) {
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
@@ -1044,7 +1044,7 @@ impl Editor {
                             });
                         }
                         if self.sketch.is_some() {
-                            self.sketch_toolbar(ui);
+                            self.sketch_toolbar(ui, was_busy);
                         }
                         ui.separator();
                         if ui.button("Extrude").clicked() {
@@ -1262,6 +1262,7 @@ impl Editor {
     }
 
     fn canvas(&mut self, ui: &mut egui::Ui, sketch_input_blocked: bool, guide_input_allowed: bool) {
+        let before_sketch_selection = self.viewport.sketch_selection.clone();
         let axis_profile = self.property_ui.axis_profile.as_deref();
         let axis_active = !self.unavailable()
             && self.property_ui.axis_pick
@@ -1353,6 +1354,9 @@ impl Editor {
         }
         if !self.unavailable() && !cube_owns_pointer {
             self.sketch_canvas(ui, picked, sketch_input_blocked);
+        }
+        if self.viewport.sketch_selection != before_sketch_selection {
+            self.bind_mirror_selection();
         }
     }
 }
@@ -1475,7 +1479,7 @@ impl eframe::App for Editor {
             self.property_ui.axis_pick = true;
         }
         self.sketch_ui.name_input_blocked = shortcut_blocked || workflow_guide::active(ctx);
-        self.toolbar(ctx);
+        self.toolbar(ctx, was_busy);
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
             if self.unavailable() && !self.source_recovery() {
                 ui.horizontal(|ui| self.recovery_controls(ui));

@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import platform
 import struct
+import xml.etree.ElementTree as ET
 
 import FreeCAD as App
 import Part
@@ -73,6 +74,55 @@ def _constrained_copy(sketch, indices, reference, point):
         raise ValueError(error.value.decode("utf-8", errors="replace") or "Native symmetry operation unsuccessful")
 
 
+def _coincident_components(sketch):
+    # Native identity only: graph edges are the original Coincident constraints.
+    parent = {}
+    def find(node):
+        while parent[node] != node:
+            node = parent[node]
+        return node
+    for index, constraint in enumerate(sketch.Constraints):
+        if constraint.Type != "Coincident":
+            continue
+        try:
+            flags = ET.fromstring(constraint.Content).attrib
+            if flags.get("IsActive") != "1" or flags.get("IsDriving") != "1":
+                continue
+        except Exception:
+            return {}
+        if (constraint.FirstPos in (1, 2, 3)
+                and constraint.SecondPos in (1, 2, 3)):
+            a = (constraint.First, constraint.FirstPos)
+            b = (constraint.Second, constraint.SecondPos)
+            parent.setdefault(a, a)
+            parent.setdefault(b, b)
+            parent[find(a)] = find(b)
+    return {node: find(node) for node in parent}
+
+
+def _repair_axis_endpoint_symmetry(sketch, sources, axis, old_geometries, old_constraints, components):
+    # Only newly created source-to-copy symmetric constraints on this native line.
+    axis_components = {components[node] for node in ((axis, 1), (axis, 2)) if node in components}
+    repairs = []
+    for index, constraint in enumerate(sketch.Constraints):
+        if (index >= old_constraints and constraint.Type == "Symmetric"
+                and constraint.First in sources and constraint.First >= 0
+                and constraint.FirstPos in (1, 2)
+                and old_geometries <= constraint.Second < sketch.GeometryCount
+                and constraint.SecondPos in (1, 2)
+                and constraint.Third == axis and constraint.ThirdPos == 0):
+            source = (constraint.First, constraint.FirstPos)
+            if source in components and components[source] in axis_components:
+                repairs.append((index, source, (constraint.Second, constraint.SecondPos)))
+    if repairs:
+        import Sketcher
+        for index, _, _ in reversed(repairs):
+            sketch.delConstraint(index)
+        for _, source, copy in repairs:
+            if sketch.addConstraint(Sketcher.Constraint("Coincident", *source, *copy)) < 0:
+                raise ValueError("Native endpoint Coincident constraint could not be added")
+
+
 def apply(sketch, edit):
     from sketch_operations import OperationError, flag, integer
     allowed = {"op", "object", "indices", "reference", "delete_original", "create_symmetry_constraints"}
@@ -115,7 +165,12 @@ def apply(sketch, edit):
                 if constraint.Type == "InternalAlignment" and constraint.Second == index and constraint.First not in indices:
                     indices.append(constraint.First)
     if constrained:
+        repair = ref >= 0 and point == 0 and ref not in indices
+        components = _coincident_components(sketch) if repair else None
+        old_geometries, old_constraints = sketch.GeometryCount, sketch.ConstraintCount
         _constrained_copy(sketch, indices, ref, point)
+        if repair:
+            _repair_axis_endpoint_symmetry(sketch, set(indices), ref, old_geometries, old_constraints, components)
     else:
         sketch.addSymmetric(indices, ref, point)
     if delete:

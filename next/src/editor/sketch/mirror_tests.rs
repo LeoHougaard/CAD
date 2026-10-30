@@ -414,3 +414,85 @@ fn mirror_editor_carbon_copy_keeps_native_identity_and_live_expressions() {
         5.
     );
 }
+
+#[test]
+#[ignore = "direct mirror falls back to native manual task for absent or ambiguous axis"]
+fn receiver_source_mirror_ambiguous_selection_retains_manual_workflow() {
+    let mut n = setup("mirror-direct-ambiguous", false);
+    n.editor.viewport.sketch_selection = vec![SketchElement { index: 0, point: 0 }];
+    n.editor.bind_mirror_selection();
+    let before = n.editor.state.clone();
+    n.click("⇄");
+    assert!(
+        n.editor.sketch_ui.task.is_some(),
+        "no selected construction line uses the existing manual task"
+    );
+    n.click("Cancel");
+    assert_eq!(n.editor.state, before);
+    n.transaction(json!([{ "op":"geometry", "object":"Sketch", "kind":"line", "start":[0,0,0], "end":[0,10,0], "construction":true }]));
+    let before = n.editor.state.clone();
+    n.editor.viewport.sketch_selection = vec![
+        SketchElement { index: 0, point: 0 },
+        SketchElement { index: 1, point: 0 },
+        SketchElement { index: 2, point: 0 },
+    ];
+    n.editor.bind_mirror_selection();
+    n.click("⇄");
+    assert!(
+        n.editor.sketch_ui.task.is_some(),
+        "two construction lines use the existing manual task"
+    );
+    n.click("Cancel");
+    assert_eq!(n.editor.state, before);
+    n.events.push(json!({"control":"no axis and multiple axes keep manual native task; no native edit", "full_tutorial_credit":0}));
+    n.record();
+}
+
+#[test]
+#[ignore = "direct mirror rejects a changed owner and ignores a busy native worker"]
+fn receiver_source_mirror_stale_selection_and_busy() {
+    let mut n = setup("mirror-direct-owner", false);
+    n.transaction(json!([{ "op":"geometry", "object":"Sketch", "kind":"line", "start":[0,0,0], "end":[0,10,0], "construction":true }]));
+    let before = n.editor.state.clone();
+    // Fault injection is limited to this guard control. The source replay
+    // binds selection from the actual canvas box.
+    for selection in [
+        vec![
+            SketchElement { index: 0, point: 0 },
+            SketchElement { index: 1, point: 0 },
+        ],
+        vec![SketchElement { index: 0, point: 0 }],
+        vec![
+            SketchElement { index: 0, point: 0 },
+            SketchElement { index: 1, point: 0 },
+            SketchElement { index: 2, point: 0 },
+        ],
+    ] {
+        n.editor.viewport.sketch_selection = selection;
+        n.editor.bind_mirror_selection();
+        n.editor.state["revision"] = json!(999999);
+        n.editor.error = None;
+        n.click("\u{21c4}");
+        assert!(!n.editor.busy && n.editor.sketch_ui.task.is_none());
+        assert!(
+            n.editor
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains("Selection changed"))
+        );
+        n.editor.state = before.clone();
+    }
+    n.editor.viewport.sketch_selection = vec![
+        SketchElement { index: 0, point: 0 },
+        SketchElement { index: 1, point: 0 },
+    ];
+    n.editor.bind_mirror_selection();
+    n.editor.send("inspect", json!({}));
+    assert!(n.editor.busy);
+    n.click("\u{21c4}");
+    assert!(n.editor.busy && n.editor.sketch_ui.task.is_none());
+    n.receive("inspect", true);
+    assert_eq!(n.editor.state, before);
+    n.events.push(json!({"control":"fault-injected changed owner and genuine busy frame sent no Mirror request","full_tutorial_credit":0}));
+    n.record();
+}

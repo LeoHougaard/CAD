@@ -215,7 +215,18 @@ impl Editor {
         self.quantity_request(false, fields, false);
     }
 
-    pub(super) fn sketch_task_toolbar(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn sketch_task_toolbar(&mut self, ui: &mut egui::Ui, was_busy: bool) {
+        let direct_ready = !was_busy
+            && !ui.ctx().wants_keyboard_input()
+            && !egui::Popup::is_any_open(ui.ctx())
+            && !super::workflow_guide::active(ui.ctx());
+        if ui
+            .add_enabled(direct_ready, egui::Button::new("\u{21c4}"))
+            .on_hover_text("Mirror")
+            .clicked()
+        {
+            self.direct_mirror();
+        }
         ui.menu_button("Edit tools", |ui| {
             if ui
                 .selectable_label(self.sketch_ui.split, "Split curve")
@@ -250,6 +261,57 @@ impl Editor {
                 }
             }
         });
+    }
+    fn direct_mirror(&mut self) {
+        if self.busy
+            || self.sketch_ui.session.is_none()
+            || self.sketch_ui.drag.is_some()
+            || self.sketch_ui.dimension.is_some()
+            || self.sketch_ui.task.is_some()
+            || self.draft.is_some()
+        {
+            return;
+        }
+        let Some(snapshot) = self.sketch_snapshot() else {
+            return;
+        };
+        let selection = self.viewport.sketch_selection.clone();
+        if !selection.is_empty() && !self.mirror_selection_owned() {
+            self.error = Some("Selection changed; select the native curves again".into());
+            return;
+        }
+        let mut axis = None;
+        let mut sources = Vec::new();
+        let mut valid = self.sketch_ui.tool == Tool::Select;
+        for selected in &selection {
+            let geo = curve(&snapshot, selected.index);
+            if selected.index < 0
+                || selected.point != 0
+                || geo.is_none_or(|g| g["editable"] != true)
+            {
+                valid = false;
+                break;
+            }
+            let geo = geo.unwrap();
+            if geo["construction"] == true {
+                if geo["kind"] != "line" || axis.replace(*selected).is_some() {
+                    valid = false;
+                    break;
+                }
+            } else {
+                sources.push(*selected);
+            }
+        }
+        let Some(axis) = axis.filter(|_| valid && !sources.is_empty()) else {
+            self.begin_sketch_task("mirror", None);
+            return;
+        };
+        let parameters =
+            json!({"reference":axis,"delete_original":false,"create_symmetry_constraints":true});
+        match sketch_operation_commands::build(&snapshot, "mirror", &sources, &parameters) {
+            Ok(edits) => self.transaction("Mirror sketch geometry", edits),
+            Err(error) => self.error = Some(error),
+        }
     }
     pub(super) fn begin_sketch_task(&mut self, kind: &str, selection: Option<Vec<SketchElement>>) {
         if self.busy

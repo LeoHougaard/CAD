@@ -13,6 +13,7 @@ pub(super) struct SketchUi {
     snaps: Vec<Option<SketchElement>>,
     pub(super) construction: bool,
     pub(super) dimension: Option<DimensionEdit>,
+    mirror_selection_owner: Option<Value>,
     pub(super) dimension_tool: Option<DimensionTool>,
     pub(super) selected_constraint: Option<usize>,
     pub(super) constraint_name: String,
@@ -46,6 +47,7 @@ impl Default for SketchUi {
             snaps: vec![],
             construction: false,
             dimension: None,
+            mirror_selection_owner: None,
             dimension_tool: None,
             selected_constraint: None,
             constraint_name: String::new(),
@@ -169,6 +171,41 @@ fn external_indices(snapshot: &Value, selection: &[SketchElement], deleting: boo
 }
 
 impl Editor {
+    fn mirror_selection_binding(&self) -> Option<Value> {
+        let snapshot = self.sketch_snapshot()?;
+        let doc = self.state["document"].as_str()?;
+        let revision = self.state["revision"].as_u64()?;
+        let session = self.sketch_ui.session.as_deref()?;
+        let selection = &self.viewport.sketch_selection;
+        if selection.is_empty() {
+            return None;
+        }
+        let geometry = snapshot["sketch"]["geometry"].as_array()?;
+        let ids: Option<Vec<Value>> = selection
+            .iter()
+            .map(|e| {
+                if e.index < 0 || e.point != 0 {
+                    return None;
+                }
+                let g = geometry
+                    .iter()
+                    .find(|g| g["index"].as_i64() == Some(e.index as i64))?;
+                let id = g.get("persistent_id")?;
+                (!id.is_null()).then(|| id.clone())
+            })
+            .collect();
+        Some(json!({"document":doc,"revision":revision,"session":session,
+            "sketch":snapshot["name"],"selection":selection,"geometry_ids":ids?}))
+    }
+    pub(super) fn bind_mirror_selection(&mut self) {
+        self.sketch_ui.mirror_selection_owner = self.mirror_selection_binding();
+    }
+    pub(super) fn mirror_selection_owned(&self) -> bool {
+        self.sketch_ui
+            .mirror_selection_owner
+            .as_ref()
+            .is_some_and(|owner| self.mirror_selection_binding().as_ref() == Some(owner))
+    }
     pub(super) fn sketch_name_focused(&self, ctx: &egui::Context) -> bool {
         ctx.memory(|memory| memory.has_focus(egui::Id::new("native_sketch_name")))
     }
@@ -477,7 +514,7 @@ impl Editor {
         self.sketch_ui.trim = false;
         self.sketch_ui.clear_points();
     }
-    pub(super) fn sketch_toolbar(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn sketch_toolbar(&mut self, ui: &mut egui::Ui, was_busy: bool) {
         let ready = self.sketch_ui.session.is_some()
             && self.sketch_ui.drag.is_none()
             && self.sketch_ui.dimension.is_none()
@@ -598,7 +635,7 @@ impl Editor {
             {
                 self.toggle_construction();
             }
-            self.sketch_task_toolbar(ui);
+            self.sketch_task_toolbar(ui, was_busy);
             self.constraint_toolbar(ui);
             if ui.button("Finish").clicked() {
                 self.finish_sketch(true);

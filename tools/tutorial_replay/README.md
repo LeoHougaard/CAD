@@ -80,6 +80,12 @@ Keep full tutorial completion separate from extracted events and partial route p
 
 Run focused tests with `python -B -m unittest discover -s tools/tutorial_replay/tests -v`.
 
+## Guarded Pixel step adapter
+
+`adapters/pixel.py` translates one reviewed input to the existing phone-native desktop API. It does no device I/O. Call `preflight` on a fragment before starting, then resolve and guard each action against a newly inspected screenshot, the sole device lease and the exact owned process/window. The caller must also check the native replies and checkpoint expectations. Preflight does not replace those checks.
+
+This adapter supports unmodified clicks and pointer moves, ordinary key chords, keypad keys and case-sensitive `F1` through `F24`. A visible uppercase S label maps to lowercase X11 `s`, while an explicit Shift modifier stays explicit. It refuses held modifiers on pointer input, raw key holds, paths/drags, scroll and text instead of dropping or substituting them. Unsupported later actions block the fragment before its first input.
+
 ## Selected visible-input videos
 
 Silent frame inspection confirmed mouse-button/keyboard overlays and a blank geometry start in these additional Too Tall Toby Onshape videos:
@@ -94,4 +100,6 @@ These are format-qualified candidates, not complete extracted traces or tutorial
 
 The first Receiver proof covers M07–M16: Front click, S, Sketch click, N, S, Line click, origin/left/upper clicks, keypad6, keypad2 and keypadEnter. The extractor found all12 onsets in693 frames over23.1seconds. Six source pointer proposals needed manual correction or insertion. The target's rough upper point is explicitly adapted to avoid the floating panel; the same click/order and native62mm driving value remain.
 
-Actual headless Editor replay passed those12 actions, exact native62.0 geometry/constraint checkpoints and persistent IDs1/2. A separate adapter replay passed Ctrl hold/release, a three-sample pointer move, a three-sample drag and scroll. Sixteen compiler/mapping tests pass. The offline review editor passed eight interaction checks at desktop and mobile widths. These bounded checks do not establish physical Pixel execution or a complete tutorial pass.
+Actual headless Editor replay passed those12 actions, exact native62.0 geometry/constraint checkpoints and persistent IDs1/2. A separate headless adapter replay passed Ctrl hold/release, a three-sample pointer move, a three-sample drag and scroll. Twenty-two focused tests cover compilation, mapping and Pixel translation. The offline review editor passed eight interaction checks at desktop and mobile widths.
+
+The same 12 source inputs were then executed through the Pixel's native agent in one isolated current Editor, with fresh screenshot and process/hash guards before input. The recorded native state has two lines, five constraints, IDs 1/2 and a 62.0 mm vertical driving dimension. Finish and Save were additional persistence controls, followed by normal owned Close. The rough first horizontal length is 36.22234725952149 mm; the source pointer mapping was an origin translation, not metric calibration. This does not verify the source's full pointer path or later camera gesture. The observer reconstructed all 13 main request/reply pairs and 155 callback pairs without pending IDs or drops; graceful EOF/child exit remains uncertified. Complete tutorial credit remains zero.
