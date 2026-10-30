@@ -11,6 +11,7 @@ mod measurements;
 mod profile_references;
 mod properties;
 mod recovery;
+mod rename;
 mod shortcut_menu;
 mod sketch;
 mod sketch_creation;
@@ -1368,7 +1369,8 @@ impl eframe::App for Editor {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let was_busy = self.busy;
         let shortcut_menu_was_open = shortcut_menu::is_open(ctx);
-        let shortcut_blocked = self.busy
+        let rename_was_open = rename::is_open(ctx);
+        let shortcut_blocked = rename_was_open || self.busy
             || egui::Popup::is_any_open(ctx)
             || self.unavailable()
             || self.units_ui.active()
@@ -1391,7 +1393,7 @@ impl eframe::App for Editor {
             self.property_ui.axis_profile = None;
             self.viewport.set_sketch(self.sketch_snapshot());
         }
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::F1)) {
+        if !rename_was_open && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::F1)) {
             workflow_guide::open(ctx);
         }
         let guide_was_open = workflow_guide::active(ctx);
@@ -1430,6 +1432,8 @@ impl eframe::App for Editor {
                 ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Escape));
             } else if self.measurement_escape() {
                 ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Escape));
+            } else if rename::cancel(ctx) {
+                ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Escape));
             } else if self.cancel_sketch_name(ctx) {
                 ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Escape));
             } else if self.constraint_name_focused(ctx) {
@@ -1459,7 +1463,8 @@ impl eframe::App for Editor {
                 self.sketch_escape();
             }
         }
-        self.shortcut_menu(ctx, was_busy, shortcut_blocked);
+        self.rename_shortcut(ctx, was_busy, shortcut_blocked);
+        self.shortcut_menu(ctx, was_busy, shortcut_blocked || rename::is_open(ctx));
         if !was_busy
             && !self.busy
             && !self.units_ui.active()
@@ -1514,6 +1519,8 @@ impl eframe::App for Editor {
                     !self.units_ui.active()
                         && !guide_was_open
                         && !workflow_guide::active(ctx)
+                        && !rename_was_open
+                        && !rename::is_open(ctx)
                         && !shortcut_menu_was_open
                         && !shortcut_menu::is_open(ctx),
                     |ui| {
@@ -1551,6 +1558,7 @@ impl eframe::App for Editor {
             self.measurement_ui(ctx, shortcut_blocked || egui::Popup::is_any_open(ctx));
             self.file_action_dialog(ctx);
         }
+        self.rename_dialog(ctx, was_busy);
         workflow_guide::show(ctx);
         let guide_is_open = workflow_guide::active(ctx);
         if guide_was_open || guide_is_open {
@@ -1585,6 +1593,8 @@ impl eframe::App for Editor {
         // Text editors consume their own Undo first. Button focus must not
         // disable application shortcuts, and modals must block document writes.
         if !self.busy
+            && !rename_was_open
+            && !rename::is_open(ctx)
             && !guide_was_open
             && !workflow_guide::active(ctx)
             && (!self.unavailable() || self.source_recovery())

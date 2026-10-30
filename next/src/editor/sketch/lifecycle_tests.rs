@@ -1387,3 +1387,6 @@ mod video_replay;
 
 #[path = "shortcut_dimension_tests.rs"]
 mod shortcut_dimension_tests;
+
+#[path = "completed_rename_tests.rs"]
+mod completed_rename_tests;

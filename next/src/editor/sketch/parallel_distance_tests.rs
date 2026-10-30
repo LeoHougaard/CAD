@@ -285,3 +285,150 @@ fn mirrored_whole_edges_use_existing_symmetry_without_redundant_parallel() {
     assert_eq!(last["value"], 80.0);
     note(&n, "mirrored-width");
 }
+
+#[test]
+#[ignore = "requires CAD_LIFECYCLE_RUNTIME and CAD_LIFECYCLE_OUTPUT"]
+fn mirror_shared_axis_endpoint_keeps_linear_dimension_without_parallel() {
+    let mut n = Native::new("parallel-mirror-shared-endpoint");
+    n.send("new", json!({"name":"ParallelMirrorSharedEndpoint"}), true);
+    n.transaction(json!([
+        {"op":"add_object","type":"Sketcher::SketchObject","name":"Sketch"},
+        {"op":"geometry","object":"Sketch","kind":"line","start":[-6,10,0],"end":[0,10,0]},
+        {"op":"geometry","object":"Sketch","kind":"line","start":[6,10,0],"end":[0,10,0]},
+        {"op":"geometry","object":"Sketch","kind":"line","start":[0,0,0],"end":[0,20,0],"construction":true},
+        {"op":"geometry","object":"Sketch","kind":"line","start":[0,0,0],"end":[6,0,0]},
+        {"op":"constraint","object":"Sketch","kind":"Horizontal","args":[0]},
+        {"op":"constraint","object":"Sketch","kind":"Horizontal","args":[3]},
+        {"op":"constraint","object":"Sketch","kind":"Vertical","args":[2]},
+        {"op":"constraint","object":"Sketch","kind":"Symmetric","args":[0,1,1,1,2]},
+        {"op":"constraint","object":"Sketch","kind":"Coincident","args":[0,2,1,2]},
+        {"op":"constraint","object":"Sketch","kind":"PointOnObject","args":[0,2,2]}
+    ]));
+    n.editor.request_sketch("Sketch");
+    n.receive("sketch_begin", true);
+    settle(&mut n);
+    n.editor.viewport.fit_sketch();
+    settle(&mut n);
+    let before = sk(&n);
+    let ids = before["native_xml"]["persistent_ids"].clone();
+    let dof = before["native_xml"]["dof"].as_i64().unwrap();
+    start_pair(&mut n, [3, 1]);
+    value(&mut n, "182", true);
+    let after = sk(&n);
+    assert_eq!(after["native_xml"]["persistent_ids"], ids);
+    assert_eq!(after["native_xml"]["dof"].as_i64().unwrap(), dof - 1);
+    assert_eq!(
+        after["constraint_count"].as_i64().unwrap(),
+        before["constraint_count"].as_i64().unwrap() + 1
+    );
+    let last = after["constraints"].as_array().unwrap().last().unwrap();
+    assert_eq!(last["type"], "Distance");
+    assert_eq!(last["value"], 182.0);
+    note(&n, "shared-endpoint");
+}
+
+#[test]
+#[ignore = "requires CAD_LIFECYCLE_RUNTIME and CAD_LIFECYCLE_OUTPUT"]
+fn placed_angle_retains_native_rays_display_and_edit() {
+    let mut n = Native::new("angle-placed-native-rays");
+    n.send("new", json!({"name":"AnglePlacedNativeRays"}), true);
+    n.transaction(json!([
+        {"op":"add_object","type":"Sketcher::SketchObject","name":"Sketch"},
+        {"op":"geometry","object":"Sketch","kind":"line","start":[0,0,0],"end":[-40,0,0]},
+        {"op":"geometry","object":"Sketch","kind":"line","start":[-40,10,0],"end":[-30,27.32050807568877,0]}
+    ]));
+    n.editor.request_sketch("Sketch");
+    n.receive("sketch_begin", true);
+    settle(&mut n);
+    n.editor.viewport.fit_sketch();
+    settle(&mut n);
+    key(&mut n, Key::D);
+    pick_line(&mut n, 0);
+    pick_line(&mut n, 1);
+    let pos = n.editor.viewport.sketch_screen_point([-20., 5., 0.]);
+    assert!(n.editor.viewport.sketch_hit(pos).is_none());
+    for pressed in [true, false] {
+        n.frame(vec![
+            egui::Event::PointerMoved(pos),
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+    }
+    assert_eq!(n.editor.sketch_ui.dimension.as_ref().unwrap().kind, "Angle");
+    n.receive("quantities", true);
+    settle(&mut n);
+    value(&mut n, "45", true);
+    let sketch = sk(&n);
+    assert_eq!(sketch["native_xml"]["persistent_ids"], json!([1, 2]));
+    let c = &sketch["constraints"][0];
+    assert_eq!(
+        (
+            c["type"].as_str(),
+            c["first"].as_i64(),
+            c["first_pos"].as_i64(),
+            c["second"].as_i64(),
+            c["second_pos"].as_i64()
+        ),
+        (Some("Angle"), Some(0), Some(2), Some(1), Some(1))
+    );
+    assert_eq!(c["quantity"]["value"], 45.0);
+    let label = c["quantity"]["display"].as_str().unwrap().to_owned();
+    key(&mut n, Key::Escape);
+    settle(&mut n);
+    let frame = n.frame(vec![]);
+    let targets: Vec<_> = frame
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::epaint::Shape::Text(text) if text.galley.text() == label => {
+                let center = text.galley.rect.translate(text.pos.to_vec2()).center();
+                (shape.clip_rect.contains(center)
+                    && n.editor.viewport.dimension_hit(center) == Some(0))
+                .then_some(center)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        targets.len(),
+        1,
+        "native 45-degree annotation is visible and pickable"
+    );
+    for _ in 0..2 {
+        for pressed in [true, false] {
+            n.frame(vec![
+                egui::Event::PointerMoved(targets[0]),
+                egui::Event::PointerButton {
+                    pos: targets[0],
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]);
+        }
+    }
+    assert_eq!(
+        n.editor.sketch_ui.dimension.as_ref().unwrap().index,
+        Some(0)
+    );
+    settle(&mut n);
+    value(&mut n, "50", true);
+    let edited = sk(&n);
+    let c = &edited["constraints"][0];
+    assert_eq!(
+        (
+            c["first"].as_i64(),
+            c["first_pos"].as_i64(),
+            c["second"].as_i64(),
+            c["second_pos"].as_i64()
+        ),
+        (Some(0), Some(2), Some(1), Some(1))
+    );
+    assert_eq!(c["quantity"]["value"], 50.0);
+    assert_eq!(edited["native_xml"]["persistent_ids"], json!([1, 2]));
+    note(&n, "placed-angle-edited");
+}

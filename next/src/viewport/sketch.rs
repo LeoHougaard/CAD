@@ -789,7 +789,8 @@ impl Viewport {
                             } else {
                                 a
                             };
-                            (vertex, u.y.atan2(u.x))
+                            let ray = if first_point == 2 { -u } else { u };
+                            (vertex, ray.y.atan2(ray.x))
                         } else {
                             (inverse * (a - self.sketch_origin), 0.)
                         }
@@ -944,6 +945,28 @@ mod tests {
         viewport.align_sketch();
         viewport
     }
+    #[test]
+    fn native_angle_annotation_starts_on_persisted_endpoint_ray() {
+        for (first_pos, right) in [(1, false), (2, true)] {
+            let mut viewport = viewport();
+            let sketch = json!({"name":"Sketch","sketch":{"geometry":[
+                {"index":0,"kind":"line","start":[0,0,0],"end":[-10,0,0]},
+                {"index":1,"kind":"line","start":[0,0,0],"end":[10,10,0]}],
+                "constraints":[{"index":0,"type":"Angle","first":0,"first_pos":first_pos,"second":1,"second_pos":1,"value":std::f64::consts::FRAC_PI_4,"quantity":{"display":"45 deg"}}]}});
+            viewport.set_sketch(Some(sketch));
+            viewport.align_sketch();
+            let ctx = egui::Context::default();
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default()
+                    .show(ctx, |ui| viewport.draw_dimensions(ui.painter()));
+            });
+            let hit = &viewport.dimension_hits[0];
+            let center = viewport.sketch_screen_point([0., 0., 0.]);
+            assert_eq!(hit.segments[0][0].x > center.x, right);
+            assert_eq!(viewport.dimension_hit(hit.label.center()), Some(0));
+        }
+    }
+
     #[test]
     fn native_axes_are_whole_curve_fallback_picks_without_endpoint_handles() {
         let mut viewport = viewport();

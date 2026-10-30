@@ -1,7 +1,10 @@
 //! Native sketch constraint authoring and its compact editor controls.
 
 use super::Editor;
-use crate::sketch_commands::{SketchElement, Tool, angle_via_point_edits, constrain, datum_edits};
+use crate::sketch_commands::{
+    SketchElement, Tool, angle_rays_at, angle_via_point_edits, constrain, constrain_angle_rays,
+    datum_edits,
+};
 use eframe::egui::{self, Color32};
 use serde_json::{Value, json};
 
@@ -9,6 +12,7 @@ pub(super) struct DimensionEdit {
     pub(super) index: Option<usize>,
     pub(super) kind: String,
     pub(super) selection: Vec<SketchElement>,
+    angle_rays: Option<[SketchElement; 2]>,
     pub(super) value: String,
     pub(super) expression: bool,
     focus: bool,
@@ -373,6 +377,16 @@ impl Editor {
             self.begin_dimension(kind, selection);
             return;
         }
+        if selection.len() == 2
+            && selection.iter().all(|element| element.point == 0)
+            && let Some(snapshot) = self.sketch_snapshot()
+            && !crate::sketch_commands::parallel_lines(&snapshot, &selection)
+            && let Some(cursor) = self.viewport.sketch_point(position)
+            && let Ok(rays) = angle_rays_at(&snapshot, &selection, cursor)
+        {
+            self.begin_dimension_with_rays("Angle", selection, Some(rays));
+            return;
+        }
         self.smart_dimension();
     }
 
@@ -387,13 +401,27 @@ impl Editor {
     }
 
     fn begin_dimension(&mut self, kind: &str, selection: Vec<SketchElement>) {
+        self.begin_dimension_with_rays(kind, selection, None);
+    }
+
+    fn begin_dimension_with_rays(
+        &mut self,
+        kind: &str,
+        selection: Vec<SketchElement>,
+        angle_rays: Option<[SketchElement; 2]>,
+    ) {
         if !self.constraint_editable() {
             return;
         }
         let Some(snapshot) = self.sketch_snapshot() else {
             return;
         };
-        match constrain(&snapshot, kind, &selection, None) {
+        let candidate = if let Some(rays) = angle_rays {
+            constrain_angle_rays(&snapshot, rays, None)
+        } else {
+            constrain(&snapshot, kind, &selection, None)
+        };
+        match candidate {
             Ok(edits) => {
                 if edits[0]["kind"] == "AngleViaPoint" {
                     let previous_constraint = self
@@ -416,6 +444,7 @@ impl Editor {
                         index: None,
                         kind: "Angle".into(),
                         selection,
+                        angle_rays: None,
                         value: String::new(),
                         expression: false,
                         focus: true,
@@ -457,6 +486,7 @@ impl Editor {
                     index: None,
                     kind: kind.into(),
                     selection,
+                    angle_rays,
                     value: String::new(),
                     expression: false,
                     focus: true,
@@ -500,6 +530,7 @@ impl Editor {
             index: Some(index),
             kind: kind.into(),
             selection: vec![],
+            angle_rays: None,
             value,
             expression: formula.is_some(),
             focus: true,
@@ -959,6 +990,8 @@ impl Editor {
                         },
                         edit.expression,
                     )
+                } else if let Some(rays) = edit.angle_rays {
+                    constrain_angle_rays(snapshot, rays, Some(value))
                 } else {
                     constrain(snapshot, &edit.kind, &edit.selection, Some(value))
                 };
@@ -997,6 +1030,7 @@ mod tests {
             index: None,
             kind: "Angle".into(),
             selection: vec![],
+            angle_rays: None,
             value: String::new(),
             expression: false,
             focus: true,

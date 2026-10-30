@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "as_of_utc": "2026-10-30T04:48:33.854241+00:00",
+  "as_of_utc": "2026-10-30T06:23:19.834453+00:00",
   "complete_tutorials": {
     "verified": 0,
     "requested_minimum": 100,
@@ -10,17 +10,53 @@
     "url": "https://www.youtube.com/watch?v=pcU5-8PkhGg",
     "source_video_sha256": "ac3ff467b58b225c256901c584f04578377c310fd1c6d28db6ac2e9ac2ff7c62",
     "local_headless_inputs": {
-      "verified_prefix_actions": 43,
+      "verified_prefix_actions": 75,
       "mapped_segment_actions": 75,
-      "latest_batch_played_actions": 61,
-      "latest_batch_passed": false,
-      "latest_model_source_manifest": "50a9c1126ff205f4a7ff602f5e5a92504677e771092f9a1cce110726f91118d3",
+      "latest_batch_played_actions": 100,
+      "latest_batch_passed": true,
+      "latest_model_source_manifest": "44e11993af09a4a2283d9ad35cedaa73906237a22bf7396e337a23e8ff6ce8f9",
       "accepted_source_dimensions_mm": [
         80,
-        100
+        100,
+        182,
+        55,
+        200
       ],
-      "earliest_semantic_failure": "182 mm height was committed as a 182 degree Angle; later angle failure is downstream",
-      "semantic_gate": "native constraint kind, target references and value, not transaction acceptance alone"
+      "earliest_semantic_failure": null,
+      "semantic_gate": "native constraint kind, target references and value, not transaction acceptance alone",
+      "accepted_source_angles_degrees": [
+        45,
+        30
+      ],
+      "bounded_finish_and_shift_n_rename_passed": true,
+      "completed_sketch": {
+        "label": "MASTER LAYOUT",
+        "curves": 15,
+        "constraints": 37,
+        "degrees_of_freedom": 0,
+        "persistent_ids": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15
+        ]
+      },
+      "next_unverified_modelling_step": "New profile with master-vertex references, then Revolve on the separate master construction line",
+      "evidence": {
+        "prefix_result_sha256": "b144051f2421597e27d96cf6f7aeb7e23200f1e1b9f7c2dabb5067880cac830c",
+        "finish_rename_result_sha256": "a4c1bae9ffc768c1b83feb71cca7dc7e5a607964bc0aea8b2c1b325868e9af89"
+      }
     },
     "physical_pixel_inputs": {
       "passed": 12,
@@ -41,7 +77,10 @@
     },
     "mapping_limits": [
       "Rough source-plane coordinates are manually calibrated; they are not exact source native geometry",
-      "Raw pointer path and physical releases are not recovered from overlay fading"
+      "Raw pointer path and physical releases are not recovered from overlay fading",
+      "The 200 mm annotation placement was moved 18 target pixels right from an approximate source label point to avoid the native Y-axis hit",
+      "Two Shift releases in Rename are inferred from the overlay sequence and are explicitly marked unverified",
+      "The master is fully constrained, but the complete Receiver solid and tutorial remain unverified"
     ],
     "unresolved_intervals": [
       {
@@ -55,7 +94,8 @@
       "first_view_rmse_pixels": 0.7512,
       "second_view_rmse_pixels": 0.21375,
       "native_state_unchanged_during_navigation": true,
-      "physical_source_navigation_inputs_verified": false
+      "physical_source_navigation_inputs_verified": false,
+      "third_view_rmse_pixels": 0.13357490216641174
     }
   },
   "tool_checks": {
@@ -69,9 +109,19 @@
   },
   "cohort_policy": "These bounded cohorts are distinct, not end-to-end tutorial success rates; no asymptotic completion forecast is inferred.",
   "dimension_checkpoint": {
-    "active_tests_passed": 255,
+    "active_tests_passed": 259,
     "focused_native_cases_passed": 5,
     "independent_cached_cases_passed": 2,
-    "full_receiver_tutorial_pass": false
+    "full_receiver_tutorial_pass": false,
+    "source9_remaining_native_selectors_passed": 7
+  },
+  "completed_sketch_rename": {
+    "active_tests_passed": 259,
+    "new_native_cases_passed": 5,
+    "existing_name_cases_passed": 5,
+    "existing_shortcut_scope_passed": 1,
+    "blank_validation_is_modal_local": true,
+    "unrelated_native_error_preserved": true,
+    "physical_desktop_acceptance": false
   }
 }

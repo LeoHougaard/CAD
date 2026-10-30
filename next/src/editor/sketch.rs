@@ -1,7 +1,7 @@
 //! Interaction state only: every accepted geometry change is solved natively.
 mod inline_line;
 use super::{Editor, constraints::DimensionEdit};
-use crate::sketch_commands::{SketchElement, Tool, draw_snapped_edits};
+use crate::sketch_commands::{SketchElement, Tool, draw_snapped_edits, native_point_on_axis};
 use eframe::egui::{self, Color32, Key};
 use inline_line::InlineLine;
 use serde_json::{Value, json};
@@ -743,6 +743,27 @@ impl Editor {
                 && let Some(exact) = self.viewport.geometry_point(hit)
             {
                 point = exact;
+            } else if hit.point == 0
+                && matches!(self.sketch_ui.tool, Tool::Line | Tool::Polyline)
+                && let Some(first) = self.sketch_ui.points.first()
+            {
+                let screen = self.viewport.sketch_screen_point(*first);
+                let first_on_axis =
+                    self.sketch_ui
+                        .snaps
+                        .first()
+                        .copied()
+                        .flatten()
+                        .is_some_and(|start| {
+                            self.sketch_snapshot().is_some_and(|snapshot| {
+                                native_point_on_axis(&snapshot, start, hit.index)
+                            })
+                        });
+                if !first_on_axis && hit.index == -2 && (screen.y - pos.y).abs() < 6. {
+                    point[1] = first[1];
+                } else if !first_on_axis && hit.index == -1 && (screen.x - pos.x).abs() < 6. {
+                    point[0] = first[0];
+                }
             }
             return Some((point, Some(hit)));
         }
@@ -804,10 +825,7 @@ impl Editor {
                 return;
             }
         };
-        if infer
-            && matches!(tool, Tool::Line | Tool::Polyline)
-            && self.sketch_ui.snaps.iter().filter(|s| s.is_some()).count() < 2
-        {
+        if infer && matches!(tool, Tool::Line | Tool::Polyline) {
             let p = &self.sketch_ui.points;
             let kind = if (p[0][0] - p[1][0]).abs() < 1e-9 {
                 Some("Vertical")
@@ -816,7 +834,22 @@ impl Editor {
             } else {
                 None
             };
-            if let Some(kind) = kind {
+            let axis_snap = match self.sketch_ui.snaps.as_slice() {
+                [Some(first), Some(axis)]
+                    if first.index >= 0 && matches!(first.point, 1 | 2) && axis.point == 0 =>
+                {
+                    matches!(
+                        (kind, axis.index),
+                        (Some("Horizontal"), -2) | (Some("Vertical"), -1)
+                    ) && self.sketch_snapshot().is_some_and(|snapshot| {
+                        !native_point_on_axis(&snapshot, *first, axis.index)
+                    })
+                }
+                _ => false,
+            };
+            if let Some(kind) = kind
+                && (self.sketch_ui.snaps.iter().filter(|s| s.is_some()).count() < 2 || axis_snap)
+            {
                 edits.push(json!({"op":"constraint","object":object,"kind":kind,"args":[count]}));
             }
         }
