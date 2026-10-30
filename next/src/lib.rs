@@ -467,6 +467,56 @@ fn validate_response(response: &Value, id: &Value) -> Result<(), Error> {
 mod tests {
     use super::*;
 
+    // Raw decimal spellings captured from native worker responses.  The
+    // fixture writes them directly so its own JSON parser cannot change them.
+    #[test]
+    #[ignore = "transport fixture run only as a child process"]
+    fn native_float_wire_fixture() {
+        for line in io::stdin().lock().lines() {
+            let request: Value = serde_json::from_str(&line.unwrap()).unwrap();
+            println!(
+                "{{\"version\":1,\"id\":{},\"ok\":true,\"result\":{{\"values\":[-99.99999999999999,99.99999999999999,4.04121180963557e-14,-0.0]}}}}",
+                request["id"]
+            );
+            io::stdout().flush().unwrap();
+        }
+    }
+
+    #[test]
+    fn native_wire_float_bits_and_signed_zero_survive_json_roundtrip() {
+        let mut config = WorkerConfig::new(std::env::current_exe().unwrap(), "--quiet");
+        config.args = [
+            "--ignored",
+            "--exact",
+            "tests::native_float_wire_fixture",
+            "--nocapture",
+        ]
+        .map(OsString::from)
+        .to_vec();
+        config.response_timeout = Duration::from_secs(2);
+        let mut worker = WorkerSession::spawn(&config).unwrap();
+        let response = worker.call("native_values", Map::new()).unwrap();
+        let expected = [
+            0xc058_ffff_ffff_ffff_u64,
+            0x4058_ffff_ffff_ffff_u64,
+            0x3d26_c000_0000_0000_u64,
+            0x8000_0000_0000_0000_u64,
+        ];
+        let bits = |v: &Value| {
+            v["values"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|n| n.as_f64().unwrap().to_bits())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(bits(&response), expected);
+        let serialized = serde_json::to_vec(&response).unwrap();
+        let reparsed: Value = serde_json::from_slice(&serialized).unwrap();
+        assert_eq!(bits(&reparsed), expected);
+        worker.shutdown();
+    }
+
     fn session() -> WorkerSession {
         let mut config = WorkerConfig::new(std::env::current_exe().unwrap(), "--quiet");
         config.args = [

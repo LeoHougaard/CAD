@@ -50,7 +50,7 @@ OPERATIONS += ["assembly_sources"]
 EDIT_OPERATIONS = ["add_object", "set", "expression", "geometry", "constraint",
                    "datum", "move_geometry", "construction", "delete_geometry", "delete_constraint", "refraction", "via_point",
                    "constraint_state", "trim_geometry", "remove_object", "binder_support",
-                   "expose_internal", "external_geometry", "auto_external_coincident", "external_state", "delete_external", "import_exchange", "detach_sketch"]
+                   "expose_internal", "external_geometry", "auto_external_coincident", "pierce", "external_state", "delete_external", "import_exchange", "detach_sketch"]
 EDIT_OPERATIONS += sorted(AssemblyAuthoring.OPERATIONS)
 EDIT_OPERATIONS += list(SketchOperations.OPERATIONS)
 EDIT_OPERATIONS += list(FeatureHistory.OPERATIONS)
@@ -947,6 +947,86 @@ def auto_external_coincident(doc, obj, edit):
             "persistent_reference": entry["persistent_reference"]}
 
 
+def pierce_readiness(doc, obj, edit):
+    """Validate live Pierce ownership and identities without editing the sketch."""
+    if not obj.isDerivedFrom("Sketcher::SketchObject"):
+        fail("invalid_request", "Pierce requires a native sketch")
+    if set(edit) != {"op", "object", "index", "point", "geometry_id", "source", "subelement", "mapped_name", "document", "session"}:
+        fail("invalid_request", "Unexpected Pierce fields")
+    session = _native_sketch_sessions.get(doc.Name)
+    metadata = sketch_metadata(doc)
+    if (not session or session["object"] != obj.Name or not metadata
+            or edit["document"] != doc.Name or edit["session"] != metadata.get("token")):
+        fail("sketch_owner", "Pierce requires the current owned sketch session")
+    source = object_in(doc, edit["source"])
+    subelement, mapped = edit["subelement"], edit["mapped_name"]
+    index, point, geometry_id = edit["index"], edit["point"], edit["geometry_id"]
+    if (source == obj or source.Document != doc or not source.isDerivedFrom("Part::Feature")
+            or not source.isValid() or not effective_visibility(source)
+            or owner_body(source) != owner_body(obj) or obj in source.OutListRecursive):
+        fail("invalid_geometry", "Source must be a visible independent native feature in the same Body")
+    if (not isinstance(subelement, str) or re.fullmatch(r"Edge[1-9][0-9]*", subelement) is None
+            or not isinstance(mapped, str) or not mapped or source.Shape.isNull()
+            or source.Shape.getElementMappedName(subelement) != mapped):
+        fail("stale_reference", "Native source edge identity changed or is unavailable")
+    try:
+        edge = source.Shape.getElement(subelement)
+        if edge.isNull() or edge.ShapeType != "Edge":
+            fail("invalid_geometry", "Source reference is not a native edge")
+    except (ValueError, IndexError, AttributeError):
+        fail("stale_reference", "Native source edge is unavailable")
+    if (type(index) is not int or not 0 <= index < obj.GeometryCount or point != 1
+            or type(point) is not int or type(geometry_id) is not int
+            or obj.getGeometryId(index) != geometry_id or not isinstance(obj.Geometry[index], Part.Point)):
+        fail("stale_reference", "Selected native sketch point changed or is unavailable")
+    return source, subelement, mapped, index, point
+
+
+def pierce(doc, obj, edit):
+    """Add a native edge/plane intersection and constrain one owned point to it."""
+    source, subelement, mapped, index, point = pierce_readiness(doc, obj, edit)
+    before = SketchGeometry.externals(obj)
+    if any(not e.get("persistent_reference") or e.get("source") is None
+           or e.get("missing") is not False or e.get("frozen") is not False
+           or type(e.get("defining")) is not bool or type(e.get("projection")) is not bool
+           or type(e.get("intersection")) is not bool for e in before):
+        fail("invalid_geometry", "Existing native external metadata is unresolved")
+    link = {"link": source.Name, "subelements": [subelement]}
+    candidates = [e for e in before if e["source"] == link]
+    if len(candidates) > 1:
+        fail("invalid_geometry", "Source edge has ambiguous intersection ownership")
+    if not candidates:
+        try:
+            SketchGeometry.external_edit(obj, {"op":"external_geometry", "source":source.Name,
+                                                "subelement":subelement, "intersection":True, "defining":False})
+        except (SketchGeometry.GeometryError, ValueError, TypeError, KeyError) as error:
+            fail("invalid_geometry", str(error))
+        if obj.solve() != 0:
+            fail("invalid_model", "Native sketch solver rejected the edge intersection")
+        candidates = [e for e in SketchGeometry.externals(obj) if e["source"] == link]
+    if len(candidates) != 1:
+        fail("invalid_geometry", "Native intersection ownership is unavailable or ambiguous")
+    entry = candidates[0]
+    allowed = {source.Name + "." + mapped, source.Name + ".;" + mapped.lstrip(";")}
+    handles = entry["geometry"].get("handles", [])
+    signed = entry["geometry_index"]
+    if (entry["persistent_reference"] not in allowed or entry["missing"] is not False
+            or entry["frozen"] is not False or entry["projection"] is not False
+            or entry["intersection"] is not True or entry["defining"] is not False
+            or entry["geometry"]["kind"] != "point" or len(handles) != 1
+            or type(signed) is not int or signed > -3 or handles[0].get("index") != signed
+            or handles[0].get("point") != 1 or handles[0].get("draggable") is not False):
+        fail("invalid_geometry", "Native intersection is not one live non-defining point")
+    if any(c.Type == "Coincident" and ((c.First == index and c.FirstPos == point and c.Second == signed and c.SecondPos == 1)
+           or (c.Second == index and c.SecondPos == point and c.First == signed and c.FirstPos == 1)) for c in obj.Constraints):
+        fail("invalid_geometry", "Point already references this edge intersection")
+    constraint = obj.addConstraint(Sketcher.Constraint("Coincident", index, point, signed, 1))
+    if constraint < 0:
+        fail("invalid_model", "Native Coincident constraint failed")
+    return {"object":obj.Name, "index":constraint, "external":signed,
+            "persistent_reference":entry["persistent_reference"]}
+
+
 def apply_edit(doc, edit):
     result = apply_native_edit(doc, edit)
     check_suppression()
@@ -1107,6 +1187,10 @@ def apply_native_edit(doc, edit):
             fail("invalid_request", "Expression must be a string or null")
         obj.setExpression(prop, expression)
         HoleTask.resolve_controller(obj, prop)
+    elif op == "pierce":
+        if not obj.isDerivedFrom("Sketcher::SketchObject"):
+            fail("invalid_request", "Pierce requires a native sketch")
+        return pierce(doc, obj, edit)
     elif op in {"external_geometry", "external_state", "delete_external"}:
         if not obj.isDerivedFrom("Sketcher::SketchObject"):
             fail("invalid_request", "External geometry requires a native SketchObject")
@@ -1387,6 +1471,12 @@ def sketch_transaction(doc, request):
     session = _native_sketch_sessions[doc.Name]
     edits = request["edits"]
     sketch_edits(doc, edits)
+    if any(edit.get("op") == "pierce" for edit in edits) and (len(edits) != 1 or edits[0].get("op") != "pierce"):
+        fail("invalid_request", "Pierce must be one atomic sketch action")
+    if edits[0].get("op") == "pierce":
+        # Reject stale ownership before opening or restoring a native action.
+        # Apply rechecks the same live identities after admission.
+        pierce_readiness(doc, object_in(doc, edits[0]["object"]), edits[0])
     automatic = [edit for edit in edits if edit.get("op") == "auto_external_coincident"]
     if automatic:
         target = object_in(doc, session["object"])

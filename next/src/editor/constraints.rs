@@ -8,6 +8,17 @@ use crate::sketch_commands::{
 use eframe::egui::{self, Color32};
 use serde_json::{Value, json};
 
+#[cfg(test)]
+fn record_pierce_widget(ui: &egui::Ui, role: &'static str, response: &egui::Response) {
+    let pass = ui.ctx().cumulative_pass_nr();
+    ui.ctx().data_mut(|data| {
+        data.insert_temp(
+            egui::Id::new(("pierce_widget_role", role)),
+            (pass, response.id),
+        );
+    });
+}
+
 pub(super) struct DimensionEdit {
     pub(super) index: Option<usize>,
     pub(super) kind: String,
@@ -283,6 +294,89 @@ impl Editor {
                 .is_some_and(|current| same_constraint(previous, current))
         {
             self.highlight_constraint(&snapshot, index);
+        }
+    }
+
+    fn pierce_edit(&self) -> Result<Value, String> {
+        if !self.constraint_editable() || self.sketch_ui.dimension.is_some() {
+            return Err("Finish the active sketch task first".into());
+        }
+        let snapshot = self.sketch_snapshot().ok_or("Choose an active sketch")?;
+        let document = self.state["document"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .ok_or("Document is unavailable")?;
+        let revision = self.state["revision"]
+            .as_u64()
+            .ok_or("Document revision is unavailable")?;
+        let session = self
+            .sketch_ui
+            .session
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .ok_or("Sketch session is unavailable")?;
+        if self.state["sketch_edit"]["object"] != snapshot["name"]
+            || self.state["sketch_edit"]["token"] != session
+        {
+            return Err("Sketch session changed".into());
+        }
+        let edge = self
+            .viewport
+            .pierce_edge
+            .as_ref()
+            .ok_or("Select one visible native edge")?;
+        if edge.revision != Some(revision) {
+            return Err("Source edge is stale; select it again".into());
+        }
+        let mapped = edge
+            .mapped_name
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .ok_or("Source edge has no native mapped name")?;
+        let sub = edge.selection.subelement.as_str();
+        if !sub.strip_prefix("Edge").is_some_and(|s| {
+            !s.is_empty() && !s.starts_with('0') && s.bytes().all(|b| b.is_ascii_digit())
+        }) {
+            return Err("Select one native edge".into());
+        }
+        let source = super::objects(&self.state)
+            .iter()
+            .find(|o| o["name"] == edge.selection.object)
+            .ok_or("Source edge owner is unavailable")?;
+        if source["name"] == snapshot["name"]
+            || source["valid"] != true
+            || source["effective_visibility"] != true
+            || source["body"] != snapshot["body"]
+        {
+            return Err("Choose a visible independent edge in the active sketch's Body".into());
+        }
+        let [point] = self.viewport.sketch_selection.as_slice() else {
+            return Err("Select one sketch point and one native edge".into());
+        };
+        if point.index < 0 || point.point != 1 {
+            return Err("Select a standalone sketch point".into());
+        }
+        let geo = geometry(&snapshot, point.index)
+            .filter(|g| g["kind"] == "point" && g["editable"] == true)
+            .ok_or("Select a standalone native sketch point")?;
+        let persistent_id = geo["persistent_id"]
+            .as_i64()
+            .ok_or("Sketch point identity is unavailable")?;
+        Ok(
+            json!({"op":"pierce", "object":snapshot["name"], "index":point.index, "point":point.point,
+            "geometry_id":persistent_id, "source":edge.selection.object, "subelement":sub, "mapped_name":mapped,
+            "document":document, "session":session}),
+        )
+    }
+
+    fn apply_pierce(&mut self) {
+        match self.pierce_edit() {
+            Ok(edit) => {
+                self.prepare_constraint_tool();
+                self.sketch_ui.selected_constraint = None;
+                self.transaction("Pierce", vec![edit]);
+            }
+            Err(error) => self.error = Some(error),
         }
     }
 
@@ -598,6 +692,16 @@ impl Editor {
             self.constraint_editable() && self.sketch_ui.dimension.is_none(),
             |ui| {
                 ui.menu_button("Constrain", |ui| {
+                    let pierce = self.pierce_edit();
+                    let response = ui.add_enabled(pierce.is_ok(), egui::Button::new("Pierce"));
+                    #[cfg(test)]
+                    record_pierce_widget(ui, "menu", &response);
+                    if response.clicked() {
+                        self.apply_pierce();
+                        ui.close();
+                    } else if let Err(error) = pierce {
+                        response.on_disabled_hover_text(error);
+                    }
                     for (label, kind) in [
                         ("Horizontal", "Horizontal"),
                         ("Vertical", "Vertical"),
@@ -625,6 +729,15 @@ impl Editor {
                         }
                     }
                 });
+                let pierce = self.pierce_edit();
+                let response = ui.add_enabled(pierce.is_ok(), egui::Button::new("Pierce"));
+                #[cfg(test)]
+                record_pierce_widget(ui, "toolbar", &response);
+                if response.clicked() {
+                    self.apply_pierce();
+                } else if let Err(error) = pierce {
+                    response.on_disabled_hover_text(error);
+                }
                 if ui
                     .selectable_label(self.sketch_ui.dimension_tool.is_some(), "Dimension (D)")
                     .on_hover_text("Select entities and click to place their dimension")

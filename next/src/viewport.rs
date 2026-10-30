@@ -38,6 +38,7 @@ struct Edge {
     object: Arc<str>,
     points: Vec<Vec3>,
     name: String,
+    mapped_name: Option<String>,
     wire_only: bool,
 }
 struct Vertex {
@@ -54,6 +55,12 @@ pub struct SceneVertex {
     pub mapped_name: Option<String>,
     pub revision: Option<u64>,
     pub point: [f64; 3],
+}
+#[derive(Clone, Debug)]
+pub struct SceneEdge {
+    pub selection: Selection,
+    pub mapped_name: Option<String>,
+    pub revision: Option<u64>,
 }
 struct SketchCurve {
     native: sketch_curves::NativeCurve,
@@ -95,6 +102,7 @@ pub struct Viewport {
     pub selected: Option<Selection>,
     pub selections: Vec<Selection>,
     pub sketch_selection: Vec<SketchElement>,
+    pub pierce_edge: Option<SceneEdge>,
     sketch_pick_positions: HashMap<SketchElement, [f64; 3]>,
     last_sketch_pick: Option<SketchElement>,
     pub sketch_select_enabled: bool,
@@ -137,6 +145,7 @@ impl Default for Viewport {
             selected: None,
             selections: vec![],
             sketch_selection: vec![],
+            pierce_edge: None,
             sketch_pick_positions: HashMap::new(),
             last_sketch_pick: None,
             sketch_select_enabled: true,
@@ -193,6 +202,7 @@ impl Viewport {
         self.cancel_other_picker();
         self.selected = None;
         self.selections.clear();
+        self.pierce_edge = None;
     }
     fn selected_element(&self, object: &str, subelement: &str) -> bool {
         self.selections
@@ -374,6 +384,7 @@ impl Viewport {
                     Some(Edge {
                         object: Arc::clone(&object),
                         name: edge["subelement"].as_str()?.to_owned(),
+                        mapped_name: edge["mapped_name"].as_str().map(str::to_owned),
                         wire_only,
                         points: points
                             .iter()
@@ -651,6 +662,35 @@ impl Viewport {
             })
             .collect()
     }
+    /// Visible scene edges under the cursor; retain every owner for ambiguity checks.
+    pub fn scene_edges_at(&self, pos: Pos2) -> Vec<SceneEdge> {
+        let triangles = self.projected();
+        let front = front_triangle(pos, &triangles);
+        self.edges
+            .iter()
+            .filter(|edge| {
+                edge.points.windows(2).any(|line| {
+                    let a = self.project(line[0]);
+                    let b = self.project(line[1]);
+                    let (distance, t) = segment_distance(pos, a.0, b.0);
+                    distance < 6.
+                        && self.edge_visible(edge, a.1 + t * (b.1 - a.1), front, &triangles)
+                })
+            })
+            .map(|edge| SceneEdge {
+                selection: Selection {
+                    object: edge.object.to_string(),
+                    subelement: edge.name.clone(),
+                },
+                mapped_name: edge.mapped_name.clone(),
+                revision: self
+                    .scene_revisions
+                    .get(edge.object.as_ref())
+                    .copied()
+                    .flatten(),
+            })
+            .collect()
+    }
     pub fn scene_vertex_identity(&self, selection: &Selection) -> Option<(String, u64)> {
         let vertex = self
             .vertices
@@ -918,16 +958,47 @@ impl Viewport {
                 if self.sketch_select_enabled && self.dimension_hit(pos).is_none() {
                     let toggle =
                         ui.input(|i| i.modifiers.ctrl || i.modifiers.shift || i.modifiers.command);
-                    let hit = self.select_sketch_at(pos, toggle);
-                    selection = hit.map(|element| Selection {
-                        object: self
-                            .sketch
-                            .as_ref()
-                            .and_then(|s| s["name"].as_str())
-                            .unwrap_or("")
-                            .to_owned(),
-                        subelement: format!("Geometry{}", element.index),
-                    });
+                    let hit = self.sketch_hit(pos);
+                    if let Some(hit) = hit {
+                        if self.pierce_edge.is_some() {
+                            let mut handles = Vec::new();
+                            for (id, world) in self.curves.iter().flat_map(|curve| &curve.handles) {
+                                if self.project(*world).0.distance(pos) <= 6.
+                                    && !handles.contains(id)
+                                {
+                                    handles.push(*id);
+                                }
+                            }
+                            if hit.point == 0 || handles.len() != 1 || handles[0] != hit {
+                                self.pierce_edge = None;
+                            }
+                        }
+                        let hit = self.select_sketch_at(pos, toggle);
+                        selection = hit.map(|element| Selection {
+                            object: self
+                                .sketch
+                                .as_ref()
+                                .and_then(|s| s["name"].as_str())
+                                .unwrap_or("")
+                                .to_owned(),
+                            subelement: format!("Geometry{}", element.index),
+                        });
+                    } else {
+                        let edges = if matches!(
+                            self.selection_mode,
+                            SelectionMode::All | SelectionMode::Edges
+                        ) {
+                            self.scene_edges_at(pos)
+                        } else {
+                            Vec::new()
+                        };
+                        self.clear_sketch_selection();
+                        if let [edge] = edges.as_slice() {
+                            self.pierce_edge = Some(edge.clone());
+                            self.selections = vec![edge.selection.clone()];
+                            selection = Some(edge.selection.clone());
+                        }
+                    }
                 }
                 self.selected = selection.clone();
             } else {

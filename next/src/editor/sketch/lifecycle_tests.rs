@@ -18,6 +18,8 @@ mod selected_line_slot_tests;
 #[path = "copy_tests.rs"]
 mod copy_tests;
 
+#[path = "pierce_tests.rs"]
+mod pierce_tests;
 #[path = "plane_point_tests.rs"]
 mod plane_point_tests;
 #[path = "select_other_tests.rs"]

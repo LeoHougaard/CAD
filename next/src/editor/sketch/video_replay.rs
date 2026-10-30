@@ -106,6 +106,314 @@ fn transform_point(placement: &Value, point: &Value) -> [f64; 3] {
     [world.x as f64, world.y as f64, world.z as f64]
 }
 
+// Select the two actual end arcs by their local x position, never by native ID.
+fn side_arc<'a>(sketch: &'a Value, side: &str) -> &'a Value {
+    let mut arcs: Vec<_> = sketch["sketch"]["geometry"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|g| g["kind"] == "arc" && g["construction"] == false)
+        .collect();
+    assert_eq!(arcs.len(), 2, "two distinct end arcs required");
+    arcs.sort_by(|a, b| {
+        a["center"][0]
+            .as_f64()
+            .unwrap()
+            .total_cmp(&b["center"][0].as_f64().unwrap())
+    });
+    assert!(
+        arcs[0]["center"][0] != arcs[1]["center"][0],
+        "arc sides ambiguous"
+    );
+    match side {
+        "left" => arcs[0],
+        "right" => arcs[1],
+        _ => panic!("unknown side"),
+    }
+}
+
+fn vec3(p: [f64; 3]) -> glam::Vec3 {
+    glam::Vec3::new(p[0] as f32, p[1] as f32, p[2] as f32)
+}
+
+// Identify the two nonconstruction parent segments ending on the active sketch
+// plane. Their intersection ordering is measured in the live sketch frame.
+fn side_parent_edge<'a>(
+    state: &'a Value,
+    active: &str,
+    label: &str,
+    side: &str,
+) -> (&'a Value, &'a Value) {
+    let owners: Vec<_> = objects(state)
+        .iter()
+        .filter(|o| {
+            o["label"] == label
+                && o["type"] == "Sketcher::SketchObject"
+                && o["effective_visibility"] == true
+        })
+        .collect();
+    assert_eq!(owners.len(), 1, "unique visible parent sketch required");
+    let owner = owners[0];
+    let placement = &object(state, active)["global_placement"];
+    let origin = vec3(transform_point(placement, &json!([0., 0., 0.])));
+    let normal = (vec3(transform_point(placement, &json!([0., 0., 1.]))) - origin).normalize();
+    let axis = (vec3(transform_point(placement, &json!([1., 0., 0.]))) - origin).normalize();
+    let mut candidates = Vec::new();
+    for g in owner["sketch"]["geometry"].as_array().unwrap() {
+        if g["kind"] != "line" || g["construction"] != false {
+            continue;
+        }
+        let a = vec3(transform_point(&owner["global_placement"], &g["start"]));
+        let b = vec3(transform_point(&owner["global_placement"], &g["end"]));
+        let da = (a - origin).dot(normal);
+        let db = (b - origin).dot(normal);
+        let endpoint = if da.abs() < 1e-3 && db.abs() > 1e-3 {
+            Some(a)
+        } else if db.abs() < 1e-3 && da.abs() > 1e-3 {
+            Some(b)
+        } else {
+            None
+        };
+        if let Some(p) = endpoint {
+            candidates.push(((p - origin).dot(axis), g));
+        }
+    }
+    assert_eq!(
+        candidates.len(),
+        2,
+        "two unique parent edges ending on sketch plane required"
+    );
+    candidates.sort_by(|a, b| a.0.total_cmp(&b.0));
+    assert!(
+        (candidates[1].0 - candidates[0].0).abs() > 1e-3,
+        "parent sides ambiguous"
+    );
+    (
+        owner,
+        match side {
+            "left" => candidates[0].1,
+            "right" => candidates[1].1,
+            _ => panic!("unknown side"),
+        },
+    )
+}
+
+fn edge_candidate_usable(
+    inside: bool,
+    sketch_hit: bool,
+    dimension_hit: bool,
+    hits: &[crate::viewport::SceneEdge],
+    expected: (&str, &str, &str, Option<u64>),
+) -> bool {
+    let (owner, edge, mapped, revision) = expected;
+    inside
+        && !sketch_hit
+        && !dimension_hit
+        && hits.len() == 1
+        && hits[0].selection.object == owner
+        && hits[0].selection.subelement == edge
+        && hits[0].mapped_name.as_deref() == Some(mapped)
+        && hits[0].revision == revision
+}
+
+#[test]
+fn edge_candidate_rejects_dimension_overlap_and_ambiguous_or_stale_edges() {
+    let good = crate::viewport::SceneEdge {
+        selection: crate::viewport::Selection {
+            object: "fixture".into(),
+            subelement: "Edge8".into(),
+        },
+        mapped_name: Some("g31;SKT".into()),
+        revision: Some(7),
+    };
+    let accept = |inside, sketch, dimension, hits: &[crate::viewport::SceneEdge]| {
+        edge_candidate_usable(
+            inside,
+            sketch,
+            dimension,
+            hits,
+            ("fixture", "Edge8", "g31;SKT", Some(7)),
+        )
+    };
+    assert!(accept(true, false, false, std::slice::from_ref(&good)));
+    assert!(!accept(true, false, true, std::slice::from_ref(&good)));
+    assert!(!accept(true, true, false, std::slice::from_ref(&good)));
+    assert!(!accept(false, false, false, std::slice::from_ref(&good)));
+    assert!(!accept(true, false, false, &[good.clone(), good.clone()]));
+    let mut stale = good.clone();
+    stale.revision = Some(6);
+    assert!(!accept(true, false, false, &[stale]));
+    let mut wrong = good;
+    wrong.mapped_name = Some("g32;SKT".into());
+    assert!(!accept(true, false, false, &[wrong]));
+}
+
+fn edge_trace(n: &Native, stage: &str, action: &Value, pos: egui::Pos2, pressed: Option<bool>) {
+    use std::io::Write as _;
+    let response = n
+        .editor
+        .viewport
+        .response
+        .as_ref()
+        .expect("current canvas response");
+    let hits: Vec<_> = n
+        .editor
+        .viewport
+        .scene_edges_at(pos)
+        .iter()
+        .map(|hit| {
+            json!({
+        "object":hit.selection.object,"subelement":hit.selection.subelement,
+        "mapped":hit.mapped_name,"revision":hit.revision})
+        })
+        .collect();
+    let selected = n.editor.viewport.pierce_edge.as_ref().map(|edge| {
+        json!({"object":edge.selection.object,
+        "subelement":edge.selection.subelement,"mapped":edge.mapped_name,"revision":edge.revision})
+    });
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(n.folder.join("parent-edge-diagnostic.jsonl"))
+        .unwrap();
+    writeln!(file,"{}",json!({"stage":stage,"action_id":action["id"],"side":action["target"]["side"],
+        "position":[pos.x,pos.y],"pressed":pressed,"revision":n.editor.state["revision"],
+        "tool":format!("{:?}",n.editor.sketch_ui.tool),"sketch_select_enabled":n.editor.viewport.sketch_select_enabled,
+        "popup_open":egui::Popup::is_any_open(&n.ctx),"dimension_hit":n.editor.viewport.dimension_hit(pos),
+        "sketch_hit":n.editor.viewport.sketch_hit(pos),"native_hits":hits,"selected_edge":selected,
+        "canvas_response":{"id":format!("{:?}",response.id),"enabled":response.enabled(),"layer":format!("{:?}",response.layer_id),
+            "rect":[response.rect.min.x,response.rect.min.y,response.rect.max.x,response.rect.max.y],
+            "clicked":response.clicked(),"hovered":response.hovered()},"error":n.editor.error})).unwrap();
+}
+
+fn scene_edge_target(
+    editor: &Editor,
+    target: &Value,
+    ctx: &egui::Context,
+    folder: &std::path::Path,
+    phase: &str,
+) -> (egui::Pos2, String, String, String) {
+    let active = editor.sketch.as_ref().expect("active sketch");
+    let (owner, geometry) = side_parent_edge(
+        &editor.state,
+        active,
+        target["object_label"].as_str().unwrap(),
+        target["side"].as_str().unwrap(),
+    );
+    let name = owner["name"].as_str().unwrap();
+    let id = geometry["persistent_id"].as_i64().unwrap();
+    let mapped = format!("g{id};SKT");
+    let names: Vec<_> = owner["sketch"]["native_xml"]["element_map"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .filter(|(k, v)| k.starts_with("Edge") && v.as_str() == Some(&mapped))
+        .collect();
+    assert_eq!(names.len(), 1, "unique mapped native parent edge");
+    let edge = names[0].0;
+    let revision = Some(
+        editor.state["revision"]
+            .as_u64()
+            .expect("current native revision"),
+    );
+    let rect = editor.viewport.response.as_ref().unwrap().rect;
+    let mut candidates = Vec::new();
+    for fraction in [0.5, 0.35, 0.65, 0.2, 0.8] {
+        let local = json!(
+            (0..3)
+                .map(|i| geometry["start"][i].as_f64().unwrap() * (1. - fraction)
+                    + geometry["end"][i].as_f64().unwrap() * fraction)
+                .collect::<Vec<_>>()
+        );
+        let pos = editor
+            .viewport
+            .test_world_screen_point(transform_point(&owner["global_placement"], &local));
+        let hits = editor.viewport.scene_edges_at(pos);
+        let sketch = editor.viewport.sketch_hit(pos);
+        let dimension = editor.viewport.dimension_hit(pos);
+        let usable = edge_candidate_usable(
+            rect.contains(pos),
+            sketch.is_some(),
+            dimension.is_some(),
+            &hits,
+            (name, edge, &mapped, revision),
+        );
+        let native_hits: Vec<_> = hits.iter().map(|hit| json!({"object":hit.selection.object,"subelement":hit.selection.subelement,"mapped":hit.mapped_name,"revision":hit.revision})).collect();
+        candidates.push((pos, usable, json!({"fraction":fraction,"position":[pos.x,pos.y],"inside_canvas":rect.contains(pos),
+            "sketch_hit":sketch,"dimension_hit":dimension,"native_hits":native_hits,"usable":usable})));
+    }
+    use std::io::Write as _;
+    let response = editor.viewport.response.as_ref().unwrap();
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(folder.join("parent-edge-diagnostic.jsonl"))
+        .unwrap();
+    writeln!(file,"{}",json!({"stage":phase,"side":target["side"],"expected_owner":name,"expected_edge":edge,"expected_mapped":mapped,
+        "revision":revision,"tool":format!("{:?}",editor.sketch_ui.tool),"sketch_select_enabled":editor.viewport.sketch_select_enabled,
+        "popup_open":egui::Popup::is_any_open(ctx),"canvas_response":{"id":format!("{:?}",response.id),"enabled":response.enabled(),
+        "layer":format!("{:?}",response.layer_id),"rect":[rect.min.x,rect.min.y,rect.max.x,rect.max.y]},
+        "candidates":candidates.iter().map(|x|x.2.clone()).collect::<Vec<_>>() })).unwrap();
+    assert_eq!(
+        editor.sketch_ui.tool,
+        crate::sketch_commands::Tool::Select,
+        "source Escape did not yield Select mode"
+    );
+    assert!(
+        editor.viewport.sketch_select_enabled,
+        "sketch selection is not enabled"
+    );
+    assert!(
+        !egui::Popup::is_any_open(ctx),
+        "popup remains after source Escape"
+    );
+    let (pos, _, _) = candidates
+        .into_iter()
+        .find(|x| x.1)
+        .expect("no unambiguous, unobstructed visible current parent edge interior");
+    (pos, name.to_owned(), edge.clone(), mapped)
+}
+
+#[test]
+fn side_bindings_use_current_geometry_and_reject_ambiguity() {
+    let placement = json!({"position":[0.,0.,10.],"rotation":[0.,0.,0.,1.]});
+    let mut state = json!({"objects":[
+        {"name":"parent","label":"fixture","type":"Sketcher::SketchObject","effective_visibility":true,
+         "global_placement":{"position":[0.,0.,0.],"rotation":[0.,0.,0.,1.]},
+         "sketch":{"geometry":[
+            {"kind":"line","construction":false,"persistent_id":41,"start":[4.,0.,0.],"end":[4.,0.,10.]},
+            {"kind":"line","construction":false,"persistent_id":17,"start":[-3.,0.,10.],"end":[-3.,0.,1.]}
+         ]}},
+        {"name":"active","global_placement":placement,
+         "sketch":{"geometry":[
+            {"kind":"arc","construction":false,"persistent_id":83,"center":[2.,0.,0.]},
+            {"kind":"arc","construction":false,"persistent_id":29,"center":[-2.,0.,0.]}
+         ]}}
+    ]});
+    assert_eq!(
+        side_arc(object(&state, "active"), "left")["persistent_id"],
+        29
+    );
+    assert_eq!(
+        side_arc(object(&state, "active"), "right")["persistent_id"],
+        83
+    );
+    assert_eq!(
+        side_parent_edge(&state, "active", "fixture", "left").1["persistent_id"],
+        17
+    );
+    assert_eq!(
+        side_parent_edge(&state, "active", "fixture", "right").1["persistent_id"],
+        41
+    );
+    state["objects"][0]["sketch"]["geometry"].as_array_mut().unwrap().push(json!({"kind":"line","construction":false,"persistent_id":99,"start":[8.,0.,0.],"end":[8.,0.,10.]}));
+    assert!(
+        std::panic::catch_unwind(|| side_parent_edge(&state, "active", "fixture", "left")).is_err()
+    );
+    state["objects"][1]["sketch"]["geometry"][0]["center"][0] = json!(-2.);
+    assert!(std::panic::catch_unwind(|| side_arc(object(&state, "active"), "left")).is_err());
+}
+
 fn bound_annotation<'a>(
     sketch: &'a Value,
     target: &Value,
@@ -373,6 +681,55 @@ fn native_origin_plane(editor: &Editor, target: &Value) -> String {
 // Probe the exact input owner inside the current pass, after Editor::update.
 // The pointer move lets egui compute its interaction hit from the preceding
 // settled pass; that hit must agree with the freshly registered widget.
+fn current_pierce_role(ctx: &egui::Context, role: &str) -> Option<egui::Id> {
+    if !matches!(role, "menu" | "toolbar") {
+        return None;
+    }
+    let id = egui::Id::new(("pierce_widget_role", role));
+    let (pass, widget) = ctx.data(|data| data.get_temp::<(u64, egui::Id)>(id))?;
+    (pass == ctx.cumulative_pass_nr()).then_some(widget)
+}
+
+#[test]
+fn pierce_role_requires_the_current_pass_and_requested_widget() {
+    let ctx = egui::Context::default();
+    let toolbar = egui::Id::new("fixture-toolbar");
+    let menu = egui::Id::new("fixture-menu");
+    let _ = ctx.run(egui::RawInput::default(), |ctx| {
+        let pass = ctx.cumulative_pass_nr();
+        ctx.data_mut(|data| {
+            data.insert_temp(
+                egui::Id::new(("pierce_widget_role", "toolbar")),
+                (pass, toolbar),
+            );
+            data.insert_temp(egui::Id::new(("pierce_widget_role", "menu")), (pass, menu));
+        });
+        assert_eq!(current_pierce_role(ctx, "toolbar"), Some(toolbar));
+        assert_eq!(current_pierce_role(ctx, "menu"), Some(menu));
+        assert_eq!(current_pierce_role(ctx, "other"), None);
+    });
+    let _ = ctx.run(egui::RawInput::default(), |ctx| {
+        assert_eq!(
+            current_pierce_role(ctx, "menu"),
+            None,
+            "stale popup must not bind"
+        );
+        let pass = ctx.cumulative_pass_nr();
+        ctx.data_mut(|data| {
+            data.insert_temp(
+                egui::Id::new(("pierce_widget_role", "toolbar")),
+                (pass, toolbar),
+            )
+        });
+        assert_eq!(current_pierce_role(ctx, "toolbar"), Some(toolbar));
+        assert_eq!(
+            current_pierce_role(ctx, "menu"),
+            None,
+            "toolbar must not bind as popup"
+        );
+    });
+}
+
 fn current_target(
     n: &mut Native,
     pos: egui::Pos2,
@@ -428,10 +785,22 @@ fn current_target(
                 "native revision changed while resolving target"
             );
             assert!(!n.editor.busy, "native operation owns current input");
+            if target["kind"] == "pierce-role" {
+                let role = target["role"].as_str().expect("Pierce widget role");
+                assert_eq!(
+                    current_pierce_role(ctx, role),
+                    Some(current.id),
+                    "current pointer owner is not the requested Pierce widget"
+                );
+            }
             let canvas_target = matches!(
                 target["kind"].as_str(),
                 Some(
                     "scene-vertex"
+                        | "canvas-center"
+                        | "scene-parent-edge"
+                        | "slot-arc"
+                        | "sketch-point"
                         | "datum-plane"
                         | "native-origin-plane"
                         | "constraint-annotation"
@@ -482,6 +851,58 @@ fn current_target(
                     "annotation changed in current pass"
                 );
                 current_annotation = Some((constraint, label, text));
+            }
+            if target["kind"] == "scene-parent-edge" {
+                let (now, _, _, _) = scene_edge_target(
+                    &n.editor,
+                    target,
+                    ctx,
+                    &n.folder,
+                    "current-pass-before-click",
+                );
+                use std::io::Write as _;
+                let mut log = fs::OpenOptions::new().create(true).append(true)
+                    .open(n.folder.join("parent-edge-diagnostic.jsonl")).unwrap();
+                writeln!(log, "{}", json!({"stage":"current-input-owner","side":target["side"],
+                    "revision":expected_revision,"position":[pos.x,pos.y],"widget_id":format!("{:?}",current.id),
+                    "widget_enabled":current.enabled,"response_enabled":response.enabled(),
+                    "widget_layer":format!("{:?}",current.layer_id),"point_layer":format!("{layer:?}"),
+                    "interact_rect":[current.interact_rect.min.x,current.interact_rect.min.y,current.interact_rect.max.x,current.interact_rect.max.y],
+                    "dimension_hit":n.editor.viewport.dimension_hit(pos),"sketch_hit":n.editor.viewport.sketch_hit(pos)})).unwrap();
+                assert!(
+                    now.distance(pos) < 0.25,
+                    "current parent edge target changed"
+                );
+            }
+            if target["kind"] == "slot-arc" || target["kind"] == "sketch-point" {
+                let active = n.editor.sketch.as_ref().expect("active sketch");
+                let sketch = object(&n.editor.state, active);
+                assert!(
+                    n.editor.viewport.sketch_matches(&Some(sketch.clone())),
+                    "stale current sketch"
+                );
+                let geometry = if target["kind"] == "slot-arc" {
+                    side_arc(sketch, target["side"].as_str().unwrap())
+                } else {
+                    let matches: Vec<_> = sketch["sketch"]["geometry"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .filter(|g| {
+                            g["persistent_id"] == target["persistent_id"] && g["kind"] == "point"
+                        })
+                        .collect();
+                    assert_eq!(matches.len(), 1, "unique current accepted point");
+                    matches[0]
+                };
+                let expected_point = if target["kind"] == "slot-arc" { 0 } else { 1 };
+                let hit = n
+                    .editor
+                    .viewport
+                    .sketch_hit(pos)
+                    .expect("current sketch target hit");
+                assert_eq!(i64::from(hit.index), geometry["index"].as_i64().unwrap());
+                assert_eq!(hit.point, expected_point);
             }
             if target["kind"] == "scene-vertex" {
                 let owners: Vec<_> = objects(&n.editor.state)
@@ -589,7 +1010,7 @@ fn current_target(
             captured = Some((current.id, current.interact_rect, layer));
         },
     );
-    let (_, rect, _) = captured.expect("current pass did not capture an input owner");
+    let (owner_id, rect, layer) = captured.expect("current pass did not capture an input owner");
     if let Some((constraint, label, canonical)) = current_annotation {
         let matches: Vec<_> = output
             .shapes
@@ -633,6 +1054,37 @@ fn current_target(
             "current input owner no longer contains the intended label"
         );
     }
+    if target["kind"] == "pierce-role" {
+        let texts: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) if text.galley.text() == "Pierce" => {
+                    let text_rect = text.galley.rect.translate(text.pos.to_vec2());
+                    (text_rect.contains(pos) && shape.clip_rect.contains(pos) && rect.contains(pos))
+                        .then_some((text_rect, shape.clip_rect))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            texts.len(),
+            1,
+            "one exact clipped Pierce label inside current role owner"
+        );
+        use std::io::Write as _;
+        let (text_rect, clip) = texts[0];
+        let mut log = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(n.folder.join("pierce-widget-roles.jsonl"))
+            .unwrap();
+        writeln!(log, "{}", json!({"role":target["role"],"owner_id":format!("{owner_id:?}"),
+            "layer":format!("{layer:?}"),"revision":expected_revision,"enabled":true,
+            "position":[pos.x,pos.y],"owner_rect":[rect.min.x,rect.min.y,rect.max.x,rect.max.y],
+            "text":"Pierce","text_rect":[text_rect.min.x,text_rect.min.y,text_rect.max.x,text_rect.max.y],
+            "clip_rect":[clip.min.x,clip.min.y,clip.max.x,clip.max.y]})).unwrap();
+    }
 }
 
 fn point(
@@ -644,6 +1096,105 @@ fn point(
     settle(n, mods);
     let xy = |v: &Value| egui::pos2(v[0].as_f64().unwrap() as f32, v[1].as_f64().unwrap() as f32);
     let pos = match target["kind"].as_str().unwrap() {
+        "canvas-center" => n
+            .editor
+            .viewport
+            .response
+            .as_ref()
+            .expect("current canvas")
+            .rect
+            .center(),
+        "pierce-role" => {
+            let role = target["role"].as_str().expect("Pierce widget role");
+            n.time += 0.1;
+            let mut app_frame = eframe::Frame::_new_kittest();
+            let mut captured = None;
+            let output = n.ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1280., 850.),
+                    )),
+                    time: Some(n.time),
+                    modifiers: mods,
+                    ..Default::default()
+                },
+                |ctx| {
+                    eframe::App::update(&mut n.editor, ctx, &mut app_frame);
+                    let id = current_pierce_role(ctx, role)
+                        .expect("requested Pierce widget missing in current pass");
+                    let widget = ctx
+                        .viewport(|v| v.this_pass.widgets.get(id).copied())
+                        .expect("role widget absent");
+                    let response = ctx
+                        .read_response(id)
+                        .expect("role response absent in current pass");
+                    assert!(
+                        widget.enabled && response.enabled() && widget.sense.senses_click(),
+                        "Pierce role disabled"
+                    );
+                    assert_eq!(widget.layer_id, response.layer_id);
+                    captured = Some(response.rect);
+                },
+            );
+            let rect = captured.expect("role not captured");
+            let texts: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::epaint::Shape::Text(text) if text.galley.text() == "Pierce" => {
+                        let r = text.galley.rect.translate(text.pos.to_vec2());
+                        (rect.contains(r.center()) && shape.clip_rect.contains(r.center()))
+                            .then_some(r.center())
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(texts.len(), 1, "one clipped label in requested Pierce role");
+            texts[0]
+        }
+        "scene-parent-edge" => {
+            scene_edge_target(
+                &n.editor,
+                target,
+                &n.ctx,
+                &n.folder,
+                "initial-candidate-scan",
+            )
+            .0
+        }
+        "slot-arc" | "sketch-point" => {
+            let active = n.editor.sketch.as_ref().expect("active sketch");
+            let sketch = object(&n.editor.state, active);
+            assert!(
+                n.editor.viewport.sketch_matches(&Some(sketch.clone())),
+                "stale sketch geometry"
+            );
+            let geometry = if target["kind"] == "slot-arc" {
+                side_arc(sketch, target["side"].as_str().unwrap())
+            } else {
+                let matches: Vec<_> = sketch["sketch"]["geometry"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|g| {
+                        g["persistent_id"] == target["persistent_id"] && g["kind"] == "point"
+                    })
+                    .collect();
+                assert_eq!(matches.len(), 1, "unique accepted point identity");
+                matches[0]
+            };
+            let p = if target["kind"] == "slot-arc" {
+                &geometry["mid"]
+            } else {
+                &geometry["position"]
+            };
+            n.editor.viewport.sketch_screen_point([
+                p[0].as_f64().unwrap(),
+                p[1].as_f64().unwrap(),
+                p[2].as_f64().unwrap(),
+            ])
+        }
         "pixel" => xy(&target["xy"]),
         "sketch" => {
             let p = &target["xy"];
@@ -1162,6 +1713,11 @@ fn point(
         target["kind"].as_str(),
         Some(
             "scene-vertex"
+                | "canvas-center"
+                | "pierce-role"
+                | "scene-parent-edge"
+                | "slot-arc"
+                | "sketch-point"
                 | "datum-plane"
                 | "native-origin-plane"
                 | "constraint-annotation"
@@ -1331,7 +1887,11 @@ fn tutorial_replay_from_json() {
         }
         let action = &action;
         let kind = action["kind"].as_str().unwrap();
-        let before_geometry = if action["capture_line_alias"].is_string() {
+        let navigation_before =
+            (action["provenance"] == "reconstructed_navigation").then(|| n.editor.state.clone());
+        let before_geometry = if action["capture_line_alias"].is_string()
+            || action["capture_point_alias"].is_string()
+        {
             let active = n.editor.sketch.as_ref().expect("active sketch before line");
             Some(
                 object(&n.editor.state, active)["sketch"]["geometry"]
@@ -1399,6 +1959,9 @@ fn tutorial_replay_from_json() {
                     other => panic!("unsupported button {other}"),
                 };
                 let count = action["click_count"].as_u64().unwrap_or(1);
+                if action["target"]["kind"] == "scene-parent-edge" {
+                    edge_trace(&n, "before-pointer-pair", action, pos, None);
+                }
                 click_sequence(count, |pressed| {
                     frame(
                         &mut n,
@@ -1413,6 +1976,9 @@ fn tutorial_replay_from_json() {
                         ],
                         mods,
                     );
+                    if action["target"]["kind"] == "scene-parent-edge" {
+                        edge_trace(&n, "pointer-frame", action, pos, Some(pressed));
+                    }
                     if count > 1 {
                         use std::io::Write as _;
                         let mut log = fs::OpenOptions::new()
@@ -1429,6 +1995,47 @@ fn tutorial_replay_from_json() {
                         .unwrap();
                     }
                 });
+                if action["target"]["kind"] == "scene-parent-edge" {
+                    edge_trace(&n, "after-pointer-pair", action, pos, None);
+                    let (_, owner, edge, mapped) = scene_edge_target(
+                        &n.editor,
+                        &action["target"],
+                        &n.ctx,
+                        &n.folder,
+                        "after-pointer-candidate-scan",
+                    );
+                    let selected = n
+                        .editor
+                        .viewport
+                        .pierce_edge
+                        .as_ref()
+                        .expect("ordinary click must select parent edge");
+                    assert_eq!(selected.selection.object, owner);
+                    assert_eq!(selected.selection.subelement, edge);
+                    assert_eq!(selected.mapped_name.as_deref(), Some(mapped.as_str()));
+                    assert_eq!(selected.revision, n.editor.state["revision"].as_u64());
+                }
+                if action["target"]["kind"] == "sketch-point" {
+                    let active = n.editor.sketch.as_ref().unwrap();
+                    let sketch = object(&n.editor.state, active);
+                    let point = sketch["sketch"]["geometry"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|g| g["persistent_id"] == action["target"]["persistent_id"])
+                        .unwrap();
+                    assert_eq!(
+                        n.editor.viewport.sketch_selection,
+                        vec![SketchElement {
+                            index: point["index"].as_i64().unwrap() as i32,
+                            point: 1
+                        }]
+                    );
+                    assert!(
+                        n.editor.viewport.pierce_edge.is_some(),
+                        "parent edge selection must remain"
+                    );
+                }
                 if action["target"]["kind"] == "scene-vertex" {
                     let label = action["target"]["object_label"].as_str().unwrap();
                     let owner = objects(&n.editor.state)
@@ -1666,6 +2273,44 @@ fn tutorial_replay_from_json() {
                     .is_none()
             );
         }
+        if let Some(alias) = action["capture_point_alias"].as_str() {
+            let previous = before_geometry.as_ref().unwrap();
+            let active = n.editor.sketch.as_ref().expect("active sketch after point");
+            let sketch = object(&n.editor.state, active);
+            let added: Vec<_> = sketch["sketch"]["geometry"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|g| {
+                    g["persistent_id"]
+                        .as_i64()
+                        .is_some_and(|id| !previous.contains(&id))
+                })
+                .collect();
+            assert_eq!(added.len(), 1, "one accepted point required");
+            assert_eq!(added[0]["kind"], "point");
+            let arc = side_arc(sketch, action["target"]["side"].as_str().unwrap());
+            assert!(
+                sketch["sketch"]["constraints"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|c| c["type"] == "PointOnObject"
+                        && c["first"] == added[0]["index"]
+                        && c["first_pos"] == 1
+                        && c["second"] == arc["index"]
+                        && c["active"] == true),
+                "accepted point must bind its intended arc"
+            );
+            assert!(
+                geometry_aliases
+                    .insert(
+                        alias.to_owned(),
+                        added[0]["persistent_id"].as_i64().unwrap()
+                    )
+                    .is_none()
+            );
+        }
         if let Some(alias) = action["capture_diameter_alias"].as_str() {
             let active = n.editor.sketch.as_ref().expect("active slot sketch");
             let sketch = object(&n.editor.state, active);
@@ -1694,9 +2339,46 @@ fn tutorial_replay_from_json() {
             );
         }
         settle(&mut n, mods);
+        if action["id"] == "Q04" {
+            let center = n.editor.viewport.response.as_ref().unwrap().rect.center();
+            edge_trace(&n, "after-source-escape", action, center, None);
+            assert_eq!(
+                n.editor.sketch_ui.tool,
+                crate::sketch_commands::Tool::Select,
+                "source Escape did not end Point"
+            );
+            assert!(
+                n.editor.viewport.sketch_select_enabled,
+                "source Escape left sketch selection disabled"
+            );
+            assert!(
+                !egui::Popup::is_any_open(&n.ctx),
+                "source Escape left popup open"
+            );
+        }
+        if let Some(before) = navigation_before {
+            assert_eq!(
+                n.editor.state, before,
+                "reconstructed navigation must preserve complete native state"
+            );
+        }
         expected(&n, action);
         if action["id"] == "M09" {
             let frame = frame(&mut n, vec![], mods);
+            let canvas = n.editor.viewport.response.as_ref().unwrap().rect;
+            let toolbar_text: Vec<_> = frame.shapes.iter().filter_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) => {
+                    let rect = text.galley.rect.translate(text.pos.to_vec2());
+                    (rect.center().y < canvas.top()).then(|| json!({"text":text.galley.text(),
+                        "rect":[rect.min.x,rect.min.y,rect.max.x,rect.max.y],
+                        "clip":[shape.clip_rect.min.x,shape.clip_rect.min.y,shape.clip_rect.max.x,shape.clip_rect.max.y]}))
+                }, _ => None,
+            }).collect();
+            fs::write(n.folder.join("toolbar-layout.json"), serde_json::to_vec_pretty(&json!({
+                "revision":n.editor.state["revision"], "canvas_rect":[canvas.min.x,canvas.min.y,canvas.max.x,canvas.max.y],
+                "floating_sketch_rect":n.ctx.memory(|m| m.area_rect(egui::Id::new("native_sketch_controls"))).map(|r| [r.min.x,r.min.y,r.max.x,r.max.y]),
+                "text_shapes_above_canvas":toolbar_text
+            })).unwrap()).unwrap();
             for label in ["Select", "Finish"] {
                 assert!(
                     frame.shapes.iter().any(|shape| {

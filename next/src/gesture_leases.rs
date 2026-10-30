@@ -296,6 +296,7 @@ impl Leases {
                             | "expose_internal"
                             | "external_geometry"
                             | "auto_external_coincident"
+                            | "pierce"
                             | "external_state"
                             | "delete_external"
                             | "fillet_geometry"
