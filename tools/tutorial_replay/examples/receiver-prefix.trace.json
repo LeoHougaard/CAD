@@ -1,0 +1,179 @@
+{
+  "version": 1,
+  "source": {
+    "url": "https://www.youtube.com/watch?v=pcU5-8PkhGg",
+    "sha256": "ac3ff467b58b225c256901c584f04578377c310fd1c6d28db6ac2e9ac2ff7c62",
+    "width": 1920,
+    "height": 1080,
+    "sample_fps": 30,
+    "start_state": "blank native document; cloud document creation outside replay scope"
+  },
+  "events": [
+    {
+      "id": "M07",
+      "t": 464.067,
+      "kind": "click",
+      "status": "approved",
+      "xy": [
+        1097,
+        305
+      ],
+      "button": "left",
+      "binding": "front",
+      "evidence": "Receiver event-054.jpg"
+    },
+    {
+      "id": "M08",
+      "t": 466.8,
+      "kind": "key",
+      "status": "approved",
+      "key": "S",
+      "evidence": "Receiver event-055.jpg"
+    },
+    {
+      "id": "M09",
+      "t": 468.433,
+      "kind": "click",
+      "status": "approved",
+      "xy": [
+        1125,
+        288
+      ],
+      "button": "left",
+      "binding": "sketch-button",
+      "wait_for": [
+        "transaction",
+        "sketch_begin"
+      ],
+      "evidence": "Receiver event-056.jpg"
+    },
+    {
+      "id": "M10",
+      "t": 469.933,
+      "kind": "key",
+      "status": "approved",
+      "key": "N",
+      "evidence": "Receiver event-057..058.jpg"
+    },
+    {
+      "id": "M11",
+      "t": 471.533,
+      "kind": "key",
+      "status": "approved",
+      "key": "S",
+      "evidence": "Receiver event-058.jpg"
+    },
+    {
+      "id": "M12",
+      "t": 472.567,
+      "kind": "click",
+      "status": "approved",
+      "xy": [
+        1206,
+        407
+      ],
+      "button": "left",
+      "binding": "line-button",
+      "evidence": "Receiver event-059.jpg"
+    },
+    {
+      "id": "M13",
+      "t": 473.767,
+      "kind": "click",
+      "status": "approved",
+      "xy": [
+        1254,
+        556
+      ],
+      "button": "left",
+      "binding": "origin",
+      "evidence": "Receiver event-060.jpg"
+    },
+    {
+      "id": "M14",
+      "t": 477.733,
+      "kind": "click",
+      "status": "approved",
+      "xy": [
+        1116,
+        556
+      ],
+      "button": "left",
+      "binding": "rough-left",
+      "wait_for": [
+        "transaction"
+      ],
+      "evidence": "Receiver event-061.jpg"
+    },
+    {
+      "id": "M15",
+      "t": 483.8,
+      "kind": "click",
+      "status": "approved",
+      "xy": [
+        1116,
+        431
+      ],
+      "button": "left",
+      "binding": "rough-upper",
+      "wait_for": [
+        "transaction"
+      ],
+      "expect": {
+        "/sketch/geometry_count": 2
+      },
+      "evidence": "Receiver event-062.jpg"
+    },
+    {
+      "id": "M16-6",
+      "t": 485.333,
+      "kind": "key",
+      "status": "approved",
+      "key": "Num6",
+      "text": "6",
+      "evidence": "Receiver event-063.jpg"
+    },
+    {
+      "id": "M16-2",
+      "t": 485.533,
+      "kind": "key",
+      "status": "approved",
+      "key": "Num2",
+      "text": "2",
+      "evidence": "Receiver event-064.jpg"
+    },
+    {
+      "id": "M16-enter",
+      "t": 486.167,
+      "kind": "key",
+      "status": "approved",
+      "key": "NumEnter",
+      "wait_for": [
+        "transaction"
+      ],
+      "expect": {
+        "/sketch/geometry_count": 2,
+        "/sketch/geometry/1/last_parameter": 62.0,
+        "/sketch/geometry/1/end/1": 62.0,
+        "/sketch/constraints/4/value": 62.0,
+        "/sketch/geometry/0/persistent_id": 1,
+        "/sketch/geometry/1/persistent_id": 2
+      },
+      "evidence": "Receiver event-065.jpg"
+    }
+  ],
+  "gaps": [
+    {
+      "start": 496.1,
+      "end": 496.867,
+      "resolved": false,
+      "reason": "Camera motion has no proven source button/path"
+    }
+  ],
+  "review": {
+    "method": "manually inspected source prefix with original event evidence",
+    "scope": "M07..M16 only",
+    "physical_timing_exact": false,
+    "tutorial_pass": false
+  }
+}

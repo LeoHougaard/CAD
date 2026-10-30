@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "target": {
+    "width": 1280,
+    "height": 850,
+    "adapter": "egui",
+    "scope": "source14 native Editor"
+  },
+  "bindings": {
+    "front": {
+      "kind": "plane",
+      "role": "front"
+    },
+    "sketch-button": {
+      "kind": "label",
+      "text": "Sketch",
+      "scope": "shortcut"
+    },
+    "line-button": {
+      "kind": "label",
+      "text": "Line",
+      "scope": "shortcut"
+    },
+    "origin": {
+      "kind": "sketch",
+      "xy": [
+        0,
+        0
+      ]
+    },
+    "rough-left": {
+      "kind": "sketch",
+      "xy": [
+        -41.38,
+        0
+      ]
+    },
+    "rough-upper": {
+      "kind": "sketch",
+      "xy": [
+        -41.38,
+        30
+      ]
+    }
+  },
+  "overrides": {},
+  "adaptations": [
+    {
+      "event": "M15",
+      "source_rough_y": 37.481884057971016,
+      "target_rough_y": 30,
+      "reason": "Explicit manual rough-point mapping outside the floating sketch panel; same one click and vertical inference, before native62mm driving value. No camera gesture added."
+    }
+  ]
+}

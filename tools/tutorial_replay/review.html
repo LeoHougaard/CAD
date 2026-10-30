@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tutorial input review</title>
+<style>
+:root{color-scheme:dark light;--bg:light-dark(#fafafa,#16191d);--panel:light-dark(#fff,#20252b);--fg:light-dark(#172027,#e4e9ed);--dim:light-dark(#52616d,#a2afb9);--line:light-dark(#cad3da,#46525e);--accent:light-dark(#056b99,#75d1ff);--error:light-dark(#b11b2c,#ff9d9d)}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,sans-serif}header,main{padding:16px 20px;max-width:1600px;margin:auto}header{border-bottom:1px solid var(--line)}h1{font-size:21px;font-weight:600;margin:0 0 6px}h2{font-size:15px;font-weight:600;margin:0 0 10px}p{margin:6px 0;color:var(--dim)}button,input,select,textarea{font:inherit;color:inherit;background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:7px 10px}button{cursor:pointer}button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:2px}button.primary{background:var(--accent);color:var(--bg);border-color:var(--accent)}button:disabled{opacity:.45;cursor:default}.row{display:flex;align-items:center;flex-wrap:wrap;gap:8px}.files{margin-top:12px}.files label{display:flex;align-items:center;gap:5px;font-size:12px}.files input{max-width:235px;font-size:12px}.layout{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(300px,1fr);gap:20px}.media{min-width:0}.screen{position:relative;background:#101010;line-height:0;border:1px solid var(--line)}canvas{width:100%;display:block;touch-action:none}#video{display:none}#target{height:auto}section{margin-bottom:20px}.controls{margin:10px 0}#time{width:100%}.time{font-variant-numeric:tabular-nums}label.field{display:flex;flex-direction:column;gap:5px;flex:1}textarea{width:100%;min-height:215px;font:12px/1.5 ui-monospace,Consolas,monospace;tab-size:2;resize:vertical}#mapping{min-height:180px}.table-wrap{max-height:350px;overflow:auto;border-top:1px solid var(--line)}table{width:100%;border-collapse:collapse;text-align:left;font-variant-numeric:tabular-nums}th,td{padding:7px 8px;border-bottom:1px solid var(--line);white-space:nowrap}th{color:var(--dim);font-size:12px;position:sticky;top:0;background:var(--bg)}tr[aria-selected=true]{background:color-mix(in srgb,var(--accent) 16%,transparent)}tr{cursor:pointer}td.status{font-size:12px}#message{min-height:24px;color:var(--dim)}#message.error{color:var(--error)}.small{font-size:12px;color:var(--dim)}.split{display:grid;grid-template-columns:1fr 1fr;gap:8px}details{margin-top:12px}summary{cursor:pointer}#event-title{margin-right:auto}#path-end{width:95px}#target-placeholder{padding:25px;color:var(--dim);line-height:1.5}#search{min-width:150px;flex:1}#filter{max-width:160px}.timeline{margin-top:14px}.caption{margin:8px 0 0}#save-event{margin-top:8px}#empty{padding:20px 0}#target-file{max-width:100%}@media(max-width:850px){.layout{grid-template-columns:1fr}.files label{width:100%}.files input{max-width:100%;flex:1}header,main{padding:12px}.split{grid-template-columns:1fr}}
+</style>
+<header>
+<h1>Tutorial input review</h1>
+<p>Step through silent video, correct detected inputs, and map them to your CAD window. Pending inputs cannot be compiled for replay.</p>
+<div class="row files">
+<label>Trace <input id="trace-file" type="file" accept=".json"></label>
+<label>Video <input id="video-file" type="file" accept="video/*"></label>
+<label>Mapping <input id="map-file" type="file" accept=".json"></label>
+<button id="export-trace">Save trace</button><button id="export-map">Save mapping</button>
+</div>
+</header>
+<main>
+<div id="message" role="status" aria-live="polite">Load an extracted trace and its local video. Nothing is uploaded or played with sound.</div>
+<div class="layout">
+<div class="media">
+<section aria-label="Source video">
+<video id="video" muted playsinline preload="metadata" disablepictureinpicture disableremoteplayback></video>
+<div class="screen"><canvas id="source" width="1920" height="1080" aria-label="Video frame. Click to correct the selected event's source pointer position."></canvas></div>
+<div class="row controls"><button id="back">−1 frame</button><button id="play">Play silently</button><button id="next">+1 frame</button><span id="clock" class="time">0.000 s</span><label class="small">FPS <input id="fps" type="number" min="1" max="120" value="30" style="width:65px"></label></div>
+<input id="time" aria-label="Source time" type="range" min="0" max="1" step="0.001" value="0">
+<p class="small">Click the frame to set the selected event's source point. The orange cross is your correction; detected cursor positions appear blue.</p>
+</section>
+<section>
+<div class="row"><h2 id="event-title">Inputs</h2><button id="add">Add missed input</button></div>
+<div class="row controls"><input id="search" placeholder="Find key, target or event ID" aria-label="Search inputs"><select id="filter" aria-label="Event status filter"><option value="all">All states</option><option value="pending">Pending</option><option value="approved">Approved</option><option value="skipped">Skipped</option></select><span id="counts" class="small">0 inputs</span></div>
+<div class="table-wrap"><table><thead><tr><th>Time</th><th>Input</th><th>Target</th><th>State</th></tr></thead><tbody id="rows"></tbody></table><p id="empty">No trace loaded.</p></div>
+</section>
+</div>
+<div>
+<section>
+<h2 id="selected-title">Selected input</h2>
+<textarea id="event" spellcheck="false" aria-label="Selected event JSON"></textarea>
+<div class="row controls"><button class="primary" id="save-event">Apply event edits</button><button id="approve">Approve reviewed input</button><button id="skip">Mark as presentation / skip</button></div>
+<p class="small">Use kind click, key, key_down, key_up, move, drag, text, scroll, checkpoint or gap. Record real repeats and uncertain intervals explicitly. Overlay fading is not key release.</p>
+<div class="row"><label>Path end <input id="path-end" type="number" step=".001" min="0"></label><button id="adopt-path">Adopt detected path</button><button id="add-point">Add current frame point</button></div>
+<p class="small">A path preserves every sampled point. Adoption stops if tracking is missing or ambiguous. Manual points use the last frame click.</p>
+</section>
+<section>
+<h2>Target CAD frame</h2>
+<input id="target-file" type="file" accept="image/*" aria-label="Target CAD screenshot">
+<div class="screen" style="margin-top:8px"><canvas id="target" width="1280" height="850" aria-label="Click the actual CAD screenshot to map the selected event"></canvas><div id="target-placeholder">Load a screenshot from the intended CAD window, then click its matching button or point. Coordinates are relative to that screenshot.</div></div>
+<p class="small">A target click creates a per-event pixel override. Label, native plane, sketch-coordinate, rectangular and three-point affine bindings are also editable below.</p>
+<details open><summary>Mapping JSON</summary><textarea id="mapping" spellcheck="false" aria-label="Target mapping JSON"></textarea><button id="apply-map">Apply mapping edits</button></details>
+</section>
+</div>
+</div>
+</main>
+<script>
+(() => {
+'use strict';
+const $=id=>document.getElementById(id),video=$('video'),source=$('source'),target=$('target');
+video.muted=true;video.volume=0;
+let trace={version:1,source:{width:1920,height:1080},events:[],cursor:[],gaps:[]};
+let mapping={version:1,target:{width:1280,height:850},bindings:{},overrides:{}};
+let selected=null,lastPoint=null,targetImage=null,videoUrl=null;
+const message=(text,error=false)=>{$('message').textContent=text;$('message').classList.toggle('error',error);};
+const getEvent=()=>trace.events.find(e=>e.id===selected);
+const json=value=>JSON.stringify(value,null,2);
+const save=(name,value)=>{const link=document.createElement('a'),url=URL.createObjectURL(new Blob([json(value)+'\n'],{type:'application/json'}));link.href=url;link.download=name;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+const file=async(input,fn)=>{if(!input.files[0])return;try{await fn(input.files[0]);}catch(e){message(e.message,true);}};
+const format=e=>e.kind==='key'?e.key:e.kind==='text'?JSON.stringify(e.text):e.kind+(e.button?' '+e.button:'');
+function list(){
+ const query=$('search').value.toLowerCase(),filter=$('filter').value,body=$('rows');body.replaceChildren();
+ trace.events.forEach(e=>{if(filter!=='all'&&e.status!==filter)return;if(query&&!json(e).toLowerCase().includes(query))return;
+  const row=document.createElement('tr');row.setAttribute('aria-selected',String(e.id===selected));row.tabIndex=0;
+  [Number(e.t).toFixed(3),format(e),e.binding||e.id,e.status].forEach((text,i)=>{const cell=document.createElement('td');cell.textContent=text;if(i===3)cell.className='status';row.append(cell);});
+  const choose=()=>select(e.id);row.onclick=choose;row.onkeydown=ev=>{if(ev.key==='Enter'){choose();ev.preventDefault();}};body.append(row);
+ });
+ const pending=trace.events.filter(e=>e.status==='pending').length;
+ $('counts').textContent=trace.events.length+' inputs · '+pending+' pending';$('empty').hidden=body.children.length>0;
+}
+function select(id,seek=true){selected=id;const e=getEvent();if(!e)return;$('event').value=json(e);$('selected-title').textContent=e.id;$('path-end').value=(e.t+.5).toFixed(3);if(seek&&video.src)video.currentTime=e.t;list();draw();drawTarget();}
+function apply(){const e=JSON.parse($('event').value),old=getEvent();if(!old)throw Error('Select an input first');if(e.id!==old.id)throw Error('Keep the event ID so earlier evidence remains linked');if(!Number.isFinite(e.t)||e.t<0)throw Error('Invalid event time');if(old.status==='approved'&&json(e)!==json(old))e.status='pending';trace.events[trace.events.indexOf(old)]=e;trace.events.sort((a,b)=>a.t-b.t);list();draw();return e;}
+function update(fn){try{const e=apply();fn(e);$('event').value=json(e);list();draw();drawTarget();message('Updated locally. Save trace and mapping to keep changes.');}catch(e){message(e.message,true);}}
+function cross(ctx,x,y,color){ctx.strokeStyle=color;ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(x-9,y);ctx.lineTo(x+9,y);ctx.moveTo(x,y-9);ctx.lineTo(x,y+9);ctx.stroke();}
+function draw(){
+ const ctx=source.getContext('2d');ctx.clearRect(0,0,source.width,source.height);if(video.readyState>=2)ctx.drawImage(video,0,0,source.width,source.height);
+ const t=video.currentTime||0,e=getEvent(),fps=Number($('fps').value)||30;
+ const observed=(trace.cursor||[]).find(p=>Math.abs(p.t-t)<.55/fps);
+ if(observed&&observed.accepted_detection)cross(ctx,...observed.xy,'#53bfff');
+ if(e?.xy)cross(ctx,...e.xy,'#ffb454');
+ if(e?.path?.length){ctx.strokeStyle='#ffb454';ctx.lineWidth=2;ctx.beginPath();e.path.forEach((p,i)=>i?ctx.lineTo(...p.xy):ctx.moveTo(...p.xy));ctx.stroke();}
+ $('clock').textContent=t.toFixed(3)+' s';$('time').value=t;
+}
+function drawTarget(){const ctx=target.getContext('2d');ctx.clearRect(0,0,target.width,target.height);if(targetImage)ctx.drawImage(targetImage,0,0);const e=getEvent(),binding=e&&(mapping.overrides?.[e.id]||mapping.bindings?.[e.binding]);if(binding?.kind==='pixel')cross(ctx,...binding.xy,'#ffb454');}
+function pointer(canvas,event){const rect=canvas.getBoundingClientRect();return[(event.clientX-rect.left)*canvas.width/rect.width,(event.clientY-rect.top)*canvas.height/rect.height].map(x=>Math.round(x*1000)/1000);}
+source.onclick=event=>{lastPoint=pointer(source,event);update(e=>{e.xy=lastPoint;e.status='pending';});};
+target.onclick=event=>{if(!targetImage||!getEvent())return;try{apply();mapping.overrides??={};mapping.overrides[selected]={kind:'pixel',xy:pointer(target,event)};getEvent().status='pending';$('event').value=json(getEvent());$('mapping').value=json(mapping);drawTarget();list();message('Target point mapped. Review and approve the input.');}catch(e){message(e.message,true);}};
+$('trace-file').onchange=()=>file($('trace-file'),async f=>{const value=JSON.parse(await f.text());if(value.version!==1||!Array.isArray(value.events))throw Error('Unsupported trace');trace=value;selected=null;source.width=trace.source.width;source.height=trace.source.height;$('fps').value=trace.source.sample_fps||30;list();if(trace.events.length)select(trace.events[0].id);message('Trace loaded. All edits remain local.');});
+$('map-file').onchange=()=>file($('map-file'),async f=>{mapping=JSON.parse(await f.text());if(mapping.version!==1)throw Error('Unsupported mapping');$('mapping').value=json(mapping);drawTarget();message('Mapping loaded.');});
+$('video-file').onchange=()=>file($('video-file'),async f=>{if(videoUrl)URL.revokeObjectURL(videoUrl);videoUrl=URL.createObjectURL(f);video.muted=true;video.volume=0;video.src=videoUrl;video.load();message('Local video loaded, sound disabled.');});
+$('target-file').onchange=()=>file($('target-file'),async f=>{const url=URL.createObjectURL(f);try{targetImage=await new Promise((resolve,reject)=>{const image=new Image();image.onload=()=>resolve(image);image.onerror=()=>reject(Error('Image could not load'));image.src=url;});target.width=targetImage.naturalWidth;target.height=targetImage.naturalHeight;mapping.target={...mapping.target,width:target.width,height:target.height};$('mapping').value=json(mapping);$('target-placeholder').hidden=true;drawTarget();}finally{URL.revokeObjectURL(url);}});
+video.onloadedmetadata=()=>{$('time').max=video.duration;if(getEvent())video.currentTime=getEvent().t;draw();};
+video.onseeked=draw;video.ontimeupdate=draw;video.onvolumechange=()=>{if(!video.muted)video.muted=true;if(video.volume!==0)video.volume=0;};
+function animate(){if(!video.paused){draw();requestAnimationFrame(animate);}}
+$('play').onclick=async()=>{if(!video.src)return;if(video.paused){video.muted=true;video.volume=0;await video.play();$('play').textContent='Pause';animate();}else{video.pause();$('play').textContent='Play silently';}};
+function step(direction){video.pause();$('play').textContent='Play silently';video.currentTime=Math.max(0,Math.min(video.duration||0,video.currentTime+direction/Number($('fps').value)));}
+$('back').onclick=()=>step(-1);$('next').onclick=()=>step(1);$('time').oninput=()=>{video.pause();video.currentTime=Number($('time').value);};
+$('save-event').onclick=()=>update(()=>{});$('approve').onclick=()=>update(e=>{e.status='approved';});
+$('skip').onclick=()=>update(e=>{if(!e.reason||e.reason.startsWith('Overlay')||e.reason.startsWith('Review'))throw Error('Set a specific skip reason in the event JSON first');e.status='skipped';});
+$('add').onclick=()=>{let id='manual-'+String(trace.events.length+1).padStart(5,'0');while(trace.events.some(e=>e.id===id))id+='x';trace.events.push({id,t:Number(video.currentTime.toFixed(6)),kind:'click',button:'left',status:'pending',reason:'Manually inserted missed input'});trace.events.sort((a,b)=>a.t-b.t);select(id,false);message('Added a pending input. Set its source point, mapping and evidence.');};
+$('add-point').onclick=()=>update(e=>{if(!lastPoint)throw Error('Click the source frame first');const dt=Number((video.currentTime-e.t).toFixed(6));if(dt<0)throw Error('Path point precedes event');e.path??=[];e.path.push({dt,xy:lastPoint});e.path.sort((a,b)=>a.dt-b.dt);e.kind='drag';e.status='pending';});
+$('adopt-path').onclick=()=>update(e=>{const end=Number($('path-end').value),fps=Number($('fps').value),samples=(trace.cursor||[]).filter(p=>p.t>=e.t-.5/fps&&p.t<=end+.5/fps);if(samples.length<2||samples.some(p=>!p.accepted_detection)||samples.some((p,i)=>i&&p.t-samples[i-1].t>1.5/fps)||Math.abs(samples[0].t-e.t)>.6/fps||Math.abs(samples.at(-1).t-end)>.6/fps)throw Error('Cursor interval has missing or ambiguous frames. Correct it manually.');e.path=samples.map((p,i)=>({dt:Number((i? p.t-samples[0].t:0).toFixed(6)),xy:p.xy}));e.kind='drag';e.status='pending';e.reason='Detected path awaiting frame-by-frame review';});
+$('apply-map').onclick=()=>{try{const value=JSON.parse($('mapping').value);if(value.version!==1)throw Error('Unsupported mapping');mapping=value;drawTarget();message('Mapping updated locally.');}catch(e){message(e.message,true);}};
+$('export-trace').onclick=()=>{try{if(getEvent())apply();save('trace-reviewed.json',trace);}catch(e){message(e.message,true);}};
+$('export-map').onclick=()=>{try{mapping=JSON.parse($('mapping').value);save('mapping.json',mapping);}catch(e){message(e.message,true);}};
+$('search').oninput=list;$('filter').onchange=list;$('mapping').value=json(mapping);draw();drawTarget();
+})();
+</script>
+</html>
