@@ -31,6 +31,31 @@ fn point(n: &mut Native, target: &Value, mods: egui::Modifiers) -> egui::Pos2 {
             assert_eq!(n.ctx.layer_id_at(pos), Some(response.layer_id), "mapped sketch point occluded");
             pos
         }
+        "sketch-element" => {
+            let name = n.editor.sketch.as_ref().expect("active native sketch");
+            let sketch = object(&n.editor.state,name);
+            let geometry: Vec<_> = sketch["sketch"]["geometry"].as_array().unwrap().iter()
+                .filter(|g| g["persistent_id"] == target["persistent_id"]).collect();
+            assert_eq!(geometry.len(),1,"unique current native persistent ID");
+            let geometry = geometry[0];
+            assert_eq!(geometry["kind"],"line","this binding only supports native lines");
+            let fraction = match target["point"].as_u64().unwrap_or(0) {
+                0 => target["fraction"].as_f64().unwrap_or(0.5),
+                1 => 0., 2 => 1., _ => panic!("unknown native line point"),
+            };
+            let local = std::array::from_fn(|i| {
+                let start=geometry["start"][i].as_f64().unwrap();
+                start+(geometry["end"][i].as_f64().unwrap()-start)*fraction
+            });
+            let pos=n.editor.viewport.sketch_screen_point(local);
+            let response=n.editor.viewport.response.as_ref().unwrap();
+            assert!(response.rect.contains(pos),"native entity point outside canvas");
+            assert_eq!(n.ctx.layer_id_at(pos),Some(response.layer_id),"native entity point occluded");
+            let hit=n.editor.viewport.sketch_hit(pos).expect("native entity point must hit sketch geometry");
+            assert_eq!(i64::from(hit.index),geometry["index"].as_i64().unwrap(),"native entity point hit another curve");
+            assert_eq!(hit.point,target["point"].as_u64().unwrap_or(0) as i32,"native entity point hit another handle");
+            pos
+        }
         "plane" => {
             let role = match target["role"].as_str().unwrap() {
                 "front" => crate::viewport::StandardPlane::Front,
@@ -101,12 +126,22 @@ fn keyboard(n: &mut Native, action: &Value, pressed: bool, mut mods: egui::Modif
     };
     let key = Key::from_name(normalized).unwrap_or_else(|| panic!("unsupported key {name}"));
     let mut events = vec![egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: mods }];
-    if pressed {
-        if let Some(text) = action["text"].as_str() {
-            events.push(egui::Event::Text(text.to_owned()));
-        }
+    if pressed && let Some(text) = action["text"].as_str() {
+        events.push(egui::Event::Text(text.to_owned()));
     }
     frame(n,events,mods);
+}
+
+fn camera(n: &Native) -> Value {
+    if n.editor.sketch.is_none() { return Value::Null; }
+    let rect = n.editor.viewport.response.as_ref().expect("current canvas").rect;
+    let projected: Vec<_> = [[0.,0.,0.],[10.,0.,0.],[0.,10.,0.]].into_iter().map(|world| {
+        let point = n.editor.viewport.sketch_screen_point(world);
+        json!({"world":world,"pixel":[point.x,point.y]})
+    }).collect();
+    let panel = n.ctx.memory(|m| m.area_rect(egui::Id::new("native_sketch_controls")))
+        .map(|r| [r.min.x,r.min.y,r.max.x,r.max.y]);
+    json!({"canvas":[rect.min.x,rect.min.y,rect.width(),rect.height()],"sketch_controls_rect":panel,"anchors":projected})
 }
 
 fn expected(n: &Native, action: &Value) {
@@ -114,7 +149,7 @@ fn expected(n: &Native, action: &Value) {
     let expectations = action["expect"].as_object().expect("expect must be an object");
     assert!(!expectations.is_empty());
     let sketch = n.editor.sketch.as_ref().map(|name| object(&n.editor.state, name)["sketch"].clone()).unwrap_or(Value::Null);
-    let state = json!({"native":n.editor.state,"sketch":sketch,"ui":n.ui_state(),
+    let state = json!({"native":n.editor.state,"sketch":sketch,"ui":n.ui_state(),"camera":camera(n),
         "input":n.ctx.input(|i|json!({"ctrl":i.modifiers.ctrl,"shift":i.modifiers.shift,"alt":i.modifiers.alt,
             "pointer":i.pointer.latest_pos().map(|p|[p.x,p.y]),"buttons_down":i.pointer.any_down()}))});
     for (path, value) in expectations {
@@ -179,9 +214,13 @@ fn tutorial_replay_from_json() {
                     let pos = egui::pos2(sample["xy"][0].as_f64().unwrap() as f32, sample["xy"][1].as_f64().unwrap() as f32);
                     let mut events = vec![egui::Event::PointerMoved(pos)];
                     if i == 0 { events.push(egui::Event::PointerButton {pos, button, pressed:true, modifiers:mods}); }
-                    if i == points.len()-1 { events.push(egui::Event::PointerButton {pos, button, pressed:false, modifiers:mods}); }
                     frame(&mut n,events,mods);
                 }
+                let last = points.last().unwrap();
+                let pos = egui::pos2(last["xy"][0].as_f64().unwrap() as f32, last["xy"][1].as_f64().unwrap() as f32);
+                // The final motion reaches a held-button frame before release.
+                // Combining them would lose the last camera delta in egui.
+                frame(&mut n,vec![egui::Event::PointerButton {pos, button, pressed:false, modifiers:mods}],mods);
                 resolved = action["target"].clone();
             }
             "scroll" => {
@@ -207,7 +246,7 @@ fn tutorial_replay_from_json() {
         }
         settle(&mut n,mods);
         expected(&n, action);
-        n.events.push(json!({"replay_action":action,"resolved_target":resolved,"ui":n.ui_state(),"state":n.editor.state,"physical_desktop":false}));
+        n.events.push(json!({"replay_action":action,"resolved_target":resolved,"ui":n.ui_state(),"camera":camera(&n),"state":n.editor.state,"physical_desktop":false}));
         n.record();
     }
     assert!(held.is_empty(),"replay left keys held");

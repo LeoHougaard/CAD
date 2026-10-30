@@ -19,6 +19,26 @@ class MappingTests(unittest.TestCase):
         self.assertEqual(result["actions"][0]["target"], {"kind": "pixel", "xy": [250., 100.]})
         self.assertFalse(result["claims"]["tutorial_pass"])
 
+    def test_native_entity_mapping_keeps_identity_for_live_resolution(self):
+        binding = {"kind": "sketch-element", "persistent_id": 10, "point": 0, "fraction": .42}
+        mapping = self.mapping()
+        mapping["bindings"]["canvas"] = binding
+        self.assertEqual(compile_plan(self.trace([self.event()]), mapping)["actions"][0]["target"], binding)
+
+    def test_native_entity_mapping_rejects_ambiguous_identity_or_point(self):
+        valid = {"kind": "sketch-element", "persistent_id": 10, "point": 0, "fraction": .5}
+        for mutation in ({"persistent_id": True}, {"persistent_id": 0}, {"point": True}, {"point": 3}, {"fraction": 1.1}):
+            mapping = self.mapping()
+            mapping["bindings"]["canvas"] = {**valid, **mutation}
+            with self.subTest(mutation=mutation), self.assertRaises(TraceError):
+                compile_plan(self.trace([self.event()]), mapping)
+
+    def test_one_sample_mapped_drag_is_rejected_during_compilation(self):
+        event=self.event()
+        event.update(kind="drag",path=[{"dt":0.,"xy":[500,200]}])
+        with self.assertRaisesRegex(TraceError,"full pointer path"):
+            compile_plan(self.trace([event]),self.mapping())
+
     def test_affine_rotation_and_translation_preserves_every_path_sample(self):
         binding = {"kind": "affine", "pairs": [{"source": [0, 0], "target": [10, 20]}, {"source": [1, 0], "target": [10, 22]}, {"source": [0, 1], "target": [8, 20]}]}
         event = self.event()

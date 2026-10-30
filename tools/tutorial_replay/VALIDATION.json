@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "as_of_utc": "2026-10-30T04:48:33.854241+00:00",
+  "complete_tutorials": {
+    "verified": 0,
+    "requested_minimum": 100,
+    "completion_forecast_available": false
+  },
+  "receiver": {
+    "url": "https://www.youtube.com/watch?v=pcU5-8PkhGg",
+    "source_video_sha256": "ac3ff467b58b225c256901c584f04578377c310fd1c6d28db6ac2e9ac2ff7c62",
+    "local_headless_inputs": {
+      "verified_prefix_actions": 43,
+      "mapped_segment_actions": 75,
+      "latest_batch_played_actions": 61,
+      "latest_batch_passed": false,
+      "latest_model_source_manifest": "50a9c1126ff205f4a7ff602f5e5a92504677e771092f9a1cce110726f91118d3",
+      "accepted_source_dimensions_mm": [
+        80,
+        100
+      ],
+      "earliest_semantic_failure": "182 mm height was committed as a 182 degree Angle; later angle failure is downstream",
+      "semantic_gate": "native constraint kind, target references and value, not transaction acceptance alone"
+    },
+    "physical_pixel_inputs": {
+      "passed": 12,
+      "attempted": 12,
+      "saved_prefix_stock_readback": true
+    },
+    "native_geometry_after_local14": {
+      "curves": 4,
+      "constraints": 8,
+      "degrees_of_freedom": 4,
+      "persistent_ids": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "typed_length_mm": 62.0
+    },
+    "mapping_limits": [
+      "Rough source-plane coordinates are manually calibrated; they are not exact source native geometry",
+      "Raw pointer path and physical releases are not recovered from overlay fading"
+    ],
+    "unresolved_intervals": [
+      {
+        "start": 495.866667,
+        "end": 502.8,
+        "reason": "Camera view reconstructed and aligned; original device/chord/release/path remain unverified"
+      }
+    ],
+    "camera_alignment": {
+      "method": "reconstructed zoom and pan from source landmarks, permitted by Leo",
+      "first_view_rmse_pixels": 0.7512,
+      "second_view_rmse_pixels": 0.21375,
+      "native_state_unchanged_during_navigation": true,
+      "physical_source_navigation_inputs_verified": false
+    }
+  },
+  "tool_checks": {
+    "passed": 29,
+    "total": 29
+  },
+  "wire_visibility": {
+    "actual_painter_check_passed": true,
+    "active_unit_tests_passed": 254,
+    "os_gui_and_pixel_visual_acceptance": false
+  },
+  "cohort_policy": "These bounded cohorts are distinct, not end-to-end tutorial success rates; no asymptotic completion forecast is inferred.",
+  "dimension_checkpoint": {
+    "active_tests_passed": 255,
+    "focused_native_cases_passed": 5,
+    "independent_cached_cases_passed": 2,
+    "full_receiver_tutorial_pass": false
+  }
+}

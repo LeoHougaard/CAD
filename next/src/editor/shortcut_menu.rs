@@ -68,6 +68,7 @@ impl Editor {
             Extrude,
             Revolve,
             Draw(Tool),
+            Dimension,
         }
         let mut action = None;
         let layer = ctx
@@ -102,6 +103,10 @@ impl Editor {
                                     ui.end_row();
                                 }
                             }
+                            if ui.button("Dimension").clicked() {
+                                action = Some(Action::Dimension);
+                                ui.close();
+                            }
                         });
                 } else {
                     ui.horizontal(|ui| {
@@ -123,6 +128,7 @@ impl Editor {
             Some(Action::Extrude) => self.feature_from_sketch("feature.pad"),
             Some(Action::Revolve) => self.feature_from_sketch("feature.revolution"),
             Some(Action::Draw(tool)) => self.activate_sketch_drawing_tool(tool),
+            Some(Action::Dimension) => self.start_dimension_tool(),
             None => {}
         }
     }

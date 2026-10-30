@@ -193,6 +193,14 @@ def _target(event, mapping):
             raise TraceError(f"{eid}: unsupported standard plane")
     elif kind == "sketch":
         xy(binding.get("xy"), eid)
+    elif kind == "sketch-element":
+        if type(binding.get("persistent_id")) is not int or binding["persistent_id"] <= 0:
+            raise TraceError(f"{eid}: positive native persistent ID required")
+        if type(binding.get("point", 0)) is not int or binding.get("point", 0) not in (0, 1, 2):
+            raise TraceError(f"{eid}: line point must be 0, 1 or 2")
+        fraction = number(binding.get("fraction", .5), eid)
+        if not 0 <= fraction <= 1:
+            raise TraceError(f"{eid}: line fraction outside segment")
     else:
         raise TraceError(f"{eid}: unknown target mapping {kind}")
     return binding
@@ -226,7 +234,7 @@ def compile_plan(trace, mapping, start=None, end=None):
         action = {k: copy.deepcopy(v) for k, v in event.items() if k not in ("status", "binding", "xy", "path")}
         if kind in POINTER:
             action["target"] = _target(event, mapping)
-            if kind == "drag" and action["target"]["kind"] != "path":
+            if kind == "drag" and (action["target"]["kind"] != "path" or len(action["target"].get("points", [])) < 2):
                 raise TraceError(f"{eid}: drag requires the reviewed full pointer path")
             if kind in ("click", "drag"):
                 action.setdefault("button", "left")

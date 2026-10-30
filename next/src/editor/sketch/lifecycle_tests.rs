@@ -1381,3 +1381,9 @@ mod receiver_passive_escape_source_tests;
 
 #[path = "receiver_source_mirror_tests.rs"]
 mod receiver_source_mirror_tests;
+
+#[path = "video_replay.rs"]
+mod video_replay;
+
+#[path = "shortcut_dimension_tests.rs"]
+mod shortcut_dimension_tests;

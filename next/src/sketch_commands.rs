@@ -533,50 +533,16 @@ fn point_args(first: SketchElement, second: SketchElement) -> Value {
     json!([first.index, first.point, second.index, second.point])
 }
 
-/// Whether two whole native lines retain the same orientation through active
-/// native constraints. This reads constraint identities; it does not solve them.
-fn constrained_parallel(snapshot: &Value, first: i32, second: i32) -> bool {
-    let mut relations = vec![(-1, -2, true)];
-    for constraint in snapshot["sketch"]["constraints"]
-        .as_array()
-        .into_iter()
-        .flatten()
-    {
-        if constraint["active"] == false || constraint["driving"] == false {
-            continue;
-        }
-        let Some(a) = constraint["first"]
-            .as_i64()
-            .and_then(|i| i32::try_from(i).ok())
-        else {
-            continue;
-        };
-        if constraint["first_pos"].as_i64().unwrap_or(0) != 0 {
-            continue;
-        }
-        match constraint["type"].as_str().unwrap_or_default() {
-            "Horizontal" => relations.push((a, -1, false)),
-            "Vertical" => relations.push((a, -2, false)),
-            "Parallel" | "Perpendicular" => {
-                if constraint["second_pos"].as_i64().unwrap_or(0) == 0
-                    && let Some(b) = constraint["second"]
-                        .as_i64()
-                        .and_then(|i| i32::try_from(i).ok())
-                {
-                    relations.push((a, b, constraint["type"] == "Perpendicular"));
-                }
-            }
-            _ => {}
-        }
-    }
+/// Find an orientation relation using only active native constraints.
+fn orientation(relations: &[(i32, i32, bool)], first: i32, second: i32) -> Option<bool> {
     let mut reached = vec![(first, false)];
     let mut cursor = 0;
     while cursor < reached.len() {
         let (node, perpendicular) = reached[cursor];
         if node == second {
-            return !perpendicular;
+            return Some(perpendicular);
         }
-        for &(a, b, turn) in &relations {
+        for &(a, b, turn) in relations {
             let next = if a == node {
                 Some(b)
             } else if b == node {
@@ -592,7 +558,134 @@ fn constrained_parallel(snapshot: &Value, first: i32, second: i32) -> bool {
         }
         cursor += 1;
     }
-    false
+    None
+}
+
+/// Whether two whole native lines retain the same orientation through active
+/// native constraints. This reads constraint identities; it does not solve them.
+fn constrained_parallel(snapshot: &Value, first: i32, second: i32) -> bool {
+    let constraints: Vec<_> = snapshot["sketch"]["constraints"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|c| c["active"] != false && c["driving"] != false)
+        .collect();
+    let mut relations = vec![(-1, -2, true)];
+    let mut coincident = Vec::new();
+    let mut on_axis = vec![((-1, 1), -1), ((-1, 1), -2)];
+    let mut symmetric = Vec::new();
+    for constraint in constraints {
+        let get = |key: &str| constraint[key].as_i64().and_then(|i| i32::try_from(i).ok());
+        let Some(a) = get("first") else { continue };
+        let ap = get("first_pos").unwrap_or(0);
+        let b = get("second");
+        let bp = get("second_pos").unwrap_or(0);
+        match constraint["type"].as_str().unwrap_or_default() {
+            "Horizontal" if ap == 0 => relations.push((a, -1, false)),
+            "Vertical" if ap == 0 => relations.push((a, -2, false)),
+            "Parallel" | "Perpendicular" if ap == 0 && bp == 0 => {
+                if let Some(b) = b {
+                    relations.push((a, b, constraint["type"] == "Perpendicular"));
+                }
+            }
+            "Coincident" if ap > 0 && bp > 0 => {
+                if let Some(b) = b {
+                    coincident.push(((a, ap), (b, bp)));
+                }
+            }
+            "PointOnObject" if ap > 0 && bp == 0 => {
+                if let Some(b @ (-1 | -2)) = b {
+                    on_axis.push(((a, ap), b));
+                }
+            }
+            "Symmetric" if matches!(ap, 1 | 2) && matches!(bp, 1 | 2) => {
+                if let (Some(b), Some(axis)) = (b, get("third"))
+                    && get("third_pos").unwrap_or(0) == 0
+                    && a != b
+                    && axis != a
+                    && axis != b
+                {
+                    let pair = if a < b {
+                        (a, b, ap, bp)
+                    } else {
+                        (b, a, bp, ap)
+                    };
+                    symmetric.push((pair.0, pair.1, pair.2, pair.3, axis));
+                }
+            }
+            _ => {}
+        }
+    }
+    let point_on_axis = |point: (i32, i32), axis: i32| {
+        let mut reached = vec![point];
+        let mut cursor = 0;
+        while cursor < reached.len() {
+            let p = reached[cursor];
+            if on_axis.contains(&(p, axis)) {
+                return true;
+            }
+            for &(a, b) in &coincident {
+                let next = if a == p {
+                    Some(b)
+                } else if b == p {
+                    Some(a)
+                } else {
+                    None
+                };
+                if let Some(next) = next
+                    && !reached.contains(&next)
+                {
+                    reached.push(next);
+                }
+            }
+            cursor += 1;
+        }
+        false
+    };
+    for geometry in snapshot["sketch"]["geometry"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        if geometry["kind"] != "line" {
+            continue;
+        }
+        let Some(index) = geometry["index"]
+            .as_i64()
+            .and_then(|i| i32::try_from(i).ok())
+        else {
+            continue;
+        };
+        for axis in [-1, -2] {
+            if point_on_axis((index, 1), axis) && point_on_axis((index, 2), axis) {
+                relations.push((index, axis, false));
+            }
+        }
+    }
+    // Reflecting a line keeps it parallel only when its orientation is known
+    // to be parallel or perpendicular to the mirror axis. Both endpoint pairs
+    // must be constrained to the same axis.
+    loop {
+        let mut added = false;
+        for (i, &(a, b, ap, bp, axis)) in symmetric.iter().enumerate() {
+            if orientation(&relations, a, b).is_some() {
+                continue;
+            }
+            let paired = symmetric[i + 1..]
+                .iter()
+                .any(|&(c, d, cp, dp, other_axis)| {
+                    (a, b, axis) == (c, d, other_axis) && ap != cp && bp != dp
+                });
+            if paired && orientation(&relations, a, axis).is_some() {
+                relations.push((a, b, false));
+                added = true;
+            }
+        }
+        if !added {
+            break;
+        }
+    }
+    orientation(&relations, first, second) == Some(false)
 }
 
 /// Smart Dimension's whole-line spacing case. Unconstrained lines must be
@@ -1273,6 +1366,62 @@ mod tests {
         assert!(
             constrain(&snapshot, "Angle", &[e(0, 0), e(2, 0)], None).is_ok(),
             "explicit Angle remains available"
+        );
+    }
+
+    #[test]
+    fn mirrored_lines_retain_orientation_only_when_axis_and_both_pairs_are_constrained() {
+        let mut snapshot = json!({"name":"Sketch","sketch":{"constraint_count":6,"constraints":[
+            {"type":"Vertical","first":0},
+            {"type":"Coincident","first":2,"first_pos":1,"second":-1,"second_pos":1},
+            {"type":"Coincident","first":2,"first_pos":2,"second":3,"second_pos":1},
+            {"type":"PointOnObject","first":3,"first_pos":1,"second":-2},
+            {"type":"Symmetric","first":0,"first_pos":1,"second":1,"second_pos":1,"third":2,"third_pos":0},
+            {"type":"Symmetric","first":0,"first_pos":2,"second":1,"second_pos":2,"third":2,"third_pos":0}
+        ],"geometry":[
+            {"index":0,"kind":"line","start":[-5,0,0],"end":[-5,8,0]},
+            {"index":1,"kind":"line","start":[5,0,0],"end":[5,8,0]},
+            {"index":2,"kind":"line","start":[0,0,0],"end":[0,10,0]},
+            {"index":3,"kind":"line","start":[0,10,0],"end":[2,10,0]}
+        ]}});
+        for selection in [[e(0, 0), e(1, 0)], [e(1, 0), e(0, 0)]] {
+            assert!(constrained_parallel(
+                &snapshot,
+                selection[0].index,
+                selection[1].index
+            ));
+            let edits = constrain(&snapshot, "Distance", &selection, Some("80")).unwrap();
+            assert_eq!(edits.len(), 2, "no redundant Parallel is added");
+            assert_eq!(edits[1]["op"], "datum");
+        }
+        snapshot["sketch"]["constraints"][5]["active"] = json!(false);
+        assert!(
+            !constrained_parallel(&snapshot, 0, 1),
+            "both endpoint pairs are required"
+        );
+        snapshot["sketch"]["constraints"][5]["active"] = json!(true);
+        snapshot["sketch"]["constraints"][3]["driving"] = json!(false);
+        assert!(
+            !constrained_parallel(&snapshot, 0, 1),
+            "axis must be fixed by active native relations"
+        );
+        snapshot["sketch"]["constraints"][3]["driving"] = json!(true);
+        snapshot["sketch"]["constraints"][0]["active"] = json!(false);
+        assert!(
+            !constrained_parallel(&snapshot, 0, 1),
+            "mirror alone does not retain an arbitrary line orientation"
+        );
+        let unconstrained_orientation =
+            constrain(&snapshot, "Distance", &[e(0, 0), e(1, 0)], None).unwrap();
+        assert_eq!(
+            unconstrained_orientation[1]["kind"], "Parallel",
+            "equal solved directions without a retained orientation still require Parallel"
+        );
+        snapshot["sketch"]["constraints"][0]["active"] = json!(true);
+        snapshot["sketch"]["constraints"][5]["third"] = json!(3);
+        assert!(
+            !constrained_parallel(&snapshot, 0, 1),
+            "endpoint pairs need the same axis"
         );
     }
 

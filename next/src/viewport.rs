@@ -15,6 +15,8 @@ pub use standard_planes::StandardPlane;
 mod select_other;
 #[cfg(test)]
 mod select_other_ui_tests;
+#[cfg(test)]
+mod wire_visibility_tests;
 pub use navigation::{DisplayMode, SelectionMode, StandardView};
 mod sketch;
 mod sketch_curves;
@@ -36,6 +38,7 @@ struct Edge {
     object: Arc<str>,
     points: Vec<Vec3>,
     name: String,
+    wire_only: bool,
 }
 struct Vertex {
     object: Arc<str>,
@@ -328,8 +331,8 @@ impl Viewport {
             }
         }
         let (origin, rotation) = placement(&topology["world_from_shape"]);
-        let isolated = mesh["triangles"].as_array().is_none_or(Vec::is_empty)
-            && topology["edges"].as_array().is_none_or(Vec::is_empty);
+        let wire_only = mesh["triangles"].as_array().is_none_or(Vec::is_empty);
+        let isolated = wire_only && topology["edges"].as_array().is_none_or(Vec::is_empty);
         self.vertices.extend(
             topology["vertices"]
                 .as_array()
@@ -361,6 +364,7 @@ impl Viewport {
                     Some(Edge {
                         object: Arc::clone(&object),
                         name: edge["subelement"].as_str()?.to_owned(),
+                        wire_only,
                         points: points
                             .iter()
                             .map(|p| origin + rotation * vector(p))
@@ -753,13 +757,15 @@ impl Viewport {
         // Test each small edge segment against the visible surface.
         for edge in &self.edges {
             let selected = self.selected_element(&edge.object, &edge.name);
-            if self.display_mode == DisplayMode::Shaded && !selected {
+            if self.display_mode == DisplayMode::Shaded && !selected && !edge.wire_only {
                 continue;
             }
             let stroke = Stroke::new(
                 if selected { 2.5_f32 } else { 1.1_f32 },
                 if selected {
                     Color32::from_rgb(95, 221, 207)
+                } else if edge.wire_only || self.display_mode == DisplayMode::Wireframe {
+                    Color32::from_rgb(174, 187, 193)
                 } else {
                     Color32::from_rgb(32, 42, 48)
                 },

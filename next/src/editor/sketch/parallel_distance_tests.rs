@@ -242,3 +242,46 @@ fn parallel_unconstrained_lines_gain_native_parallel_relation() {
     assert_eq!(sk(&n)["native_xml"]["persistent_ids"], json!([1, 2]));
     note(&n, "native-parallel");
 }
+
+#[test]
+#[ignore = "requires CAD_LIFECYCLE_RUNTIME and CAD_LIFECYCLE_OUTPUT"]
+fn mirrored_whole_edges_use_existing_symmetry_without_redundant_parallel() {
+    let mut n = Native::new("parallel-mirrored-edges");
+    n.send("new", json!({"name":"ParallelMirroredEdges"}), true);
+    n.transaction(json!([
+        {"op":"add_object","type":"Sketcher::SketchObject","name":"Sketch"},
+        {"op":"geometry","object":"Sketch","kind":"line","start":[-41.38,0,0],"end":[-41.38,62,0]},
+        {"op":"geometry","object":"Sketch","kind":"line","start":[41.38,0,0],"end":[41.38,62,0]},
+        {"op":"geometry","object":"Sketch","kind":"line","start":[0,0,0],"end":[0,90,0],"construction":true},
+        {"op":"constraint","object":"Sketch","kind":"Vertical","args":[0]},
+        {"op":"constraint","object":"Sketch","kind":"Coincident","args":[2,1,-1,1]},
+        {"op":"constraint","object":"Sketch","kind":"PointOnObject","args":[2,2,-2]},
+        {"op":"constraint","object":"Sketch","kind":"Symmetric","args":[0,1,1,1,2]},
+        {"op":"constraint","object":"Sketch","kind":"Symmetric","args":[0,2,1,2,2]}
+    ]));
+    n.editor.request_sketch("Sketch");
+    n.receive("sketch_begin", true);
+    settle(&mut n);
+    n.editor.viewport.fit_sketch();
+    settle(&mut n);
+    let before = sk(&n);
+    let ids = before["native_xml"]["persistent_ids"].clone();
+    let dof = before["native_xml"]["dof"].as_i64().unwrap();
+    assert_eq!(ids, json!([1, 2, 3]));
+    start_pair(&mut n, [0, 1]);
+    value(&mut n, "80", true);
+    let after = sk(&n);
+    assert_eq!(after["native_xml"]["persistent_ids"], ids);
+    assert_eq!(after["native_xml"]["dof"].as_i64().unwrap(), dof - 1);
+    assert_eq!(
+        after["constraint_count"].as_i64().unwrap(),
+        before["constraint_count"].as_i64().unwrap() + 1
+    );
+    let last = after["constraints"].as_array().unwrap().last().unwrap();
+    assert_eq!(last["type"], "Distance");
+    assert_eq!(last["first"], 0);
+    assert_eq!(last["second"], 1);
+    assert_eq!(last["driving"], true);
+    assert_eq!(last["value"], 80.0);
+    note(&n, "mirrored-width");
+}
