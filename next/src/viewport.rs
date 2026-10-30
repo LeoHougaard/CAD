@@ -44,7 +44,16 @@ struct Vertex {
     object: Arc<str>,
     isolated: bool,
     name: String,
+    mapped_name: Option<String>,
     point: Vec3,
+}
+#[derive(Clone, Debug)]
+pub struct SceneVertex {
+    pub object: String,
+    pub subelement: String,
+    pub mapped_name: Option<String>,
+    pub revision: Option<u64>,
+    pub point: [f64; 3],
 }
 struct SketchCurve {
     native: sketch_curves::NativeCurve,
@@ -345,6 +354,7 @@ impl Viewport {
                         object: Arc::clone(&object),
                         isolated,
                         name: vertex["subelement"].as_str().unwrap_or("").to_owned(),
+                        mapped_name: vertex["mapped_name"].as_str().map(str::to_owned),
                         point,
                     })
                 }),
@@ -585,6 +595,34 @@ impl Viewport {
                     face: index,
                     colors,
                 }
+            })
+            .collect()
+    }
+    /// Native scene vertex hits, with no inference from coincident coordinates.
+    pub fn scene_vertices_at(&self, pos: Pos2) -> Vec<SceneVertex> {
+        let triangles = self.projected();
+        let front = front_triangle(pos, &triangles);
+        self.vertices
+            .iter()
+            .filter_map(|vertex| {
+                let (screen, depth) = self.project(vertex.point);
+                if screen.distance(pos) > 6.
+                    || !self.point_visible(&vertex.object, depth, front, &triangles)
+                {
+                    return None;
+                }
+                let local = self.sketch_rotation.conjugate() * (vertex.point - self.sketch_origin);
+                Some(SceneVertex {
+                    object: vertex.object.to_string(),
+                    subelement: vertex.name.clone(),
+                    mapped_name: vertex.mapped_name.clone(),
+                    revision: self
+                        .scene_revisions
+                        .get(vertex.object.as_ref())
+                        .copied()
+                        .flatten(),
+                    point: [local.x as f64, local.y as f64, local.z as f64],
+                })
             })
             .collect()
     }
@@ -965,6 +1003,37 @@ impl DepthIndex {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn scene_vertex_hits_keep_mapped_names_and_distinct_owners() {
+        let mut viewport = Viewport::default();
+        viewport.set_sketch(Some(json!({"name":"Follower","sketch":{"geometry":[]}})));
+        viewport.align_sketch();
+        viewport.scale = 10.;
+        viewport.set_scenes(vec![
+            (
+                json!({"object":"Master","revision":7}),
+                json!({"vertices":[
+                {"subelement":"Vertex2","mapped_name":"g1v2;SKT","point":[-40,0,0]}]}),
+            ),
+            (
+                json!({"object":"Other","revision":7}),
+                json!({"vertices":[
+                {"subelement":"Vertex1","mapped_name":"g1v1;SKT","point":[-40,0,0]}]}),
+            ),
+        ]);
+        let hits = viewport.scene_vertices_at(viewport.sketch_screen_point([-40., 0., 0.]));
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].object, "Master");
+        assert_eq!(hits[0].mapped_name.as_deref(), Some("g1v2;SKT"));
+        assert_eq!(hits[0].revision, Some(7));
+        assert_eq!(hits[1].object, "Other");
+        assert_ne!(hits[0].mapped_name, hits[1].mapped_name);
+        assert!(
+            viewport
+                .scene_vertices_at(viewport.sketch_screen_point([-39., 2., 0.]))
+                .is_empty()
+        );
+    }
     #[test]
     fn pick_uses_interpolated_front_depth_and_rejects_hidden_edges() {
         let mut viewport = Viewport::default();

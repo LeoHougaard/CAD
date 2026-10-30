@@ -107,6 +107,10 @@ impl Editor {
                                 action = Some(Action::Dimension);
                                 ui.close();
                             }
+                            if ui.button("Revolve").clicked() {
+                                action = Some(Action::Revolve);
+                                ui.close();
+                            }
                         });
                 } else {
                     ui.horizontal(|ui| {

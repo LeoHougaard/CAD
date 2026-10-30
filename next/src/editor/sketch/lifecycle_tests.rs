@@ -621,9 +621,14 @@ mod select_other_ownership_tests;
 #[path = "select_other_reply_tests.rs"]
 mod select_other_reply_tests;
 
+#[path = "scene_vertex_snap_tests.rs"]
+mod scene_vertex_snap_tests;
+
 #[path = "fit_tree_selection_tests.rs"]
 mod fit_tree_selection_tests;
 
+#[path = "master_revolve_axis_tests.rs"]
+mod master_revolve_axis_tests;
 #[path = "popup_ownership_tests.rs"]
 mod popup_ownership_tests;
 

@@ -130,6 +130,7 @@ impl Editor {
             if let Some(point) = self.viewport.geometry_point(endpoint) {
                 self.sketch_ui.points = vec![point];
                 self.sketch_ui.snaps = vec![Some(endpoint)];
+                self.sketch_ui.scene_snaps = vec![None];
             }
         } else if self.sketch_snapshot().as_ref() == Some(&p.snapshot) {
             // A native rollback may advance only its revision.

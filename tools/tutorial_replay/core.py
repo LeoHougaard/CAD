@@ -194,6 +194,10 @@ def _target(event, mapping):
     elif kind == "sketch":
         xy(binding.get("xy"), eid)
     elif kind == "sketch-element":
+        if "object_label" in binding and (not isinstance(binding["object_label"], str) or not binding["object_label"]):
+            raise TraceError(f"{eid}: scene sketch label must be nonempty")
+        if "construction_axis" in binding and (type(binding["construction_axis"]) is not bool or "object_label" not in binding):
+            raise TraceError(f"{eid}: construction axis requires a scene sketch label")
         if type(binding.get("persistent_id")) is not int or binding["persistent_id"] <= 0:
             raise TraceError(f"{eid}: positive native persistent ID required")
         if type(binding.get("point", 0)) is not int or binding.get("point", 0) not in (0, 1, 2):
@@ -201,6 +205,8 @@ def _target(event, mapping):
         fraction = number(binding.get("fraction", .5), eid)
         if not 0 <= fraction <= 1:
             raise TraceError(f"{eid}: line fraction outside segment")
+        if binding.get("construction_axis") and binding.get("point", 0) != 0:
+            raise TraceError(f"{eid}: construction axis must target a line interior")
     else:
         raise TraceError(f"{eid}: unknown target mapping {kind}")
     return binding

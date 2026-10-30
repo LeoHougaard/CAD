@@ -295,6 +295,7 @@ impl Leases {
                             | "trim_geometry"
                             | "expose_internal"
                             | "external_geometry"
+                            | "auto_external_coincident"
                             | "external_state"
                             | "delete_external"
                             | "fillet_geometry"
@@ -943,6 +944,7 @@ mod tests {
             "trim_geometry",
             "expose_internal",
             "external_geometry",
+            "auto_external_coincident",
             "external_state",
             "delete_external",
             "fillet_geometry",

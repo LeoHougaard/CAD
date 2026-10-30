@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "as_of_utc": "2026-10-30T06:23:19.834453+00:00",
+  "as_of_utc": "2026-10-30T08:39:01.285130+00:00",
   "complete_tutorials": {
     "verified": 0,
     "requested_minimum": 100,
@@ -12,9 +12,9 @@
     "local_headless_inputs": {
       "verified_prefix_actions": 75,
       "mapped_segment_actions": 75,
-      "latest_batch_played_actions": 100,
+      "latest_batch_played_actions": 119,
       "latest_batch_passed": true,
-      "latest_model_source_manifest": "44e11993af09a4a2283d9ad35cedaa73906237a22bf7396e337a23e8ff6ce8f9",
+      "latest_model_source_manifest": "ff8c51ed31f50cf588f8d675a5007496afc2bb09acb866a53aca9cd103ee4fbb",
       "accepted_source_dimensions_mm": [
         80,
         100,
@@ -52,11 +52,13 @@
           15
         ]
       },
-      "next_unverified_modelling_step": "New profile with master-vertex references, then Revolve on the separate master construction line",
+      "next_unverified_modelling_step": "Source674.267 one-click master eye, then Top+master vertex plane and selected-line Slot",
       "evidence": {
         "prefix_result_sha256": "b144051f2421597e27d96cf6f7aeb7e23200f1e1b9f7c2dabb5067880cac830c",
         "finish_rename_result_sha256": "a4c1bae9ffc768c1b83feb71cca7dc7e5a607964bc0aea8b2c1b325868e9af89"
-      }
+      },
+      "bounded_lower_revolve_passed": true,
+      "source_time_reached_seconds": 668.433
     },
     "physical_pixel_inputs": {
       "passed": 12,
@@ -95,12 +97,68 @@
       "second_view_rmse_pixels": 0.21375,
       "native_state_unchanged_during_navigation": true,
       "physical_source_navigation_inputs_verified": false,
-      "third_view_rmse_pixels": 0.13357490216641174
-    }
+      "third_view_rmse_pixels": 0.13357490216641174,
+      "fourth_view_rmse_pixels": 0.23153433181767327
+    },
+    "lower_solid": {
+      "mapped_actions_passed": 119,
+      "profile_geometry_count": 6,
+      "profile_persistent_ids": [
+        1,
+        3,
+        5,
+        7,
+        9,
+        10
+      ],
+      "profile_degrees_of_freedom": 0,
+      "native_valid": true,
+      "native_solids": 1,
+      "native_volume_mm3": 417471.8487692189,
+      "native_area_mm2": 31139.44342755714,
+      "source3_independent_csg_difference_mm3": [
+        0.0,
+        0.0
+      ],
+      "source3_wrong_radius_control_rejected": true,
+      "source3_exact_readback_all_fields_match": false,
+      "exact_readback_failures": [
+        "Master geometry XML signed zeros",
+        "Datum tiny X placement",
+        "Revolution quaternion final digits"
+      ],
+      "source3_to5_exact_sketch_comparisons": {
+        "Sketch1": {
+          "geometry": false,
+          "constraints": true,
+          "native_xml": false,
+          "externals": true,
+          "geometry_count": true,
+          "constraint_count": true
+        },
+        "Sketch4": {
+          "geometry": true,
+          "constraints": true,
+          "native_xml": true,
+          "externals": true,
+          "geometry_count": true,
+          "constraint_count": true
+        }
+      },
+      "full_tutorial_pass": false,
+      "physical_desktop": false
+    },
+    "known_limits": [
+      "Physical camera inputs and modifier release intervals remain unverified",
+      "Presentation annotation keys omitted with explicit reason; mapped source modelling order retained",
+      "Post-Revolve source master visibility and eye click are a separate candidate under test",
+      "Native checkpoint exact floating serialization and several earlier recovery gates remain open",
+      "No complete Receiver or100-tutorial claim"
+    ]
   },
   "tool_checks": {
-    "passed": 29,
-    "total": 29
+    "passed": 32,
+    "total": 32
   },
   "wire_visibility": {
     "actual_painter_check_passed": true,
@@ -109,7 +167,7 @@
   },
   "cohort_policy": "These bounded cohorts are distinct, not end-to-end tutorial success rates; no asymptotic completion forecast is inferred.",
   "dimension_checkpoint": {
-    "active_tests_passed": 259,
+    "active_tests_passed": 263,
     "focused_native_cases_passed": 5,
     "independent_cached_cases_passed": 2,
     "full_receiver_tutorial_pass": false,

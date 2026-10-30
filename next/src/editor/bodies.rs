@@ -542,7 +542,13 @@ impl Editor {
         let collapsed: Vec<bool> = rows
             .iter()
             .map(|object| {
+                let origin_plane = object["type"] == "App::Plane"
+                    && matches!(
+                        object["properties"]["Role"].as_str(),
+                        Some("XY_Plane" | "XZ_Plane" | "YZ_Plane")
+                    );
                 reference_object(object)
+                    && !origin_plane
                     && !members.contains(object["name"].as_str().unwrap_or_default())
             })
             .collect();

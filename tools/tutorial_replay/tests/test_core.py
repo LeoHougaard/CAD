@@ -25,6 +25,24 @@ class MappingTests(unittest.TestCase):
         mapping["bindings"]["canvas"] = binding
         self.assertEqual(compile_plan(self.trace([self.event()]), mapping)["actions"][0]["target"], binding)
 
+    def test_scene_entity_mapping_keeps_explicit_owner_and_axis_identity(self):
+        binding = {"kind": "sketch-element", "persistent_id": 8, "point": 0,
+                   "fraction": .75, "object_label": "MASTER LAYOUT", "construction_axis": True}
+        mapping = self.mapping()
+        mapping["bindings"]["canvas"] = binding
+        self.assertEqual(compile_plan(self.trace([self.event()]), mapping)["actions"][0]["target"], binding)
+
+    def test_scene_entity_mapping_rejects_missing_or_ambiguous_owner(self):
+        binding = {"kind": "sketch-element", "persistent_id": 8, "point": 0,
+                   "object_label": "MASTER LAYOUT", "construction_axis": True}
+        for bad in ({**binding, "object_label": ""}, {**binding, "object_label": False},
+                    {**binding, "construction_axis": "true"}, {**binding, "point": 1},
+                    {k: v for k, v in binding.items() if k != "object_label"}):
+            mapping = self.mapping()
+            mapping["bindings"]["canvas"] = bad
+            with self.subTest(bad=bad), self.assertRaises(TraceError):
+                compile_plan(self.trace([self.event()]), mapping)
+
     def test_native_entity_mapping_rejects_ambiguous_identity_or_point(self):
         valid = {"kind": "sketch-element", "persistent_id": 10, "point": 0, "fraction": .5}
         for mutation in ({"persistent_id": True}, {"persistent_id": 0}, {"point": True}, {"point": 3}, {"fraction": 1.1}):

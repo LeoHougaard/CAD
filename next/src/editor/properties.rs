@@ -18,6 +18,7 @@ pub(super) struct PropertyUi {
     reference: super::profile_references::ProfileReferenceUi,
     pub(super) axis_profile: Option<String>,
     pub(super) axis_pick: bool,
+    pub(super) axis_overlap: bool,
 }
 
 impl Editor {
@@ -278,6 +279,7 @@ impl Editor {
 
     pub(super) fn native_property_fields(&mut self, ui: &mut egui::Ui) {
         let selected = self.native_link_selection();
+        let axis_editable = !self.busy && !self.unavailable();
         let draft = self.draft.as_mut().unwrap();
         ui.label(&draft.name);
         if self.property_ui.axis_profile.is_some() {
@@ -288,7 +290,39 @@ impl Editor {
                 self.property_ui.axis_pick = true;
             }
             if self.property_ui.axis_pick {
-                ui.label("Pick the horizontal or vertical sketch axis");
+                ui.label(
+                    "Pick a visible construction line or the profile's horizontal or vertical axis",
+                );
+            }
+            if let Some(master) = draft.parameters["construction_axis"]["master"].as_str() {
+                ui.label(format!("Axis dependency: construction line in {master}"));
+            }
+            if self.property_ui.axis_overlap {
+                ui.label("Axes overlap here. The construction line is selected.");
+            }
+            if let Some(profile) = &self.property_ui.axis_profile {
+                ui.add_enabled_ui(axis_editable, |ui| {
+                    ui.horizontal(|ui| {
+                        for (label, axis) in
+                            [("Profile H axis", "H_Axis"), ("Profile V axis", "V_Axis")]
+                        {
+                            if ui.button(label).clicked() {
+                                draft
+                                    .parameters
+                                    .as_object_mut()
+                                    .unwrap()
+                                    .remove("construction_axis");
+                                draft.parameters["properties"]["ReferenceAxis"] =
+                                    json!({"link":profile,"subelements":[axis]});
+                                draft.changed = Some(Instant::now());
+                                draft.valid = false;
+                                self.property_ui.axis_pick = false;
+                                self.property_ui.axis_overlap = false;
+                                self.viewport.set_sketch(None);
+                            }
+                        }
+                    });
+                });
             }
         }
         if let Some(error) = &self.error {

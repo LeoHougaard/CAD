@@ -249,7 +249,9 @@ fn model_thread(
                 call(&mut worker, "topology", parameters),
             ) {
                 (Ok(m), Ok(t))
-                    if m["revision"] == current["revision"]
+                    if m["document"] == current["document"]
+                        && t["document"] == current["document"]
+                        && m["revision"] == current["revision"]
                         && t["revision"] == current["revision"]
                         && m["object"] == object
                         && t["object"] == object =>
@@ -1054,6 +1056,9 @@ impl Editor {
                         if ui.button("Pocket").clicked() {
                             self.feature_from_sketch("feature.pocket");
                         }
+                        if ui.button("Revolve").clicked() {
+                            self.feature_from_sketch("feature.revolution");
+                        }
                         if self.sketch_ui.session.is_none() && ui.button("Fillet").clicked() {
                             self.start_feature("feature.fillet");
                         }
@@ -1267,6 +1272,15 @@ impl Editor {
         let axis_profile = self.property_ui.axis_profile.as_deref();
         let axis_active = !self.unavailable()
             && self.property_ui.axis_pick
+            && !egui::Popup::is_any_open(ui.ctx())
+            && !workflow_guide::active(ui.ctx())
+            && !self.units_ui.active()
+            && !self.measurement_is_open()
+            && self.pending_file.is_none()
+            && self.file_dialog.is_none()
+            && !self.overwrite
+            && !self.exchange_ui.active()
+            && !self.file_browser.active()
             && self.draft.as_ref().is_some_and(|draft| {
                 draft.parameters["type"] == "PartDesign::Revolution"
                     && draft.parameters["properties"]["Profile"]["link"].as_str() == axis_profile
@@ -1297,6 +1311,10 @@ impl Editor {
         let before = self.viewport.selected.clone();
         self.viewport.view_cube_input_enabled = !sketch_input_blocked && !self.busy;
         let picked = self.viewport.ui(ui).is_some();
+        if axis_active && let Some(profile) = axis_profile {
+            self.viewport
+                .draw_construction_axes(ui.painter(), &self.state, profile);
+        }
         let cube_owns_pointer = self.viewport.view_cube_owns_pointer();
         if self.viewport.selected != before {
             if !self.measurement_keeps_selection(ui.input(|i| i.modifiers.shift)) {
@@ -1314,10 +1332,41 @@ impl Editor {
             && self.draft.is_some()
             && self.viewport.response.as_ref().is_some_and(|r| r.clicked())
             && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
-            && let Some(hit) = self.viewport.sketch_hit(pos)
-            && hit.point == 0
             && let Some(profile) = self.property_ui.axis_profile.clone()
         {
+            match self
+                .viewport
+                .construction_axis_hit(&self.state, &profile, pos)
+            {
+                Err(error) => {
+                    self.error = Some(error);
+                    return;
+                }
+                Ok(Some(mut axis)) => {
+                    self.property_ui.axis_overlap = self
+                        .viewport
+                        .sketch_axis_hit(pos)
+                        .is_some_and(|hit| hit.point == 0 && matches!(hit.index, -1 | -2));
+                    let helper = self.unique("RevolveAxis");
+                    let body = self.draft.as_ref().unwrap().parameters["body"].clone();
+                    self.error = None;
+                    axis["name"] = json!(helper);
+                    axis["body"] = body;
+                    axis["profile"] = json!(profile);
+                    if let Some(draft) = &mut self.draft {
+                        draft.parameters["construction_axis"] = axis;
+                        draft.changed = Some(Instant::now());
+                        draft.valid = false;
+                        self.property_ui.axis_pick = false;
+                        self.viewport.set_sketch(None);
+                    }
+                    return;
+                }
+                Ok(None) => {}
+            }
+            let Some(hit) = self.viewport.sketch_hit(pos).filter(|hit| hit.point == 0) else {
+                return;
+            };
             let subelement = match hit.index {
                 -1 => Some("H_Axis".to_owned()),
                 -2 => Some("V_Axis".to_owned()),
@@ -1329,6 +1378,13 @@ impl Editor {
             if let Some(subelement) = subelement
                 && let Some(draft) = &mut self.draft
             {
+                self.error = None;
+                self.property_ui.axis_overlap = false;
+                draft
+                    .parameters
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("construction_axis");
                 draft.parameters["properties"]["ReferenceAxis"] =
                     json!({"link":profile,"subelements":[subelement]});
                 draft.changed = Some(Instant::now());
@@ -1370,7 +1426,8 @@ impl eframe::App for Editor {
         let was_busy = self.busy;
         let shortcut_menu_was_open = shortcut_menu::is_open(ctx);
         let rename_was_open = rename::is_open(ctx);
-        let shortcut_blocked = rename_was_open || self.busy
+        let shortcut_blocked = rename_was_open
+            || self.busy
             || egui::Popup::is_any_open(ctx)
             || self.unavailable()
             || self.units_ui.active()

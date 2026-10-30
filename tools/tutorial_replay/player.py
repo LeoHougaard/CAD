@@ -16,6 +16,10 @@ SELECTOR = "editor::sketch::lifecycle_tests::video_replay::tutorial_replay_from_
 def validate_plan(plan):
     if plan.get("version") != 1 or not isinstance(plan.get("actions"), list):
         raise TraceError("unsupported replay plan")
+    if "verification_save" in plan:
+        name = plan["verification_save"]
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+\.FCStd", name) or len(name) <= 6:
+            raise TraceError("verification save must be a native filename within the owned output")
     events, overrides = [], {}
     for original in plan["actions"]:
         event = {k: v for k, v in original.items() if k != "target"}

@@ -12,6 +12,98 @@ pub(super) struct DimensionHit {
 }
 
 impl Viewport {
+    fn construction_axes(&self, state: &Value, profile: &str) -> Vec<(Value, [Vec3; 2])> {
+        let objects = state["objects"].as_array().into_iter().flatten();
+        let body = objects
+            .clone()
+            .find(|o| o["name"] == profile)
+            .and_then(|o| o["body"].as_str());
+        let Some(body) = body else {
+            return Vec::new();
+        };
+        objects
+            .filter(|o| {
+                o["type"] == "Sketcher::SketchObject"
+                    && o["name"] != profile
+                    && o["body"] == body
+                    && o["effective_visibility"] == true
+            })
+            .flat_map(|o| {
+                let (origin, rotation) = super::placement(&o["global_placement"]);
+                o["sketch"]["geometry"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(move |g| {
+                        if g["kind"] != "line" || g["construction"] != true {
+                            return None;
+                        }
+                        let id = g["persistent_id"].as_i64()?;
+                        let owner = o["name"].as_str()?;
+                        let point = |v: &Value| -> Option<Vec3> {
+                            let xyz = [v[0].as_f64()?, v[1].as_f64()?, v[2].as_f64()?];
+                            if !xyz.iter().all(|x| x.is_finite()) {
+                                return None;
+                            }
+                            Some(
+                                origin
+                                    + rotation
+                                        * Vec3::new(xyz[0] as f32, xyz[1] as f32, xyz[2] as f32),
+                            )
+                        };
+                        Some((
+                            serde_json::json!({"master":owner,"geometry_id":id}),
+                            [point(&g["start"])?, point(&g["end"])?],
+                        ))
+                    })
+            })
+            .collect()
+    }
+
+    pub fn construction_axis_hit(
+        &self,
+        state: &Value,
+        profile: &str,
+        pos: Pos2,
+    ) -> Result<Option<Value>, String> {
+        let mut hits: Vec<_> = self
+            .construction_axes(state, profile)
+            .into_iter()
+            .filter_map(|(axis, line)| {
+                let a = self.project(line[0]).0;
+                let b = self.project(line[1]).0;
+                if a.distance_sq(b) < 1e-8 {
+                    return None;
+                }
+                let distance = segment_distance(pos, a, b).0;
+                (distance <= 6.).then_some((distance, axis))
+            })
+            .collect();
+        hits.sort_by(|a, b| a.0.total_cmp(&b.0));
+        if hits.len() > 1 && hits[1].0 - hits[0].0 < 1. {
+            return Err("More than one visible construction line is under the pointer".into());
+        }
+        Ok(hits.into_iter().next().map(|(_, axis)| axis))
+    }
+
+    pub fn draw_construction_axes(&self, painter: &egui::Painter, state: &Value, profile: &str) {
+        let stroke = Stroke::new(1.5_f32, Color32::from_rgb(85, 175, 235));
+        for (_, line) in self.construction_axes(state, profile) {
+            let a = self.project(line[0]).0;
+            let b = self.project(line[1]).0;
+            let length = a.distance(b);
+            if length < 1e-4 {
+                continue;
+            }
+            let count = (length / 12.).ceil().clamp(1., 2000.) as usize;
+            for i in 0..count {
+                let start = i as f32 / count as f32;
+                let end = ((i as f32 + 0.55) / count as f32).min(1.);
+                painter.line_segment([a.lerp(b, start), a.lerp(b, end)], stroke);
+            }
+        }
+    }
+
     pub fn clear_sketch_selection(&mut self) {
         self.sketch_selection.clear();
         self.sketch_pick_positions.clear();
@@ -107,6 +199,20 @@ impl Viewport {
                 ))
             })
             .collect()
+    }
+
+    /// Test the displayed native axes independently of endpoint/curve priority.
+    /// Axis-picking UI needs to report overlap even when normal sketch selection
+    /// correctly gives a nearby editable handle priority.
+    pub fn sketch_axis_hit(&self, pos: Pos2) -> Option<SketchElement> {
+        self.axis_segments()
+            .into_iter()
+            .filter_map(|(element, [a, b])| {
+                let distance = segment_distance(pos, a, b).0;
+                (distance <= 5.).then_some((distance, element))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, element)| element)
     }
 
     /// Only native handles explicitly verified for movement are drag targets.
@@ -934,6 +1040,40 @@ fn dimension_label(
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn construction_axis_pick_uses_visible_same_body_sketch_and_world_placement() {
+        let v = Viewport {
+            rect: Rect::from_min_size(Pos2::ZERO, egui::vec2(400., 400.)),
+            ..Viewport::default()
+        };
+        let state = json!({"objects":[
+            {"name":"Profile","type":"Sketcher::SketchObject","body":"Body"},
+            {"name":"Master","type":"Sketcher::SketchObject","body":"Body","effective_visibility":true,
+             "global_placement":{"position":[20,0,0],"rotation":[0,0,0,1]},
+             "sketch":{"geometry":[{"index":7,"persistent_id":83,"kind":"line","construction":true,
+                 "start":[0,0,0],"end":[0,10,0]}]}},
+            {"name":"Hidden","type":"Sketcher::SketchObject","body":"Body","effective_visibility":false,
+             "sketch":{"geometry":[{"persistent_id":1,"kind":"line","construction":true,"start":[0,0,0],"end":[0,10,0]}]}},
+            {"name":"OtherBody","type":"Sketcher::SketchObject","body":"Elsewhere","effective_visibility":true,
+             "sketch":{"geometry":[{"persistent_id":2,"kind":"line","construction":true,"start":[0,0,0],"end":[0,10,0]}]}}
+        ]});
+        let hit = v
+            .construction_axis_hit(&state, "Profile", v.project(Vec3::new(20., 5., 0.)).0)
+            .unwrap();
+        assert_eq!(hit, Some(json!({"master":"Master","geometry_id":83})));
+        assert_eq!(v.construction_axes(&state, "Profile").len(), 1);
+        let mut overlapping = state.clone();
+        let mut duplicate = overlapping["objects"][1].clone();
+        duplicate["name"] = json!("Duplicate");
+        overlapping["objects"]
+            .as_array_mut()
+            .unwrap()
+            .push(duplicate);
+        assert!(
+            v.construction_axis_hit(&overlapping, "Profile", v.project(Vec3::new(20., 5., 0.)).0)
+                .is_err()
+        );
+    }
     fn snapshot() -> Value {
         json!({"name":"Sketch","sketch":{"degrees_of_freedom":4,"geometry":[
             {"index":0,"kind":"line","start":[10,10,0],"end":[30,10,0]},
@@ -964,6 +1104,26 @@ mod tests {
             let center = viewport.sketch_screen_point([0., 0., 0.]);
             assert_eq!(hit.segments[0][0].x > center.x, right);
             assert_eq!(viewport.dimension_hit(hit.label.center()), Some(0));
+        }
+    }
+
+    #[test]
+    fn native_axis_overlap_is_detected_under_origin_endpoints_and_curves() {
+        let mut viewport = viewport();
+        let sketch = json!({"name":"Profile","sketch":{
+            "geometry":[{"index":0,"kind":"line","start":[0,0,0],"end":[0,40,0]}],
+            "axes":[{"index":-1,"kind":"line","start":[0,0,0],"end":[1,0,0]},
+                    {"index":-2,"kind":"line","start":[0,0,0],"end":[0,1,0]}],
+            "constraints":[]}});
+        viewport.set_sketch(Some(sketch));
+        viewport.align_sketch();
+        for point in [[0., 0., 0.], [0., 40., 0.], [0., 20., 0.]] {
+            let pos = viewport.sketch_screen_point(point);
+            let ordinary = viewport.sketch_hit(pos).unwrap();
+            assert!(ordinary.point != 0 || ordinary.index >= 0);
+            let axis = viewport.sketch_axis_hit(pos).unwrap();
+            assert_eq!(axis.point, 0);
+            assert!(matches!(axis.index, -1 | -2));
         }
     }
 

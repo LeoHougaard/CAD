@@ -100,6 +100,30 @@ pub fn build(parameters: &Value) -> Result<Vec<Value>, String> {
         edits.extend(build(&candidate)?);
         return Ok(edits);
     }
+    if let Some(axis) = parameters.get("construction_axis") {
+        if parameters["create"] != true
+            || parameters["type"] != "PartDesign::Revolution"
+            || axis["profile"] != parameters["properties"]["Profile"]["link"]
+            || axis["body"] != parameters["body"]
+        {
+            return Err("Construction axis does not match this Revolution task".into());
+        }
+        let helper = axis["name"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .ok_or("Missing axis dependency name")?;
+        let mut candidate = parameters.clone();
+        candidate
+            .as_object_mut()
+            .unwrap()
+            .remove("construction_axis");
+        candidate["properties"]["ReferenceAxis"] = json!({"link":helper,"subelements":[""]});
+        let mut edit = axis.clone();
+        edit["op"] = json!("create_revolve_axis");
+        let mut edits = vec![edit];
+        edits.extend(build(&candidate)?);
+        return Ok(edits);
+    }
     if parameters["transformations"].is_array() {
         return crate::transform_commands::build(parameters);
     }
@@ -358,6 +382,28 @@ pub fn selected_links(selections: &[(String, String)], subelements: bool) -> Val
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn revolve_axis_dependency_is_created_before_the_revolution() {
+        let p = json!({"type":"PartDesign::Revolution","name":"Revolution","body":"Body",
+            "create":true,"properties":{"Profile":{"link":"Profile"},
+                "ReferenceAxis":{"link":"Profile","subelements":["V_Axis"]}},"expressions":{},
+            "construction_axis":{"name":"RevolveAxis","master":"Master","geometry_id":42,
+                "body":"Body","profile":"Profile"}});
+        let edits = build(&p).unwrap();
+        assert_eq!(edits[0]["op"], "create_revolve_axis");
+        assert_eq!(edits[0]["geometry_id"], 42);
+        assert!(edits.iter().any(|e| e["op"] == "set"
+            && e["object"] == "Revolution"
+            && e["property"] == "ReferenceAxis"
+            && e["value"] == json!({"link":"RevolveAxis","subelements":[""]})));
+        let mut stale = p.clone();
+        stale["construction_axis"]["profile"] = json!("Other");
+        assert!(build(&stale).is_err());
+        stale = p.clone();
+        stale["create"] = json!(false);
+        assert!(build(&stale).is_err());
+    }
     #[test]
     fn reference_choices_compose_before_profile_assignment_and_preserve_task_source_and_tip() {
         let state = json!({"objects":[

@@ -178,10 +178,13 @@ fn actor_fixture() {
                     } else {
                         request["object"].clone()
                     };
-                    Ok(
-                        json!({"document":document,"object":object,"revision":revision,
-                        "fixture_events":events,"open_documents":documents.keys().collect::<Vec<_>>()}),
-                    )
+                    let owner = if second && doc.display_failure == "wrong_document" {
+                        "Foreign"
+                    } else {
+                        document
+                    };
+                    Ok(json!({"document":owner,"object":object,"revision":revision,
+                        "fixture_events":events,"open_documents":documents.keys().collect::<Vec<_>>()}))
                 }
                 _ => Err(("unsupported_operation", "fixture operation unsupported")),
             }
@@ -225,7 +228,12 @@ fn multiple_body_display_requires_matching_identity_and_revision_for_every_objec
     assert_eq!(initial.scenes[0].0["object"], "ShapeA");
     assert_eq!(initial.scenes[1].0["object"], "ShapeB");
     let mut state = initial.state;
-    for failure in ["second_mesh", "wrong_object", "stale_second"] {
+    for failure in [
+        "second_mesh",
+        "wrong_object",
+        "wrong_document",
+        "stale_second",
+    ] {
         let edited = actor.edit(&state, failure);
         assert!(edited.accepted && edited.error.is_some());
         assert!(

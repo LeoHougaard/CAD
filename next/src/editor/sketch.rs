@@ -11,6 +11,7 @@ pub(super) struct SketchUi {
     pub(super) tool: Tool,
     points: Vec<[f64; 3]>,
     snaps: Vec<Option<SketchElement>>,
+    scene_snaps: Vec<Option<SceneSnap>>,
     pub(super) construction: bool,
     pub(super) dimension: Option<DimensionEdit>,
     mirror_selection_owner: Option<Value>,
@@ -45,6 +46,7 @@ impl Default for SketchUi {
             tool: Tool::Select,
             points: vec![],
             snaps: vec![],
+            scene_snaps: vec![],
             construction: false,
             dimension: None,
             mirror_selection_owner: None,
@@ -117,9 +119,21 @@ impl SketchUi {
         self.dimension_tool = None;
         self.points.clear();
         self.snaps.clear();
+        self.scene_snaps.clear();
         self.continuation = None;
         self.inline_line = None;
     }
+}
+#[derive(Clone)]
+struct SceneSnap {
+    document: Value,
+    revision: Value,
+    sketch: String,
+    session: String,
+    source: String,
+    subelement: String,
+    mapped_name: String,
+    point: [f64; 3],
 }
 pub(super) struct DimensionTool {
     document: Value,
@@ -340,6 +354,7 @@ impl Editor {
                 if let Some(point) = self.viewport.geometry_point(element) {
                     self.sketch_ui.points = vec![point];
                     self.sketch_ui.snaps = vec![Some(element)];
+                    self.sketch_ui.scene_snaps = vec![None];
                     self.inline_line_begin(index);
                 }
             }
@@ -781,9 +796,90 @@ impl Editor {
         }
         Some((point, None))
     }
-    fn draw_point(&mut self, point: [f64; 3], snap: Option<SketchElement>, infer: bool) {
+    fn scene_snap(&self, pos: egui::Pos2) -> Result<Option<SceneSnap>, String> {
+        let hits: Vec<_> = self
+            .viewport
+            .scene_vertices_at(pos)
+            .into_iter()
+            .filter(|hit| {
+                // This path projects sketch references. Ordinary drawing near a
+                // solid vertex must not become an unsupported-reference error.
+                // An unknown owner is retained so stale scene data fails closed.
+                super::objects(&self.state)
+                    .iter()
+                    .find(|o| o["name"] == hit.object)
+                    .is_none_or(|o| o["type"] == "Sketcher::SketchObject")
+            })
+            .collect();
+        if hits.is_empty() {
+            return Ok(None);
+        }
+        if hits.len() != 1 {
+            return Err("More than one visible native vertex is under the pointer".into());
+        }
+        let hit = &hits[0];
+        let source = super::objects(&self.state)
+            .iter()
+            .find(|o| o["name"] == hit.object)
+            .ok_or("Scene vertex owner is unavailable")?;
+        let revision = self.state["revision"]
+            .as_u64()
+            .ok_or("Document revision is unavailable")?;
+        if self.state["document"].as_str().is_none_or(str::is_empty) {
+            return Err("Document owner is unavailable".into());
+        }
+        if source["type"] != "Sketcher::SketchObject"
+            || source["effective_visibility"] != true
+            || self.sketch.as_deref() == Some(hit.object.as_str())
+            || hit.revision != Some(revision)
+            || hit.point[2].abs() > 1e-4
+        {
+            return Err("Choose a visible, current vertex of another coplanar sketch".into());
+        }
+        let mapped_name = hit
+            .mapped_name
+            .clone()
+            .filter(|s| !s.is_empty())
+            .ok_or("Native vertex has no persistent mapped name")?;
+        if !hit.subelement.strip_prefix("Vertex").is_some_and(|s| {
+            !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit()) && !s.starts_with('0')
+        }) {
+            return Err("Native vertex name is invalid".into());
+        }
+        let sketch = self.sketch.clone().ok_or("Active sketch is unavailable")?;
+        let session = self
+            .sketch_ui
+            .session
+            .clone()
+            .filter(|s| !s.is_empty())
+            .ok_or("Sketch session is unavailable")?;
+        Ok(Some(SceneSnap {
+            document: self.state["document"].clone(),
+            revision: self.state["revision"].clone(),
+            sketch,
+            session,
+            source: hit.object.clone(),
+            subelement: hit.subelement.clone(),
+            mapped_name,
+            point: [hit.point[0], hit.point[1], 0.],
+        }))
+    }
+    fn scene_snap_current(&self, pick: &SceneSnap) -> bool {
+        self.state["document"] == pick.document
+            && self.state["revision"] == pick.revision
+            && self.sketch.as_deref() == Some(pick.sketch.as_str())
+            && self.sketch_ui.session.as_deref() == Some(pick.session.as_str())
+    }
+    fn draw_point(
+        &mut self,
+        point: [f64; 3],
+        snap: Option<SketchElement>,
+        scene_snap: Option<SceneSnap>,
+        infer: bool,
+    ) {
         self.sketch_ui.points.push(point);
         self.sketch_ui.snaps.push(snap);
+        self.sketch_ui.scene_snaps.push(scene_snap);
         if matches!(self.sketch_ui.tool, Tool::BSpline | Tool::PeriodicBSpline) {
             return;
         }
@@ -795,6 +891,17 @@ impl Editor {
         };
         let tool = self.sketch_ui.tool;
         if self.sketch_ui.points.len() < tool.required_points() {
+            return;
+        }
+        if self
+            .sketch_ui
+            .scene_snaps
+            .iter()
+            .flatten()
+            .any(|pick| !self.scene_snap_current(pick))
+        {
+            self.sketch_ui.clear_points();
+            self.error = Some("Sketch or source changed before the line was committed".into());
             return;
         }
         let count = self
@@ -822,9 +929,19 @@ impl Editor {
                 self.error = Some(e);
                 self.sketch_ui.points.pop();
                 self.sketch_ui.snaps.pop();
+                self.sketch_ui.scene_snaps.pop();
                 return;
             }
         };
+        if tool == Tool::Line {
+            for (point, pick) in self.sketch_ui.scene_snaps.iter().enumerate() {
+                if let Some(pick) = pick {
+                    edits.push(json!({"op":"auto_external_coincident","object":object,
+                        "index":count,"point":point + 1,"source":pick.source,
+                        "subelement":pick.subelement,"mapped_name":pick.mapped_name}));
+                }
+            }
+        }
         if infer && matches!(tool, Tool::Line | Tool::Polyline) {
             let p = &self.sketch_ui.points;
             let kind = if (p[0][0] - p[1][0]).abs() < 1e-9 {
@@ -848,7 +965,15 @@ impl Editor {
                 _ => false,
             };
             if let Some(kind) = kind
-                && (self.sketch_ui.snaps.iter().filter(|s| s.is_some()).count() < 2 || axis_snap)
+                && (self.sketch_ui.snaps.iter().filter(|s| s.is_some()).count()
+                    + self
+                        .sketch_ui
+                        .scene_snaps
+                        .iter()
+                        .filter(|s| s.is_some())
+                        .count()
+                    < 2
+                    || axis_snap)
             {
                 edits.push(json!({"op":"constraint","object":object,"kind":kind,"args":[count]}));
             }
@@ -939,7 +1064,19 @@ impl Editor {
             && response.hovered()
             && self.sketch_ui.tool != Tool::Select
         {
-            let cursor = self.snap(pos, alt);
+            let mut cursor = self.snap(pos, alt);
+            let scene_cursor = !alt
+                && !input_blocked
+                && self.sketch_ui.tool == Tool::Line
+                && !cursor.is_some_and(|(_, snap)| snap.is_some_and(|hit| hit.point != 0))
+                && self.scene_snap(pos).is_ok_and(|pick| {
+                    if let Some(pick) = pick {
+                        cursor = Some((pick.point, None));
+                        true
+                    } else {
+                        false
+                    }
+                });
             super::drawing::preview(
                 ui.painter(),
                 &self.viewport,
@@ -947,7 +1084,7 @@ impl Editor {
                 &self.sketch_ui.points,
                 cursor.map(|p| p.0),
             );
-            if cursor.is_some_and(|p| p.1.is_some()) {
+            if scene_cursor || cursor.is_some_and(|p| p.1.is_some()) {
                 ui.painter().circle_stroke(
                     pos,
                     6.,
@@ -1066,9 +1203,31 @@ impl Editor {
                 return;
             }
             if self.sketch_ui.tool != Tool::Select
-                && let Some((point, snap)) = self.snap(pos, alt)
+                && let Some((mut point, mut snap)) = self.snap(pos, alt)
             {
-                self.draw_point(point, snap, !alt);
+                if input_blocked {
+                    return;
+                }
+                let mut external = None;
+                if !alt
+                    && !input_blocked
+                    && self.sketch_ui.tool == Tool::Line
+                    && !snap.is_some_and(|hit| hit.point != 0)
+                {
+                    match self.scene_snap(pos) {
+                        Ok(Some(pick)) => {
+                            point = pick.point;
+                            snap = None;
+                            external = Some(pick);
+                        }
+                        Ok(None) => (),
+                        Err(error) => {
+                            self.error = Some(error);
+                            return;
+                        }
+                    }
+                }
+                self.draw_point(point, snap, external, !alt);
             } else {
                 self.sketch_ui.selected_constraint = None;
             }

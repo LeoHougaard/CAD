@@ -50,7 +50,7 @@ OPERATIONS += ["assembly_sources"]
 EDIT_OPERATIONS = ["add_object", "set", "expression", "geometry", "constraint",
                    "datum", "move_geometry", "construction", "delete_geometry", "delete_constraint", "refraction", "via_point",
                    "constraint_state", "trim_geometry", "remove_object", "binder_support",
-                   "expose_internal", "external_geometry", "external_state", "delete_external", "import_exchange", "detach_sketch"]
+                   "expose_internal", "external_geometry", "auto_external_coincident", "external_state", "delete_external", "import_exchange", "detach_sketch"]
 EDIT_OPERATIONS += sorted(AssemblyAuthoring.OPERATIONS)
 EDIT_OPERATIONS += list(SketchOperations.OPERATIONS)
 EDIT_OPERATIONS += list(FeatureHistory.OPERATIONS)
@@ -872,6 +872,80 @@ def set_boolean_tools(feature, tools):
     feature.Group = tools
 
 
+def auto_external_coincident(doc, obj, edit):
+    """Attach a new line endpoint to a verified current native sketch vertex.
+
+    This runs inside the existing owned sketch transaction and journal action.
+    It never derives an external solver index from source order or position.
+    """
+    session = _native_sketch_sessions.get(doc.Name)
+    if session is None or session["object"] != obj.Name:
+        fail("sketch_owner", "Automatic projection requires the active sketch session")
+    source = object_in(doc, edit.get("source"))
+    if (source == obj or source.Document != doc or source.TypeId != "Sketcher::SketchObject"
+            or not effective_visibility(source) or obj in source.OutListRecursive):
+        fail("invalid_geometry", "Source must be a visible independent sketch in this document")
+    subelement, mapped = edit.get("subelement"), edit.get("mapped_name")
+    if (not isinstance(subelement, str) or re.fullmatch(r"Vertex[1-9][0-9]*", subelement) is None
+            or not isinstance(mapped, str) or not mapped
+            or source.Shape.isNull() or source.Shape.getElementMappedName(subelement) != mapped):
+        fail("stale_reference", "Native source vertex identity changed or is unavailable")
+    index, point = edit.get("index"), edit.get("point")
+    if (type(index) is not int or not 0 <= index < obj.GeometryCount
+            or type(point) is not int or point not in (1, 2)
+            or not isinstance(obj.Geometry[index], Part.LineSegment)):
+        fail("invalid_geometry", "Automatic projection requires a native line endpoint")
+    source_placement, target_placement = source.getGlobalPlacement(), obj.getGlobalPlacement()
+    source_normal = source_placement.Rotation.multVec(App.Vector(0, 0, 1))
+    target_normal = target_placement.Rotation.multVec(App.Vector(0, 0, 1))
+    if (source_normal.cross(target_normal).Length > 1e-9 or
+            abs((source_placement.Base - target_placement.Base).dot(target_normal)) > 1e-7):
+        fail("invalid_geometry", "Automatic projection requires coplanar sketches")
+    before = SketchGeometry.externals(obj)
+    if any(not e.get("persistent_reference") or e.get("source") is None
+           or e.get("missing") is not False or e.get("frozen") is not False
+           or type(e.get("defining")) is not bool or type(e.get("projection")) is not bool
+           or type(e.get("intersection")) is not bool for e in before):
+        fail("invalid_geometry", "Existing native external metadata is unresolved")
+    source_link = {"link": source.Name, "subelements": [subelement]}
+    candidates = [e for e in before if e["source"] == source_link]
+    if len(candidates) > 1:
+        fail("invalid_geometry", "Native source vertex has ambiguous external ownership")
+    if not candidates:
+        try:
+            SketchGeometry.external_edit(obj, {"op": "external_geometry", "source": source.Name,
+                                               "subelement": subelement})
+        except (SketchGeometry.GeometryError, ValueError, TypeError, KeyError) as error:
+            fail("invalid_geometry", str(error))
+        if obj.solve() != 0:
+            fail("invalid_model", "Native sketch solver rejected the projected vertex")
+        candidates = [e for e in SketchGeometry.externals(obj) if e["source"] == source_link]
+    if len(candidates) != 1:
+        fail("invalid_geometry", "Native projected vertex ownership could not be resolved")
+    entry = candidates[0]
+    allowed_refs = {source.Name + "." + mapped, source.Name + ".;" + mapped.lstrip(";")}
+    handles = entry["geometry"].get("handles", [])
+    if (entry["persistent_reference"] not in allowed_refs or entry["missing"] is not False
+            or entry["frozen"] is not False or entry["projection"] is not True
+            or entry["intersection"] is not False or entry["defining"] is not False
+            or entry["geometry"]["kind"] != "point" or len(handles) != 1
+            or handles[0].get("index") != entry["geometry_index"]
+            or handles[0].get("point") != 1 or handles[0].get("draggable") is not False):
+        fail("invalid_geometry", "Native projected vertex metadata is incomplete or ambiguous")
+    signed = entry["geometry_index"]
+    if type(signed) is not int or signed > -3:
+        fail("invalid_geometry", "Native projected vertex has an invalid solver identity")
+    try:
+        SketchGeometry.validate_constraint("Coincident", [index, point, signed, 1])
+    except SketchGeometry.GeometryError as error:
+        fail("invalid_geometry", str(error))
+    constraint = obj.addConstraint(Sketcher.Constraint("Coincident", index, point, signed, 1))
+    if constraint < 0:
+        fail("invalid_model", "Native Coincident constraint failed")
+    return {"object": obj.Name, "index": constraint, "external": signed,
+            "persistent_reference": entry["persistent_reference"]}
+
+
 def apply_edit(doc, edit):
     result = apply_native_edit(doc, edit)
     check_suppression()
@@ -938,6 +1012,10 @@ def apply_native_edit(doc, edit):
             obj.MapMode = "FlatFace"
         return {"object": obj.Name}
     obj = object_in(doc, edit["object"])
+    if op == "auto_external_coincident":
+        if not obj.isDerivedFrom("Sketcher::SketchObject"):
+            fail("invalid_request", "Automatic projection requires a native SketchObject")
+        return auto_external_coincident(doc, obj, edit)
     if op == "binder_support":
         if obj.TypeId not in {"PartDesign::ShapeBinder", "PartDesign::SubShapeBinder"}:
             fail("invalid_request", "Binder support requires a native ShapeBinder or SubShapeBinder")
@@ -1277,6 +1355,17 @@ def sketch_transaction(doc, request):
     session = _native_sketch_sessions[doc.Name]
     edits = request["edits"]
     sketch_edits(doc, edits)
+    automatic = [edit for edit in edits if edit.get("op") == "auto_external_coincident"]
+    if automatic:
+        target = object_in(doc, session["object"])
+        points = [e.get("point") for e in automatic]
+        if (len(automatic) > 2 or any(type(p) is not int or p not in (1, 2) for p in points)
+                or len(set(points)) != len(points)
+                or any(e.get("index") != target.GeometryCount for e in automatic)
+                or edits[0].get("op") != "geometry" or edits[0].get("kind") != "line"
+                or sum(e.get("op") == "geometry" for e in edits) != 1
+                or any(e.get("op") not in {"geometry", "constraint", "auto_external_coincident"} for e in edits)):
+            fail("invalid_request", "Automatic projection belongs to one newly drawn line")
     staged = False
     try:
         if not session["opened"]:
@@ -1429,6 +1518,58 @@ def sketch_preview(doc, request, active):
     return {"document": doc.Name, "revision": revision_request("current", doc.Name), "edits": results, "state": state}
 
 
+def apply_preview_edit(doc, edit):
+    if edit.get("op") != "create_revolve_axis":
+        return apply_edit(doc, edit)
+    master = object_in(doc, edit["master"])
+    profile = object_in(doc, edit["profile"])
+    body = object_in(doc, edit["body"])
+    key = name(edit["name"])
+    geometry_id = edit.get("geometry_id")
+    if (master.TypeId != "Sketcher::SketchObject" or profile.TypeId != "Sketcher::SketchObject"
+            or master == profile or not body.isDerivedFrom("PartDesign::Body")
+            or owner_body(profile) != body or owner_body(master) != body or type(geometry_id) is not int
+            or not effective_visibility(master)):
+        fail("stale_reference", "Choose a visible construction line on another sketch in this document")
+    if body in master.OutListRecursive or profile in master.OutListRecursive:
+        fail("invalid_request", "Construction axis would create a native dependency cycle")
+    matches = [index for index in range(master.GeometryCount) if master.getGeometryId(index) == geometry_id]
+    if (len(matches) != 1 or not master.getConstruction(matches[0])
+            or not isinstance(master.Geometry[matches[0]], Part.LineSegment)):
+        fail("stale_reference", "The selected construction line no longer exists")
+    if doc.getObject(key):
+        fail("name_conflict", "Axis dependency name already exists: " + key)
+    axis = body.newObject("PartDesign::Line", key)
+    if axis.Name != key:
+        fail("invalid_request", "FreeCAD changed the requested axis dependency name")
+    axis.Label = "Revolve axis dependency"
+    axis.AttachmentSupport = [(master, ["edge" + str(matches[0] + 1)])]
+    axis.MapMode = "TwoPointLine"
+    axis.Visibility = False
+    return {"object": axis.Name, "master": master.Name, "master_id": master.ID,
+            "geometry_id": geometry_id, "index": matches[0]}
+
+
+def validate_revolve_axis_preview(edits):
+    axes = [edit for edit in edits if isinstance(edit, dict) and edit.get("op") == "create_revolve_axis"]
+    if not axes:
+        return
+    axis = axes[0]
+    features = [edit for edit in edits if isinstance(edit, dict) and edit.get("op") == "add_object"
+                and edit.get("type") == "PartDesign::Revolution"]
+    if len(axes) != 1 or edits[0] != axis or len(features) != 1 or features[0].get("body") != axis.get("body"):
+        fail("invalid_request", "A construction-axis dependency requires one new Revolution preview")
+    feature = features[0].get("name")
+    def has_link(prop, target, subs=None):
+        return any(edit.get("op") == "set" and edit.get("object") == feature
+                   and edit.get("property") == prop and isinstance(edit.get("value"), dict)
+                   and edit["value"].get("link") == target
+                   and (subs is None or edit["value"].get("subelements") == subs)
+                   for edit in edits if isinstance(edit, dict))
+    if not has_link("Profile", axis.get("profile")) or not has_link("ReferenceAxis", axis.get("name"), [""]):
+        fail("invalid_request", "The Revolution must use the selected profile and its new axis dependency")
+
+
 def preview(doc, request):
     lease("preview_validate", doc.Name, request=request)
     active = _native_previews.get(doc.Name)
@@ -1465,6 +1606,7 @@ def preview(doc, request):
     edits = request.get("edits")
     if not isinstance(edits, list) or not edits:
         fail("invalid_request", "Preview requires a nonempty edits list")
+    validate_revolve_axis_preview(edits)
     preflight_constraints(edits)
     label = preview_ready(doc, request)
     prepare_assembly_sources(doc, edits, active is not None)
@@ -1480,7 +1622,7 @@ def preview(doc, request):
     doc.openTransaction(label)
     staged = False
     try:
-        results = [apply_edit(doc, edit) for edit in edits]
+        results = [apply_preview_edit(doc, edit) for edit in edits]
         if recompute_document(doc) is False:
             fail("invalid_model", "Native recompute failed")
         validate(doc)
@@ -1498,7 +1640,7 @@ def preview(doc, request):
             if active:
                 doc.openTransaction(active["label"])
                 for edit in active["edits"]:
-                    apply_edit(doc, edit)
+                    apply_preview_edit(doc, edit)
                 recompute_document(doc)
             validate(doc)
         except Exception:
