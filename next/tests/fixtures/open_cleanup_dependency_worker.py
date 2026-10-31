@@ -153,7 +153,10 @@ def observed_close(key):
         raise RuntimeError('independent Close fault '+key)
     if key in fault.get('close_fail',[]) or Path(w.App.getDocument(key).FileName).name in fault.get('close_fail_files',[]):raise RuntimeError('independent Close fault '+key)
     if key in fault.get('close_noop',[]):return None
+    filename=Path(w.App.getDocument(key).FileName).name
     result=close(key);events.append(dict(event='native_closed',key=key,remaining=sorted(w.App.listDocuments())))
+    if filename in fault.get('close_after_files',[]):
+        raise RuntimeError('independent post-Close fault '+key)
     return result
 def observed_detach(key):
     assert key not in w.App.listDocuments(),key

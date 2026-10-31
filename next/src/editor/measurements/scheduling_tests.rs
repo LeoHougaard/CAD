@@ -149,7 +149,8 @@ fn native_measure_failed_current_read_does_not_spin_and_clear_close_release_read
     let owner = n.editor.state.clone();
     let dirty = n.editor.dirty;
     select(&mut n, "Edge999");
-    n.key(Key::OpenBracket, egui::Modifiers::NONE);
+    n.click("Measure");
+    assert!(n.editor.measurement_ui.open && n.editor.busy);
     n.receive("measure", false);
     let error = n.editor.measurement_ui.error.clone();
     assert!(error.is_some());
@@ -191,7 +192,8 @@ fn native_measure_failed_current_read_does_not_spin_and_clear_close_release_read
     n.receive("measure", true);
     assert!(!n.editor.measurement_ui.open && n.editor.measurement_ui.result.is_none());
     quiet(&mut n);
-    n.key(Key::OpenBracket, egui::Modifiers::NONE);
+    n.click("Measure");
+    assert!(n.editor.measurement_ui.open && n.editor.busy);
     n.receive("measure", true);
     quiet(&mut n);
     assert_eq!(n.editor.state, owner);

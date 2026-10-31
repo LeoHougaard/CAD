@@ -239,6 +239,7 @@ fn selected_line_slot_invalid_width_cancel_and_owner_guards() {
     slot(&mut n);
     let twenty = sk(&n);
     native_slot(&twenty, 20.);
+    n.send("inspect", json!({"lifecycle_profile":"capture"}), true);
     open_width(&mut n);
     n.click("Offset");
     assert!(n.editor.sketch_ui.dimension.is_some());
@@ -275,7 +276,23 @@ fn selected_line_slot_invalid_width_cancel_and_owner_guards() {
     assert_eq!(sk(&n)["geometry_count"], 1);
     n.send("redo", json!({}), true);
     native_slot(&sk(&n), 20.);
-    assert_eq!(sk(&n)["native_xml"], twenty["native_xml"]);
+    for field in [
+        "Constraints",
+        "ExpressionEngine",
+        "constraints",
+        "expressions",
+        "persistent_ids",
+        "element_map",
+        "dof",
+    ] {
+        assert_eq!(
+            sk(&n)["native_xml"].get(field).expect("Redo native field"),
+            twenty["native_xml"]
+                .get(field)
+                .expect("accepted native field")
+        );
+    }
+    n.send("inspect", json!({"lifecycle_profile":"compare"}), true);
     let token = n.editor.sketch_ui.session.clone().unwrap();
     n.send("sketch_cancel", json!({"token":token}), true);
     assert_eq!(sk(&n)["geometry_count"], 1);

@@ -571,8 +571,8 @@ fn receiver_inline_invalid_units_remain_editable() {
         .push(json!({"control":"invalid unit rejected, corrected explicit mm", "sketch":sketch}));
     // This click snaps the second endpoint onto the vertical axis. The
     // other endpoint is fixed at x=-25, so 20 mm cannot be solved.
-    let origin = n.editor.viewport.sketch_screen_point([0., 0., 0.]);
-    pointer(&mut n, origin);
+    let axis_point = n.editor.viewport.sketch_screen_point([0., 10., 0.]);
+    pointer(&mut n, axis_point);
     n.receive("transaction", true);
     let fixed = n.editor.state.clone();
     let constraints = object(&fixed, &name)["sketch"]["constraints"]

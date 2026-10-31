@@ -64,6 +64,7 @@ def dispatch_fault(request):
     global remaining, fail_cleanup_undo, fail_close
     with trace.open("a", encoding="utf-8") as output:
         output.write(json.dumps(request) + "\n")
+    profile = request.pop("lifecycle_profile", None)
     fault = request.pop("lifecycle_fault", None)
     remaining = {"validate_once": 1, "validate_twice": 2}.get(fault, 0)
     if request.pop("lifecycle_fail_cleanup_undo", False):
@@ -74,7 +75,12 @@ def dispatch_fault(request):
         fail_cleanup_undo = False
         remaining = 1
     try:
-        return dispatch(request)
+        result = dispatch(request)
+        if profile is not None:
+            assert request.get("op") == "inspect", "Slot oracle requires a read-only inspect"
+            import slot_geometry_oracle
+            slot_geometry_oracle.observe(worker, worker.App.getDocument(request["document"]), profile)
+        return result
     finally:
         remaining = 0
 

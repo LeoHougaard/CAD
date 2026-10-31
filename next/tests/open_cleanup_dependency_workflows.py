@@ -154,8 +154,28 @@ try:
     call('inspect',document=follower);call('close',document=follower)
     call('close',document=properties)
     assert facts()['documents'][q]==qnative
-    call('open',path=str(source),error='assembly_proxy_restore')
+    retry=call('open',path=str(source),error='assembly_proxy_restore')
     assert q not in facts()['documents'];before=exact(keeper,before)
+    after_close=facts()
+    assert q not in after_close['failed_loads']
+    # A later explicit Open may try the file again; the intentionally broken
+    # proxy still fails, and clean teardown must not recreate a quarantine.
+    call('open',path=str(source),error='assembly_proxy_restore')
+    after_retry=facts()
+    assert after_retry['documents']==after_close['documents'] and after_retry['failed_loads']==after_close['failed_loads']
+    before=exact(keeper,before)
+    # A new error after native Close is different from the historical failure:
+    # do not reopen on this action, retain the diagnostics, and allow a later
+    # explicit retry to open and cleanly reject the intentionally bad file.
+    q,original=quarantine(source)
+    error=call('open',path=str(source),_independent_fault=dict(close_after_files=['shared.FCStd']),error='assembly_proxy_restore')
+    assert original['message'].split('\n')[0] in error['message'] and 'independent post-Close fault' in error['message']
+    after_close=facts()
+    assert q not in after_close['documents'] and q not in after_close['failed_loads']
+    call('open',path=str(source),error='assembly_proxy_restore')
+    after_retry=facts()
+    assert after_retry['documents']==after_close['documents'] and after_retry['failed_loads']==after_close['failed_loads']
+    before=exact(keeper,before)
     results.append('Link/hidden/Sub/List/XLink public setters, early expression gate, late adoption recovery-only inspect, partial detach rollback/revision refresh, explicit/retry Close blockers and public detach')
 
     q1,_=quarantine(source);q2,_=quarantine(sets[1][2]);second=facts()['documents'][q2]

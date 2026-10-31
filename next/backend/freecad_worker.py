@@ -1033,6 +1033,30 @@ def apply_edit(doc, edit):
     return result
 
 
+def datum_quantity(doc, obj, edit, index):
+    value = edit["value"]
+    if "input_default_unit" in edit:
+        kind = obj.Constraints[index].Type
+        unit = "rad" if kind == "Angle" else "" if kind in {"Weight", "SnellsLaw"} else "mm"
+        try:
+            parsed = DocumentUnits.parse(value, unit, edit["input_default_unit"])
+            value = DocumentUnits.describe(DocumentUnits.native(parsed, unit), DocumentUnits.index(doc))["input"]
+        except (ValueError, TypeError) as error:
+            fail("dimension_mismatch", str(error))
+    if not isinstance(value, str):
+        number(value)
+    quantity = App.Units.Quantity(value)
+    number(quantity.Value)
+    # FreeCAD 1.1.4 getDatum excludes SnellsLaw although setDatum works.
+    # Via-point angles preserve native setDatum's quantity policy too.
+    native_angle = obj.Constraints[index].Type == "Angle" and obj.Constraints[index].Third != -2000
+    if (isinstance(value, str) and obj.Constraints[index].Type != "SnellsLaw"
+            and not native_angle
+            and quantity.Unit != obj.getDatum(index).Unit):
+        fail("dimension_mismatch", "Datum unit does not match the native constraint dimension")
+    return quantity
+
+
 def apply_native_edit(doc, edit):
     op = edit.get("op", edit.get("kind"))
     if op in AssemblyAuthoring.OPERATIONS:
@@ -1252,26 +1276,7 @@ def apply_native_edit(doc, edit):
         constraint = op in ("datum", "delete_constraint", "constraint_state")
         index = sketch_index(edit["index"], obj.ConstraintCount if constraint else obj.GeometryCount)
         if op == "datum":
-            value = edit["value"]
-            if "input_default_unit" in edit:
-                kind = obj.Constraints[index].Type
-                unit = "rad" if kind == "Angle" else "" if kind in {"Weight", "SnellsLaw"} else "mm"
-                try:
-                    parsed = DocumentUnits.parse(value, unit, edit["input_default_unit"])
-                    value = DocumentUnits.describe(DocumentUnits.native(parsed, unit), DocumentUnits.index(doc))["input"]
-                except (ValueError, TypeError) as error:
-                    fail("dimension_mismatch", str(error))
-            if not isinstance(value, str):
-                number(value)
-            quantity = App.Units.Quantity(value)
-            number(quantity.Value)
-            # FreeCAD 1.1.4 getDatum excludes SnellsLaw although setDatum works.
-            # Via-point angles preserve native setDatum's quantity policy too.
-            native_angle = obj.Constraints[index].Type == "Angle" and obj.Constraints[index].Third != -2000
-            if (isinstance(value, str) and obj.Constraints[index].Type != "SnellsLaw"
-                    and not native_angle
-                    and quantity.Unit != obj.getDatum(index).Unit):
-                fail("dimension_mismatch", "Datum unit does not match the native constraint dimension")
+            quantity = datum_quantity(doc, obj, edit, index)
             native_constraint = obj.Constraints[index]
             if (quantity.Value < 0 and native_constraint.Type == "Distance"
                     and native_constraint.FirstPos != 0 and native_constraint.SecondPos == 0
@@ -1417,6 +1422,48 @@ def sketch_edits(doc, edits):
     lease("sketch_edits", doc.Name, edits=edits)
 
 
+def preflight_rejected_datum(doc, session, edits):
+    # Only the pinned native setter's early, non-mutating domain rejections.
+    if len(edits) != 1 or edits[0].get("op") != "datum" or edits[0].get("object") != session["object"]:
+        return
+    try:
+        obj = object_in(doc, session["object"])
+        if not obj.isDerivedFrom("Sketcher::SketchObject"):
+            return
+        index = sketch_index(edits[0]["index"], obj.ConstraintCount)
+        quantity = datum_quantity(doc, obj, edits[0], index)
+        kind = obj.Constraints[index].Type
+    except Exception:
+        # Leave all other validation and error ordering on the existing path.
+        return
+    if not (kind in {"Radius", "Diameter", "Weight"} and quantity.Value <= 0
+            or kind == "Distance" and quantity.Value == 0):
+        return
+    expected = {
+        ("Zero is not a valid datum" if quantity.Value == 0 else "Negative datum values are not valid")
+        + " for the constraint with index " + str(index),
+        "Invalid constraint index: " + str(index),
+        "Cannot set the datum because of invalid geometry",
+    }
+    try:
+        obj.setDatum(index, quantity)
+    except ValueError as error:
+        if str(error) in expected:
+            # The old restore path increments the revision on a rejected edit.
+            bump(doc)
+            raise
+        lease("poison", doc.Name)
+        bump(doc)
+        fail("document_unavailable", "Unexpected native datum rejection; document state is uncertain: " + str(error))
+    except Exception as error:
+        lease("poison", doc.Name)
+        bump(doc)
+        fail("document_unavailable", "Unexpected native datum failure; document state is uncertain: " + str(error))
+    lease("poison", doc.Name)
+    bump(doc)
+    fail("document_unavailable", "Unexpected native datum success; document state is uncertain")
+
+
 def solve_sketch(doc, session):
     sketch = object_in(doc, session["object"])
     if sketch.solve() != 0 or sketch.recompute() is False:
@@ -1471,6 +1518,7 @@ def sketch_transaction(doc, request):
     session = _native_sketch_sessions[doc.Name]
     edits = request["edits"]
     sketch_edits(doc, edits)
+    preflight_rejected_datum(doc, session, edits)
     if any(edit.get("op") == "pierce" for edit in edits) and (len(edits) != 1 or edits[0].get("op") != "pierce"):
         fail("invalid_request", "Pierce must be one atomic sketch action")
     if edits[0].get("op") == "pierce":
@@ -1898,6 +1946,7 @@ def close_loaded_document(key):
     else:
         uid, path = str(doc.Uid), doc.FileName or None
     diagnostics = list(_failed_loads.get(key, {}).get("cleanup_errors", []))
+    previous_diagnostic_count = len(diagnostics)
 
     def presence():
         try:
@@ -1967,7 +2016,7 @@ def close_loaded_document(key):
     except Exception as error:
         _load_close_errors[key] = cleanup_diagnostic(key, error)
         raise
-    if diagnostics:
+    if len(diagnostics) > previous_diagnostic_count:
         _load_close_errors[key] = {"document": key, "code": "native_error",
             "message": "Native Close completed with cleanup diagnostics", "native_closed": True,
             "diagnostics": diagnostics}
@@ -2052,7 +2101,13 @@ def retry_failed_open(path, operation="open"):
             try:
                 doc = document({"op": "close", "document": key,
                                 "expected_revision": revision_request("current", key)}, writable=True)
-                close_document(doc)
+                result = close_document(doc)
+                if result.get("cleanup_error"):
+                    # The native owner may have closed despite a cleanup error.
+                    # Report that diagnostic and end this public action instead
+                    # of opening a new owner with the same name in the same action.
+                    recovery["cleanup_errors"].append({"document": key, "code": "native_error",
+                                                       "message": result["cleanup_error"]})
             except Exception as error:
                 recovery["cleanup_errors"].append(cleanup_diagnostic(key, error))
     finally:

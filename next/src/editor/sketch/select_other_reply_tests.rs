@@ -67,12 +67,50 @@ fn open(n: &mut Native, point: [f64; 3]) -> egui::FullOutput {
     for _ in 0..3 {
         n.frame(vec![]);
     }
-    let p = n.editor.viewport.sketch_screen_point(point);
+    let mut p = n.editor.viewport.sketch_screen_point(point);
+    if !n
+        .editor
+        .viewport
+        .response
+        .as_ref()
+        .unwrap()
+        .rect
+        .contains(p)
+    {
+        // A toolbar can resize the canvas while the native reply is held.
+        // Refit the current scene before opening the chooser, not afterward.
+        let before = n.editor.state.clone();
+        let was_busy = n.editor.busy;
+        let was_external = n.editor.sketch_ui.external;
+        n.editor.viewport.fit();
+        n.frame(vec![]);
+        p = n.editor.viewport.sketch_screen_point(point);
+        assert_eq!(n.editor.state, before);
+        assert_eq!(n.editor.busy, was_busy);
+        assert_eq!(n.editor.sketch_ui.external, was_external);
+    }
+    let viewport = n.editor.viewport.response.as_ref().unwrap();
+    assert!(
+        viewport.rect.contains(p),
+        "chooser target must be inside the canvas"
+    );
+    assert_eq!(
+        n.ctx.layer_id_at(p),
+        Some(viewport.layer_id),
+        "chooser target must reach the canvas"
+    );
     pointer(n, p, egui::PointerButton::Secondary, egui::Modifiers::NONE);
     for _ in 0..3 {
         n.frame(vec![]);
     }
     let out = n.frame(vec![]);
+    let viewport = n.editor.viewport.response.as_ref().unwrap();
+    n.events.push(json!({"phase":"chooser-open-observation", "target":[p.x,p.y],
+        "viewport":[viewport.rect.min.x,viewport.rect.min.y,viewport.rect.max.x,viewport.rect.max.y],
+        "canvas_layer":format!("{:?}",viewport.layer_id), "target_layer":format!("{:?}",n.ctx.layer_id_at(p)),
+        "busy":n.editor.busy, "external":n.editor.sketch_ui.external,
+        "labels":labels(&out).iter().map(|(label,_)|label).collect::<Vec<_>>() }));
+    n.record();
     assert!(
         labels(&out).iter().any(|(s, _)| s == "Select other"),
         "chooser must really be open"

@@ -235,11 +235,11 @@ fn native_external_affine_pick_and_measure() {
     assert_eq!(selected.object, "AffineNested");
     assert_eq!(selected.subelement, "Vertex1");
     n.frame(vec![egui::Event::Key {
-        key: Key::M,
+        key: Key::OpenBracket,
         physical_key: None,
         pressed: true,
         repeat: false,
-        modifiers: egui::Modifiers::COMMAND,
+        modifiers: egui::Modifiers::NONE,
     }]);
     assert!(n.editor.busy);
     n.receive(true);

@@ -22,7 +22,7 @@ jobs:
   native:
     name: Native documents / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -249,6 +249,12 @@ jobs:
           if [ "$RUNNER_OS" = Windows ]; then sketch_compiler="$sketch_compiler.exe"; fi
           python next/tests/sketch_commands_workflows.py --host "$host" --compiler "$sketch_compiler" --runtime next/target/runtime.json --output next/target/sketch-command-documents
           python next/tests/sketch_editor_workflows.py --host "$host" --runtime next/target/runtime.json --output next/target/sketch-editor-documents
+          if ! python -B next/tests/datum_guard_workflows.py --host "$host" --runtime next/target/runtime.json --output next/target/datum-guard-documents; then
+            for file in native-worker.log failure.txt events.json observer.jsonl provenance.json; do
+              if [ -f "next/target/datum-guard-documents/$file" ]; then cat "next/target/datum-guard-documents/$file"; fi
+            done
+            exit 1
+          fi
           python next/tests/revision_workflows.py --host "$host" --runtime next/target/runtime.json --output next/target/revision-documents
           python next/tests/session_lifecycle_workflows.py --host "$host" --runtime next/target/runtime.json --output next/target/session-lifecycle-documents
           python next/tests/preview_facts_workflows.py --host "$host" --runtime next/target/runtime.json --output next/target/preview-facts-documents
@@ -298,11 +304,80 @@ jobs:
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
           mkdir -p "$CAD_LIFECYCLE_OUTPUT" "$FREECAD_USER_HOME"
-          skip=(--skip mirror_editor_unavailable_constraints_preserves_default_and_redo --skip document_switch_preserves_dirty_confirmation_and_each_save_path --skip ordinary_failed_open_keeps_dirty_content_and_save_retry_path)
+          # UNRUN optional acceptance tests require dedicated observer/input/plan
+          # fixtures or private source-replay scope; they are not CI passes.
+          # Pierce: CAD_PIERCE_INPUT and pinned observer; Plane: CAD_PLANE_POINT_INPUT
+          # and pinned observer; Master axis: pinned observer; replay: CAD_TUTORIAL_PLAN;
+          # Block and Loft: separate source-replay fixtures and acceptance scope.
+          # Two Receiver continuations require unrepresented source camera calibration.
+          optional=(
+            "editor::sketch::lifecycle_tests::block_tutorial_tests::sourced_block_tutorial_through_first_cube_actual_editor_attempt"
+            "editor::sketch::lifecycle_tests::loft_tutorial_tests::sourced_loft_base_profile_inline_sizes_and_corrections_actual_editor_attempt"
+            "editor::sketch::lifecycle_tests::master_revolve_axis_tests::actual_master_axis_picker_owns_preview_history_and_reopened_geometry"
+            "editor::sketch::lifecycle_tests::master_revolve_axis_tests::masked_master_axis_overlap_warns_at_origin_handle_and_curve"
+            "editor::sketch::lifecycle_tests::master_revolve_axis_tests::overlapping_master_and_profile_axes_report_and_allow_both_choices"
+            "editor::sketch::lifecycle_tests::pierce_tests::actual_pierce_clicks_master_edit_undo_and_reopen"
+            "editor::sketch::lifecycle_tests::pierce_tests::invalid_pierce_requests_preserve_sketch_owner_and_exact_snapshot"
+            "editor::sketch::lifecycle_tests::pierce_tests::source_forward_pierce_master_edit_history_and_reopen"
+            "editor::sketch::lifecycle_tests::pierce_tests::stale_pierce_reference_rejects_without_partial_sketch_action"
+            "editor::sketch::lifecycle_tests::plane_point_tests::receiver_plane_point_clicks_cancel_commit_move_undo_and_reopen"
+            "editor::sketch::lifecycle_tests::plane_point_tests::receiver_plane_point_denials_after_explicit_display_baseline"
+            "editor::sketch::lifecycle_tests::plane_point_tests::receiver_plane_point_rejects_stale_vertex_without_changes"
+            "editor::sketch::lifecycle_tests::video_replay::tutorial_replay_from_json"
+            "editor::sketch::lifecycle_tests::receiver_passive_escape_source_tests::receiver_passive_escape_source_q_closure_one_escape"
+            "editor::sketch::lifecycle_tests::receiver_source_mirror_tests::receiver_source_mirror_selected_axis_one_click"
+          )
+          skip=(--skip mirror_editor_unavailable_constraints_preserves_default_and_redo --skip document_switch_preserves_dirty_confirmation_and_each_save_path --skip ordinary_failed_open_keeps_dirty_content_and_save_retry_path --skip sketch_creation_missing_checkpoint_preserves_redo_before_native_creation)
           if [ "$RUNNER_OS" != Windows ]; then
             skip+=(--skip mirror_editor_apply_cancel_action_history_and_reopen --skip mirror_editor_invalid_selection_native_failure_and_session_cancel --skip mirror_editor_accepted_native_ids_survive_later_tasks_and_history)
           fi
-          cargo test --manifest-path next/Cargo.toml --all-features --locked editor::sketch::lifecycle_tests:: -- --ignored --test-threads=1 "${skip[@]}"
+          for test in "${optional[@]}"; do skip+=(--skip "$test"); done
+          printf '%s\n' "${optional[@]}" > next/target/lifecycle-optional.txt
+          cargo test --manifest-path next/Cargo.toml --all-features --lib --locked editor::sketch::lifecycle_tests:: -- --ignored --list > next/target/lifecycle-inventory.txt
+          python -B - <<'PY'
+          import os, pathlib
+          root = pathlib.Path('next/target')
+          prefix = 'editor::sketch::lifecycle_tests::'
+          names = [line[:-6] for line in (root/'lifecycle-inventory.txt').read_text().splitlines() if line.startswith(prefix) and line.endswith(': test')]
+          optional = (root/'lifecycle-optional.txt').read_text().splitlines()
+          assert len(optional) == len(set(optional)) == 15
+          assert all(names.count(name) == 1 for name in optional)
+          excluded = ['mirror_editor_unavailable_constraints_preserves_default_and_redo', 'document_switch_preserves_dirty_confirmation_and_each_save_path', 'ordinary_failed_open_keeps_dirty_content_and_save_retry_path', 'sketch_creation_missing_checkpoint_preserves_redo_before_native_creation', *optional]
+          if os.environ.get('RUNNER_OS') != 'Windows':
+              excluded += ['mirror_editor_apply_cancel_action_history_and_reopen', 'mirror_editor_invalid_selection_native_failure_and_session_cancel', 'mirror_editor_accepted_native_ids_survive_later_tasks_and_history']
+          selected = [name for name in names if not any(value in name for value in excluded)]
+          assert len(names) == len(set(names)), 'Duplicate lifecycle registrations'
+          assert selected, 'No configured lifecycle tests selected'
+          (root/'lifecycle-selected.txt').write_text('\n'.join(selected) + '\n')
+          PY
+          cargo test --manifest-path next/Cargo.toml --all-features --lib --locked editor::sketch::lifecycle_tests:: -- --ignored --test-threads=1 "${skip[@]}" | tee next/target/lifecycle-results.log
+          python -B - <<'PY'
+          import pathlib, re
+          root = pathlib.Path('next/target')
+          expected = len((root/'lifecycle-selected.txt').read_text().splitlines())
+          matches = re.findall(r'test result: ok\. (\d+) passed; 0 failed;', (root/'lifecycle-results.log').read_text())
+          assert expected > 0 and matches == [str(expected)], (expected, matches)
+          PY
+      # The ordinary lifecycle runtime has a checkpoint adapter. Run the same
+      # native-ID/Redo assertion under a truly unavailable adapter on Windows.
+      # The dedicated Linux control is not yet provided or claimed.
+      - name: Windows missing checkpoint preserves native identity and Redo
+        if: runner.os == 'Windows'
+        run: |
+          python -B - <<'PY'
+          import json, pathlib, subprocess, sys
+          root = pathlib.Path.cwd()
+          artifacts = [json.loads(line) for line in (root/'next/target/units-test-artifacts.jsonl').read_text().splitlines() if line.startswith('{')]
+          tests = next(a['executable'] for a in artifacts if a.get('reason') == 'compiler-artifact' and a.get('executable') and 'lib' in a['target']['kind'] and a['profile']['test'])
+          try:
+              subprocess.run([sys.executable, '-B', 'next/tests/checkpoint_preflight_control.py', '--runtime', 'next/target/runtime.json', '--tests', tests, '--output', str(root/'checkpoint-preflight-ci')], check=True)
+          finally:
+              for name in ['registration.log', 'raw.log', 'result.json']:
+                  path = root/'checkpoint-preflight-ci'/name
+                  if path.is_file():
+                      print('--- checkpoint control ' + name + ' ---', flush=True)
+                      print(path.read_text(encoding='utf-8', errors='replace'), flush=True)
+          PY
       - name: Windows editor unavailable Mirror mode preserves default and Redo
         if: runner.os == 'Windows'
         env:
