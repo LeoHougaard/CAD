@@ -292,6 +292,22 @@ fn feature_edits(registry: &Registry, draft: &Draft, schema: &Value) -> Result<V
         crate::assembly_commands::build(&draft.parameters["state"], &draft.parameters["request"])
     } else if draft.id == "native.history" {
         crate::history_commands::build(&draft.parameters["state"], &draft.parameters["request"])
+    } else if matches!(
+        draft.id.as_str(),
+        "native.slot_extrude" | "native.vertex_edit"
+    ) {
+        if draft.parameters["mode"] == "Up to vertex"
+            && (!draft.parameters["target"].is_string()
+                || !draft.parameters["target_id"].is_number()
+                || !draft.parameters["vertex_map"].is_string())
+        {
+            return Err("Choose a current sketch vertex".into());
+        }
+        let mut edit = draft.parameters.clone();
+        if draft.id == "native.vertex_edit" {
+            edit.as_object_mut().unwrap().remove("mode");
+        }
+        Ok(vec![edit])
     } else if draft.id == "native.properties" {
         crate::property_commands::build(&crate::hole_commands::active_parameters(
             schema,
@@ -1122,6 +1138,12 @@ impl Editor {
                             .max_height((ctx.content_rect().height() - 220.).clamp(150., 650.))
                             .show(ui, |ui| self.native_property_fields(ui));
                     }
+                    let slot_extrude = self.draft.as_ref().is_some_and(|d| {
+                        matches!(d.id.as_str(), "native.slot_extrude" | "native.vertex_edit")
+                    });
+                    if slot_extrude {
+                        self.slot_extrusion_fields(ui);
+                    }
                     let assembly = self
                         .draft
                         .as_ref()
@@ -1137,7 +1159,7 @@ impl Editor {
                         self.history_fields(ui);
                     }
                     let draft = self.draft.as_mut().unwrap();
-                    if !boolean && !native && !history && !assembly {
+                    if !boolean && !native && !history && !assembly && !slot_extrude {
                         ui.label(&draft.name);
                     }
                     if draft.deferred {
@@ -1148,7 +1170,7 @@ impl Editor {
                         .as_object()
                         .unwrap()
                         .keys()
-                        .filter(|_| !boolean && !native && !history && !assembly)
+                        .filter(|_| !boolean && !native && !history && !assembly && !slot_extrude)
                         .cloned()
                         .collect();
                     ui.add_enabled_ui(!self.busy, |ui| {
@@ -1315,6 +1337,72 @@ impl Editor {
         let before_picks = self.viewport.selections.clone();
         self.viewport.view_cube_input_enabled = !sketch_input_blocked && !self.busy;
         let picked = self.viewport.ui(ui).is_some();
+        if guide_input_allowed
+            && ui.is_enabled()
+            && !self.busy
+            && !self.unavailable()
+            && !self.viewport.view_cube_owns_pointer()
+            && !egui::Popup::is_any_open(ui.ctx())
+            && !workflow_guide::active(ui.ctx())
+            && self.draft.as_ref().is_some_and(|d| {
+                matches!(d.id.as_str(), "native.slot_extrude" | "native.vertex_edit")
+                    && d.parameters["mode"] == "Up to vertex"
+            })
+            && self.viewport.response.as_ref().is_some_and(|r| r.clicked())
+            && ui.input(|i| i.modifiers == egui::Modifiers::NONE)
+            && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
+        {
+            let draft = self.draft.as_ref().unwrap();
+            let source = draft.parameters["source"].clone();
+            let body = objects(&self.state)
+                .iter()
+                .find(|o| o["name"] == source)
+                .map(|o| o["body"].clone())
+                .unwrap_or(Value::Null);
+            let hits: Vec<_> = self
+                .viewport
+                .scene_vertices_at(pos)
+                .into_iter()
+                .filter(|hit| {
+                    hit.revision == self.state["revision"].as_u64()
+                        && hit.mapped_name.as_ref().is_some_and(|m| !m.is_empty())
+                        && objects(&self.state).iter().any(|o| {
+                            o["name"] == hit.object
+                                && o["name"] != source
+                                && o["body"] == body
+                                && o["type"] == "Sketcher::SketchObject"
+                                && o["effective_visibility"] == true
+                                && o["native_id"].is_number()
+                        })
+                })
+                .collect();
+            if hits.len() == 1 {
+                let hit = &hits[0];
+                let id = objects(&self.state)
+                    .iter()
+                    .find(|o| o["name"] == hit.object)
+                    .map(|o| o["native_id"].clone())
+                    .unwrap_or(Value::Null);
+                let draft = self.draft.as_mut().unwrap();
+                draft.parameters["target"] = json!(hit.object);
+                draft.parameters["target_id"] = id;
+                draft.parameters["vertex"] = json!(hit.subelement);
+                draft.parameters["vertex_map"] = json!(hit.mapped_name);
+                draft.changed = Some(Instant::now());
+                draft.valid = false;
+                self.error = None;
+            } else {
+                self.error = Some(
+                    if hits.is_empty() {
+                        "Choose a visible sketch vertex in the source Body"
+                    } else {
+                        "More than one visible sketch vertex is under the pointer"
+                    }
+                    .into(),
+                );
+            }
+            return;
+        }
         // A plane followed by a visible sketch vertex is a common two-click
         // attachment selection. Preserve the first pick without a modifier.
         if !sketch_input_blocked

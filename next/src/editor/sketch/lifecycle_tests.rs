@@ -15,6 +15,9 @@ mod mirror_tests;
 #[path = "selected_line_slot_tests.rs"]
 mod selected_line_slot_tests;
 
+#[path = "vertex_extrusion_tests.rs"]
+mod vertex_extrusion_tests;
+
 #[path = "copy_tests.rs"]
 mod copy_tests;
 

@@ -426,6 +426,13 @@ impl Editor {
             } else {
                 self.dirty = true;
                 if let Some(feature) = self.sketch_ui.after_finish.take() {
+                    if feature == "feature.pad"
+                        && finished_profile
+                            .as_deref()
+                            .is_some_and(|profile| self.start_slot_extrusion(profile))
+                    {
+                        return;
+                    }
                     let kind = match feature.as_str() {
                         "feature.pad" => "PartDesign::Pad",
                         "feature.pocket" => "PartDesign::Pocket",

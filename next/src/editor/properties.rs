@@ -21,7 +21,123 @@ pub(super) struct PropertyUi {
     pub(super) axis_overlap: bool,
 }
 
+fn selected_line_slot_candidate(source: &Value) -> bool {
+    let Some(geometry) = source["sketch"]["geometry"].as_array() else {
+        return false;
+    };
+    let normal: Vec<_> = geometry
+        .iter()
+        .filter(|g| g["construction"] == false)
+        .collect();
+    let kinds: Vec<_> = normal.iter().filter_map(|g| g["kind"].as_str()).collect();
+    kinds.len() == normal.len()
+        && kinds.iter().all(|k| matches!(*k, "line" | "arc" | "point"))
+        && kinds.iter().filter(|k| **k == "line").count() == 3
+        && kinds.iter().filter(|k| **k == "arc").count() == 2
+}
+
 impl Editor {
+    pub(super) fn start_slot_extrusion(&mut self, profile: &str) -> bool {
+        let Some(source) = objects(&self.state).iter().find(|o| o["name"] == profile) else {
+            return false;
+        };
+        if !selected_line_slot_candidate(source) {
+            return false;
+        }
+        let source_id = source["native_id"].clone();
+        let Some(body) = crate::body_commands::body_of(&self.state, profile) else {
+            self.error = Some("The sketch has no native Body".into());
+            return true;
+        };
+        let Some(body_id) = objects(&self.state)
+            .iter()
+            .find(|o| o["name"] == body)
+            .and_then(|o| o["native_id"].as_i64())
+        else {
+            self.error = Some("The source Body identity is unavailable".into());
+            return true;
+        };
+        if !source_id.is_number() {
+            self.error = Some("The sketch identity is unavailable".into());
+            return true;
+        }
+        let new_body = self.unique("Body");
+        let binder = self.unique("ProfileBinder");
+        let plane = self.unique("VertexPlane");
+        let name = self.unique("Pad");
+        self.sequence += 1;
+        self.draft = Some(Draft {
+            id: "native.slot_extrude".into(),
+            name: "Extrude".into(),
+            token: format!("extrude-{}-{}", std::process::id(), self.sequence),
+            parameters: json!({"op":"create_vertex_extrusion","source":profile,
+                "source_id":source_id,"body":body,"body_id":body_id,
+                "target":null,"target_id":null,"vertex":null,"vertex_map":null,
+                "new_body":new_body,"binder":binder,"plane":plane,"name":name,
+                "mode":"Blind","length":25.0}),
+            changed: Some(Instant::now()),
+            valid: false,
+            all_parameters: false,
+            deferred: self.state["redo_count"].as_u64().unwrap_or(0) > 0,
+            committing: false,
+        });
+        self.property_ui = PropertyUi::default();
+        self.sketch = None;
+        self.viewport.set_sketch(None);
+        true
+    }
+
+    pub(super) fn slot_extrusion_fields(&mut self, ui: &mut egui::Ui) {
+        let enabled = !self.busy;
+        let Some(draft) = &mut self.draft else {
+            return;
+        };
+        ui.add_enabled_ui(enabled, |ui| {
+            ui.label("Extrude");
+            ui.horizontal(|ui| {
+                ui.label("Solid");
+                ui.label("New");
+            });
+            let mut mode = draft.parameters["mode"]
+                .as_str()
+                .unwrap_or("Blind")
+                .to_owned();
+            if draft.id == "native.vertex_edit" {
+                ui.label("Up to vertex");
+            } else {
+                egui::ComboBox::from_id_salt("slot_extrude_end")
+                    .selected_text(&mode)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut mode, "Blind".to_owned(), "Blind");
+                        ui.selectable_value(&mut mode, "Up to vertex".to_owned(), "Up to vertex");
+                    });
+            }
+            if draft.parameters["mode"] != mode {
+                draft.parameters["mode"] = json!(mode);
+                for field in ["target", "target_id", "vertex", "vertex_map"] {
+                    draft.parameters[field] = Value::Null;
+                }
+                draft.valid = false;
+                draft.changed = (mode == "Blind").then(Instant::now);
+            }
+            if mode == "Blind" {
+                let mut length = draft.parameters["length"].as_f64().unwrap_or(25.0);
+                if ui
+                    .add(egui::DragValue::new(&mut length).suffix(" mm"))
+                    .changed()
+                {
+                    draft.parameters["length"] = json!(length);
+                    draft.valid = false;
+                    draft.changed = Some(Instant::now());
+                }
+            } else if let Some(target) = draft.parameters["target"].as_str() {
+                ui.label(format!("Vertex of {target}"));
+            } else {
+                ui.label("Select a vertex");
+            }
+        });
+    }
+
     fn native_link_selection(&self) -> Vec<(String, String)> {
         if !self.viewport.selections.is_empty() {
             self.viewport
@@ -280,6 +396,32 @@ impl Editor {
         else {
             return;
         };
+        if object["vertex_extrusion"].is_object() {
+            let mut parameters = object["vertex_extrusion"].clone();
+            parameters["op"] = json!("update_vertex_extrusion");
+            parameters["mode"] = json!("Up to vertex");
+            self.sequence += 1;
+            self.property_ui = PropertyUi::default();
+            self.draft = Some(Draft {
+                id: "native.vertex_edit".into(),
+                name: format!("Edit {}", object["label"].as_str().unwrap_or(name)),
+                token: format!("extrude-edit-{}-{}", std::process::id(), self.sequence),
+                parameters,
+                changed: None,
+                valid: false,
+                all_parameters: false,
+                deferred: self.state["redo_count"].as_u64().unwrap_or(0) > 0,
+                committing: false,
+            });
+            self.sketch = None;
+            self.viewport.set_sketch(None);
+            return;
+        }
+        if object["internal_vertex_extrusion"] == true {
+            self.error =
+                Some("This extrusion cannot be edited with its current native references".into());
+            return;
+        }
         self.sequence += 1;
         let body = crate::body_commands::body_of(&self.state, name);
         let tip = body
@@ -1265,6 +1407,26 @@ fn fillet_edges_widget(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slot_route_accepts_reordered_curves_and_optional_points() {
+        let mut geometry = vec![
+            json!({"kind":"line","construction":false}),
+            json!({"kind":"arc","construction":false}),
+            json!({"kind":"line","construction":false}),
+            json!({"kind":"arc","construction":false}),
+            json!({"kind":"line","construction":false}),
+        ];
+        let source = |geometry: &[Value]| json!({"sketch":{"geometry":geometry}});
+        assert!(selected_line_slot_candidate(&source(&geometry)));
+        geometry.push(json!({"kind":"point","construction":false}));
+        geometry.push(json!({"kind":"point","construction":false}));
+        geometry.push(json!({"kind":"circle","construction":true}));
+        geometry.reverse();
+        assert!(selected_line_slot_candidate(&source(&geometry)));
+        geometry.push(json!({"kind":"circle","construction":false}));
+        assert!(!selected_line_slot_candidate(&source(&geometry)));
+    }
 
     fn picks(values: &[(&str, &str)]) -> Vec<(String, String)> {
         values

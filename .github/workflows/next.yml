@@ -310,7 +310,15 @@ jobs:
           # and pinned observer; Master axis: pinned observer; replay: CAD_TUTORIAL_PLAN;
           # Block and Loft: separate source-replay fixtures and acceptance scope.
           # Two Receiver continuations require unrepresented source camera calibration.
+          # Vertex cases also require CAD_VERTEX_INPUT and their pinned observer.
+          # Their private history/bitwise failures remain open; UNRUN is not a pass.
           optional=(
+            "editor::sketch::lifecycle_tests::vertex_extrusion_tests::vertex_new_editor_clicks_history_and_reopen"
+            "editor::sketch::lifecycle_tests::vertex_extrusion_tests::vertex_new_rejects_invalid_native_targets_without_objects"
+            "editor::sketch::lifecycle_tests::vertex_extrusion_tests::five_curve_slot_routes_to_same_new_task"
+            "editor::sketch::lifecycle_tests::vertex_extrusion_tests::vertex_preview_snapshot_stays_exact_after_display_including_plane_references"
+            "editor::sketch::lifecycle_tests::vertex_extrusion_tests::vertex_face_support_creates_and_recognizes_native_graph"
+            "editor::sketch::lifecycle_tests::vertex_extrusion_tests::vertex_invalid_plane_support_denies_create_and_owned_graph"
             "editor::sketch::lifecycle_tests::block_tutorial_tests::sourced_block_tutorial_through_first_cube_actual_editor_attempt"
             "editor::sketch::lifecycle_tests::loft_tutorial_tests::sourced_loft_base_profile_inline_sizes_and_corrections_actual_editor_attempt"
             "editor::sketch::lifecycle_tests::master_revolve_axis_tests::actual_master_axis_picker_owns_preview_history_and_reopened_geometry"
@@ -340,7 +348,7 @@ jobs:
           prefix = 'editor::sketch::lifecycle_tests::'
           names = [line[:-6] for line in (root/'lifecycle-inventory.txt').read_text().splitlines() if line.startswith(prefix) and line.endswith(': test')]
           optional = (root/'lifecycle-optional.txt').read_text().splitlines()
-          assert len(optional) == len(set(optional)) == 15
+          assert len(optional) == len(set(optional)) == 21
           assert all(names.count(name) == 1 for name in optional)
           excluded = ['mirror_editor_unavailable_constraints_preserves_default_and_redo', 'document_switch_preserves_dirty_confirmation_and_each_save_path', 'ordinary_failed_open_keeps_dirty_content_and_save_retry_path', 'sketch_creation_missing_checkpoint_preserves_redo_before_native_creation', *optional]
           if os.environ.get('RUNNER_OS') != 'Windows':

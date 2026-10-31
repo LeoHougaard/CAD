@@ -24,6 +24,7 @@ import sketch_geometry as SketchGeometry
 import sketch_operations as SketchOperations
 import feature_history as FeatureHistory
 import profile_references as ProfileReferences
+import vertex_extrusion as VertexExtrusion
 import expression_links as ExpressionLinks
 import assembly as AssemblyAuthoring
 import assembly_sources as AssemblySources
@@ -56,6 +57,7 @@ EDIT_OPERATIONS += list(SketchOperations.OPERATIONS)
 EDIT_OPERATIONS += list(FeatureHistory.OPERATIONS)
 EDIT_OPERATIONS += list(ProfileReferences.OPERATIONS)
 EDIT_OPERATIONS += ["validate_plane_point"]
+EDIT_OPERATIONS += ["create_vertex_extrusion", "update_vertex_extrusion"]
 OBJECT_TYPES = {
     "App::Part", "Part::Feature", "PartDesign::Body", "Sketcher::SketchObject",
     "PartDesign::Pad", "PartDesign::Pocket", "PartDesign::Fillet",
@@ -487,6 +489,8 @@ def property_snapshot(obj):
 
 
 def writable_property(obj, prop, expression=False):
+    if prop in VertexExtrusion.OWNER_TAGS:
+        fail("read_only_property", "Native extrusion ownership metadata is protected")
     type_id = property_type(obj, prop)
     HoleTask.prepare_input(obj, prop)
     if expression and obj.isDerivedFrom("Sketcher::SketchObject") and prop == "Constraints":
@@ -516,8 +520,9 @@ def initialize_feature_schemas():
         App.closeDocument(doc.Name)
 
 
-def bounds(shape):
-    box = shape.BoundBox
+def bounds(shape, *, optimal=False):
+    # Document snapshots must not depend on display triangulation caches.
+    box = shape.optimalBoundingBox(False, False) if optimal else shape.BoundBox
     if not box.isValid():
         return None
     return {"min": [box.XMin, box.YMin, box.ZMin], "max": [box.XMax, box.YMax, box.ZMax]}
@@ -696,13 +701,22 @@ def snapshot(doc, revision=None):
     objects = []
     bodies = body_states(doc)
     for obj in doc.Objects:
-        entry = {"name": obj.Name, "type": obj.TypeId, "label": obj.Label,
+        entry = {"name": obj.Name, "native_id": obj.ID, "type": obj.TypeId, "label": obj.Label,
                  "effective_visibility": effective_visibility(obj),
                  "valid": obj.isValid(), "status": obj.getStatusString(),
                  "state": list(obj.State), **property_snapshot(obj), **AssemblyAuthoring.metadata(obj),
                  **Suppression.metadata(obj)}
         owner = owner_body(obj)
         entry["body"] = owner.Name if owner else None
+        helper_owner = VertexExtrusion.helper_owner(obj, owner_body)
+        if helper_owner is not None:
+            entry["internal_vertex_helper"] = helper_owner.Name
+        if obj.TypeId == "PartDesign::Pad":
+            if VertexExtrusion.declares_helpers(obj, owner_body):
+                entry["internal_vertex_extrusion"] = True
+            vertex_feature = VertexExtrusion.feature_metadata(obj, owner_body)
+            if vertex_feature is not None:
+                entry["vertex_extrusion"] = vertex_feature
         entry["history_flags"] = FeatureHistory.flags(obj, owner)
         if obj.Name in bodies:
             entry["body_state"] = bodies[obj.Name]
@@ -720,7 +734,7 @@ def snapshot(doc, revision=None):
                               "volume": 0 if empty else shape.Volume, "area": 0 if empty else shape.Area,
                               "solids": len(shape.Solids), "faces": len(shape.Faces),
                               "edges": len(shape.Edges), "vertices": len(shape.Vertexes),
-                              "bounds": None if empty else bounds(shape)}
+                              "bounds": None if empty else bounds(shape, optimal=True)}
         if obj.isDerivedFrom("Sketcher::SketchObject"):
             entry["sketch"] = {"geometry_count": obj.GeometryCount, "constraint_count": obj.ConstraintCount,
                                "task_capabilities": SketchOperations.capabilities(),
@@ -1059,6 +1073,16 @@ def datum_quantity(doc, obj, edit, index):
 
 def apply_native_edit(doc, edit):
     op = edit.get("op", edit.get("kind"))
+    if op == "create_vertex_extrusion":
+        try:
+            return VertexExtrusion.create(doc, edit, owner_body, effective_visibility)
+        except VertexExtrusion.VertexExtrusionError as error:
+            fail(error.code, str(error))
+    if op == "update_vertex_extrusion":
+        try:
+            return VertexExtrusion.update(doc, edit, owner_body, effective_visibility)
+        except VertexExtrusion.VertexExtrusionError as error:
+            fail(error.code, str(error))
     if op in AssemblyAuthoring.OPERATIONS:
         try:
             return AssemblyAuthoring.apply(doc, edit)
@@ -1145,6 +1169,12 @@ def apply_native_edit(doc, edit):
     elif op == "remove_object":
         if "native_id" in edit and (type(edit["native_id"]) is not int or edit["native_id"] != obj.ID):
             fail("stale_reference", "Native recovery object identity changed")
+        try:
+            removed_name = obj.Name
+            if VertexExtrusion.remove_owned(doc, obj, owner_body):
+                return {"object": removed_name}
+        except VertexExtrusion.VertexExtrusionError as error:
+            fail(error.code, str(error))
         owner = owner_body(obj)
         dependents = [item.Name for item in obj.InList if item != owner and not (
             item.isDerivedFrom("App::Part") and obj in item.Group)]
@@ -1830,6 +1860,16 @@ def preview(doc, request):
         fail("invalid_request", "Preview requires a nonempty edits list")
     validate_revolve_axis_preview(edits)
     preflight_constraints(edits)
+    # Validate current native references before ending an accepted preview.
+    # Abort/recreation would otherwise change its native identities on denial.
+    for edit in edits:
+        preparation = {"create_vertex_extrusion": VertexExtrusion.prepare_create,
+                       "update_vertex_extrusion": VertexExtrusion.prepare_update}.get(edit.get("op") if isinstance(edit, dict) else None)
+        if preparation is not None:
+            try:
+                preparation(doc, edit, owner_body, effective_visibility)
+            except VertexExtrusion.VertexExtrusionError as error:
+                fail(error.code, str(error))
     label = preview_ready(doc, request)
     prepare_assembly_sources(doc, edits, active is not None)
     if active:

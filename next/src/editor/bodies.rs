@@ -560,14 +560,16 @@ impl Editor {
             })
             .collect();
         for (object, collapsed) in rows.iter().zip(&collapsed) {
-            if !collapsed {
+            if !collapsed && object["internal_vertex_helper"].is_null() {
                 self.feature_row(ui, object);
             }
         }
         let references: Vec<_> = rows
             .iter()
             .zip(collapsed)
-            .filter_map(|(object, collapsed)| collapsed.then_some(object))
+            .filter_map(|(object, collapsed)| {
+                (collapsed && object["internal_vertex_helper"].is_null()).then_some(object)
+            })
             .collect();
         if !references.is_empty() {
             egui::CollapsingHeader::new("References")

@@ -198,6 +198,214 @@ fn side_parent_edge<'a>(
     )
 }
 
+// Capture the endpoint below the active sketch plane from live native geometry.
+fn lower_parent_vertex(state: &Value, active: &str, label: &str) -> (i64, u64) {
+    let (owner, geometry) = side_parent_edge(state, active, label, "left");
+    let placement = &object(state, active)["global_placement"];
+    let origin = vec3(transform_point(placement, &json!([0., 0., 0.])));
+    let normal = (vec3(transform_point(placement, &json!([0., 0., 1.]))) - origin).normalize();
+    let a = vec3(transform_point(
+        &owner["global_placement"],
+        &geometry["start"],
+    ));
+    let b = vec3(transform_point(
+        &owner["global_placement"],
+        &geometry["end"],
+    ));
+    let da = (a - origin).dot(normal);
+    let db = (b - origin).dot(normal);
+    let endpoint = if da < -1e-3 && db.abs() < 1e-3 {
+        1
+    } else if db < -1e-3 && da.abs() < 1e-3 {
+        2
+    } else {
+        panic!("unique lower endpoint of parent edge required")
+    };
+    (
+        geometry["persistent_id"]
+            .as_i64()
+            .expect("parent geometry ID"),
+        endpoint,
+    )
+}
+
+fn unique_new_object<'a>(state: &'a Value, before: &Value, type_id: &str) -> Option<&'a Value> {
+    let names = before["names"].as_array()?;
+    let mut found = objects(state)
+        .iter()
+        .filter(|o| o["type"] == type_id && !names.contains(&o["name"]));
+    let item = found.next()?;
+    if found.next().is_some() {
+        return None;
+    }
+    Some(item)
+}
+
+fn check_new_extrusion(state: &Value, before: &Value, mode: &str, target: Option<&Value>) -> Value {
+    let body = unique_new_object(state, before, "PartDesign::Body").expect("one accepted new Body");
+    let pad = unique_new_object(state, before, "PartDesign::Pad").expect("one accepted new Pad");
+    let binder = unique_new_object(state, before, "PartDesign::SubShapeBinder")
+        .expect("one accepted profile binder");
+    let old_body = object(state, before["body"].as_str().unwrap());
+    let old_tip = object(state, before["tip"].as_str().unwrap());
+    let source = object(state, before["source"].as_str().unwrap());
+    assert_eq!(old_body["native_id"], before["body_id"]);
+    assert_eq!(old_body["body_state"]["tip"], before["tip"]);
+    assert_eq!(old_tip["native_id"], before["tip_id"]);
+    assert_eq!(source["native_id"], before["source_id"]);
+    assert_eq!(source["body"], before["body"]);
+    assert_eq!(old_tip["shape"]["valid"], true);
+    assert_eq!(old_tip["shape"]["solids"], 1);
+    assert_ne!(body["name"], before["body"]);
+    assert_eq!(body["body_state"]["tip"], pad["name"]);
+    assert_eq!(pad["body"], body["name"]);
+    assert_eq!(binder["body"], body["name"]);
+    assert!(body["native_id"].as_i64().is_some_and(|id| id > 0));
+    assert!(pad["native_id"].as_i64().is_some_and(|id| id > 0));
+    assert_eq!(pad["shape"]["valid"], true);
+    assert_eq!(pad["shape"]["solids"], 1);
+    assert!(pad["shape"]["volume"].as_f64().is_some_and(|v| v > 0.));
+    assert_eq!(pad["properties"]["Profile"]["link"], binder["name"]);
+    let supports = binder["properties"]["Support"].as_array().unwrap();
+    assert_eq!(supports.len(), 1);
+    assert_eq!(supports[0]["link"], before["source"]);
+    let edges = supports[0]["subelements"].as_array().unwrap();
+    assert_eq!(edges.len(), 4);
+    let mut maps = std::collections::BTreeSet::new();
+    for edge in edges {
+        let mapped = source["sketch"]["native_xml"]["element_map"][edge.as_str().unwrap()]
+            .as_str()
+            .unwrap();
+        assert!(!mapped.is_empty() && maps.insert(mapped.to_owned()));
+        assert!(
+            binder["test_support_xml"]
+                .as_str()
+                .unwrap()
+                .contains(mapped)
+        );
+    }
+    assert!(
+        !maps.contains(&format!("g{};SKT", before["line_id"].as_i64().unwrap())),
+        "retained source line must stay outside binder boundary"
+    );
+    let mut result = json!({"body":body["name"],"body_id":body["native_id"],"pad":pad["name"],"pad_id":pad["native_id"],
+        "binder":binder["name"],"binder_id":binder["native_id"],"boundary_maps":maps,"mode":mode,
+        "history":{"revision":state["revision"],"undo_count":state["undo_count"],"redo_count":state["redo_count"],"preview":state["preview"]}});
+    match mode {
+        "Blind" => {
+            assert_eq!(pad["properties"]["Type"], "Length");
+            assert_eq!(pad["properties"]["Length"], 25.0);
+        }
+        "Up to vertex" => {
+            let selected = target.expect("actual selected vertex");
+            let plane = unique_new_object(state, before, "PartDesign::Plane")
+                .expect("one accepted vertex plane");
+            let meta = &pad["vertex_extrusion"];
+            assert_eq!(pad["properties"]["Type"], "UpToFace");
+            assert_eq!(pad["properties"]["UpToFace"]["link"], plane["name"]);
+            assert_eq!(plane["body"], body["name"]);
+            assert_eq!(plane["properties"]["MapMode"], "ParallelPlane");
+            assert_eq!(meta["body"], body["name"]);
+            assert_eq!(meta["body_id"], body["native_id"]);
+            assert_eq!(meta["pad"], pad["name"]);
+            assert_eq!(meta["pad_id"], pad["native_id"]);
+            assert_eq!(meta["binder"], binder["name"]);
+            assert_eq!(meta["binder_id"], binder["native_id"]);
+            assert_eq!(meta["plane"], plane["name"]);
+            assert_eq!(meta["plane_id"], plane["native_id"]);
+            assert_eq!(meta["source"], before["source"]);
+            assert_eq!(meta["source_id"], before["source_id"]);
+            for key in ["target", "target_id", "vertex", "vertex_map"] {
+                assert_eq!(meta[key], selected[key]);
+            }
+            let attached = plane["properties"]["AttachmentSupport"].as_array().unwrap();
+            assert!(attached.iter().any(|s| {
+                s["link"] == selected["target"]
+                    && s["subelements"]
+                        .as_array()
+                        .is_some_and(|a| a.contains(&selected["vertex"]))
+            }));
+            let source_support = source["properties"]["AttachmentSupport"]
+                .as_array()
+                .unwrap();
+            assert_eq!(source_support.len(), 1);
+            assert!(
+                attached
+                    .iter()
+                    .any(|s| s["link"] == source_support[0]["link"])
+            );
+            assert!(
+                plane["test_support_xml"]
+                    .as_str()
+                    .unwrap()
+                    .contains(selected["vertex_map"].as_str().unwrap())
+            );
+            assert_eq!(
+                pad["properties"]["Reversed"], true,
+                "lower vertex requires reversed extrusion"
+            );
+            let csg = &pad["test_vertex_csg"];
+            assert_eq!(csg["original_body"], before["body"]);
+            assert_eq!(csg["original_body_id"], before["body_id"]);
+            assert_eq!(csg["original_tip"], before["tip"]);
+            assert_eq!(csg["original_tip_id"], before["tip_id"]);
+            assert_eq!(csg["common"], 0.0);
+            assert_eq!(csg["cut"], csg["pad"]);
+            let witness = &pad["test_vertex_geometry"];
+            assert!(witness["target_plane_distance"].as_f64().unwrap().abs() < 1e-6);
+            assert!(witness["target_source_distance"].as_f64().unwrap() < 0.);
+            assert!(
+                witness["vertex_plane_distances"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|v| v.as_f64().unwrap().abs() < 1e-6)
+                    .count()
+                    >= 4
+            );
+            assert!(
+                witness["vertex_source_distances"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|v| v.as_f64().unwrap().abs() < 1e-6)
+                    .count()
+                    >= 4
+            );
+            result["plane"] = plane["name"].clone();
+            result["plane_id"] = plane["native_id"].clone();
+            result["target"] = selected.clone();
+            result["native_csg"] = csg.clone();
+            result["native_geometry"] = witness.clone();
+        }
+        other => panic!("unsupported extrusion mode {other}"),
+    }
+    result
+}
+
+#[test]
+fn new_native_body_binding_requires_one_actual_state_difference() {
+    let before = json!({"names":["existing"]});
+    let mut state = json!({"objects":[{"name":"existing","type":"PartDesign::Body"},
+        {"name":"created","type":"PartDesign::Body","native_id":41}]});
+    assert_eq!(
+        unique_new_object(&state, &before, "PartDesign::Body").unwrap()["native_id"],
+        41
+    );
+    state["objects"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"name":"another","type":"PartDesign::Body","native_id":42}));
+    assert!(unique_new_object(&state, &before, "PartDesign::Body").is_none());
+    assert!(unique_new_object(&state, &before, "PartDesign::Pad").is_none());
+    let native = json!({"objects":[{"name":"parent","label":"fixture","type":"Sketcher::SketchObject","effective_visibility":true,
+        "global_placement":{"position":[0.,0.,0.],"rotation":[0.,0.,0.,1.]},"sketch":{"geometry":[
+        {"kind":"line","construction":false,"persistent_id":31,"start":[-5.,0.,3.],"end":[-5.,0.,10.]},
+        {"kind":"line","construction":false,"persistent_id":44,"start":[5.,0.,10.],"end":[5.,0.,2.]}]}},
+        {"name":"active","global_placement":{"position":[0.,0.,10.],"rotation":[0.,0.,0.,1.]}}]});
+    assert_eq!(lower_parent_vertex(&native, "active", "fixture"), (31, 1));
+}
+
 fn edge_candidate_usable(
     inside: bool,
     sketch_hit: bool,
@@ -944,6 +1152,13 @@ fn current_target(
                     .scene_vertices_at(pos)
                     .into_iter()
                     .filter(|h| {
+                        if target["context"] == "vertex-extrusion" {
+                            let draft = n.editor.draft.as_ref().expect("active extrusion task");
+                            assert_eq!(draft.id, "native.slot_extrude");
+                            assert_eq!(draft.parameters["mode"], "Up to vertex");
+                            return h.revision == expected_revision
+                                && extrusion_vertex_eligible(h, &n.editor.state, &draft.parameters);
+                        }
                         h.revision == expected_revision
                             && h.mapped_name.as_ref().is_some_and(|m| !m.is_empty())
                             && objects(&n.editor.state).iter().any(|o| {
@@ -1085,6 +1300,102 @@ fn current_target(
             "text":"Pierce","text_rect":[text_rect.min.x,text_rect.min.y,text_rect.max.x,text_rect.max.y],
             "clip_rect":[clip.min.x,clip.min.y,clip.max.x,clip.max.y]})).unwrap();
     }
+}
+
+fn extrusion_vertex_eligible(
+    hit: &crate::viewport::SceneVertex,
+    state: &Value,
+    parameters: &Value,
+) -> bool {
+    let source = &parameters["source"];
+    let body = &parameters["body"];
+    let current_source = objects(state).iter().any(|o| {
+        o["name"] == *source
+            && o["type"] == "Sketcher::SketchObject"
+            && o["body"] == *body
+            && o["native_id"].is_number()
+            && o["native_id"] == parameters["source_id"]
+    });
+    let current_body = objects(state).iter().any(|o| {
+        o["name"] == *body
+            && o["type"] == "PartDesign::Body"
+            && o["native_id"].is_number()
+            && o["native_id"] == parameters["body_id"]
+    });
+    current_source
+        && current_body
+        && hit.revision == state["revision"].as_u64()
+        && hit.revision.is_some()
+        && hit.mapped_name.as_ref().is_some_and(|m| !m.is_empty())
+        && objects(state).iter().any(|o| {
+            o["name"] == hit.object
+                && o["name"] != *source
+                && o["body"] == *body
+                && o["type"] == "Sketcher::SketchObject"
+                && o["effective_visibility"] == true
+                && o["native_id"].is_number()
+        })
+}
+
+#[test]
+fn extrusion_vertex_eligibility_rejects_source_wrong_body_and_stale_identity() {
+    use crate::viewport::SceneVertex;
+    let mut state = json!({"revision":50,"objects":[
+        {"name":"body","native_id":3555,"type":"PartDesign::Body"},
+        {"name":"profile","native_id":4682,"body":"body","type":"Sketcher::SketchObject","effective_visibility":true},
+        {"name":"target","native_id":4676,"body":"body","type":"Sketcher::SketchObject","effective_visibility":true},
+        {"name":"preview","native_id":4693,"body":"other","type":"PartDesign::Pad","effective_visibility":true}
+    ]});
+    let mut parameters = json!({"source":"profile","source_id":4682,"body":"body","body_id":3555});
+    let vertex = |name: &str, revision, point| SceneVertex {
+        object: name.into(),
+        subelement: "Vertex1".into(),
+        mapped_name: Some("mapped".into()),
+        revision: Some(revision),
+        point,
+    };
+    // Same three-owner counterexample and local coordinates captured from the real picker.
+    let hits = [
+        vertex("preview", 50, [-65., -35., 0.]),
+        vertex("target", 50, [-100., 0., -40.14210510253906]),
+        vertex("profile", 50, [-65., -35., 0.]),
+    ];
+    let accepted: Vec<_> = hits
+        .iter()
+        .filter(|h| extrusion_vertex_eligible(h, &state, &parameters))
+        .collect();
+    assert_eq!(accepted.len(), 1);
+    assert_eq!(accepted[0].object, "target");
+    let duplicates = [hits[1].clone(), hits[1].clone()];
+    assert_eq!(
+        duplicates
+            .iter()
+            .filter(|h| extrusion_vertex_eligible(h, &state, &parameters))
+            .count(),
+        2
+    );
+    state["objects"][2]["body"] = json!("other");
+    assert!(!extrusion_vertex_eligible(&hits[1], &state, &parameters));
+    state["objects"][2]["body"] = json!("body");
+    state["objects"][2]["native_id"] = Value::Null;
+    assert!(!extrusion_vertex_eligible(&hits[1], &state, &parameters));
+    state["objects"][2]["native_id"] = json!(4676);
+    parameters["source_id"] = json!(9999);
+    assert!(!extrusion_vertex_eligible(&hits[1], &state, &parameters));
+    parameters["source_id"] = json!(4682);
+    parameters["body_id"] = json!(9999);
+    assert!(!extrusion_vertex_eligible(&hits[1], &state, &parameters));
+    parameters["body_id"] = json!(3555);
+    assert!(!extrusion_vertex_eligible(
+        &vertex("target", 49, [0., 0., 0.]),
+        &state,
+        &parameters
+    ));
+    let mut unmapped = hits[1].clone();
+    unmapped.mapped_name = None;
+    assert!(!extrusion_vertex_eligible(&unmapped, &state, &parameters));
+    state["objects"][2]["effective_visibility"] = json!(false);
+    assert!(!extrusion_vertex_eligible(&hits[1], &state, &parameters));
 }
 
 fn point(
@@ -1353,12 +1664,47 @@ fn point(
                 Some(response.layer_id),
                 "scene vertex occluded"
             );
-            let hits: Vec<_> = n
+            let raw_hits = n.editor.viewport.scene_vertices_at(pos);
+            let source = n
                 .editor
-                .viewport
-                .scene_vertices_at(pos)
+                .draft
+                .as_ref()
+                .map(|d| d.parameters["source"].clone());
+            let source_body = objects(&n.editor.state)
+                .iter()
+                .find(|o| Some(&o["name"]) == source.as_ref())
+                .map(|o| o["body"].clone());
+            let hit_evidence: Vec<_> = raw_hits.iter().map(|hit| {
+                let actual_owner = objects(&n.editor.state).iter().find(|o| o["name"] == hit.object);
+                let hit_world = n.editor.viewport.test_scene_vertex_world(&hit.object, &hit.subelement);
+                let hit_screen = hit_world.map(|p| n.editor.viewport.test_world_screen_point(p));
+                json!({"object":hit.object,"subelement":hit.subelement,"mapped_name":hit.mapped_name,
+                    "revision":hit.revision,"sketch_local":hit.point,"world":hit_world,
+                    "screen":hit_screen.map(|p| [p.x,p.y]),
+                    "owner":actual_owner.map(|o| json!({"name":o["name"],"native_id":o["native_id"],
+                        "type":o["type"],"body":o["body"],"effective_visibility":o["effective_visibility"]})),
+                    "is_source":actual_owner.is_some_and(|o| Some(&o["name"]) == source.as_ref()),
+                    "same_source_body":actual_owner.is_some_and(|o| Some(&o["body"]) == source_body.as_ref()),
+                    "extrusion_eligible":n.editor.draft.as_ref().map(|d| extrusion_vertex_eligible(hit,&n.editor.state,&d.parameters))})
+            }).collect();
+            fs::write(n.folder.join("scene-vertex-hits.json"), serde_json::to_vec_pretty(&json!({
+                "target":target,"target_owner":name,"target_owner_id":owner["native_id"],
+                "target_world":world,"target_screen":[pos.x,pos.y],"current_revision":revision,
+                "canvas_rect":[response.rect.min.x,response.rect.min.y,response.rect.max.x,response.rect.max.y],
+                "canvas_interact_rect":[response.interact_rect.min.x,response.interact_rect.min.y,
+                    response.interact_rect.max.x,response.interact_rect.max.y],"canvas_enabled":response.enabled(),
+                "canvas_layer":format!("{:?}",response.layer_id),"point_layer":format!("{:?}",n.ctx.layer_id_at(pos)),
+                "source":source,"source_body":source_body,"raw_hit_count":raw_hits.len(),"hits":hit_evidence
+            })).unwrap()).unwrap();
+            let hits: Vec<_> = raw_hits
                 .into_iter()
                 .filter(|h| {
+                    if target["context"] == "vertex-extrusion" {
+                        let draft = n.editor.draft.as_ref().expect("active extrusion task");
+                        assert_eq!(draft.id, "native.slot_extrude");
+                        assert_eq!(draft.parameters["mode"], "Up to vertex");
+                        return extrusion_vertex_eligible(h, &n.editor.state, &draft.parameters);
+                    }
                     h.revision == Some(revision)
                         && h.mapped_name.as_ref().is_some_and(|m| !m.is_empty())
                         && objects(&n.editor.state).iter().any(|o| {
@@ -1870,6 +2216,10 @@ fn tutorial_replay_from_json() {
     let mut held = std::collections::HashSet::<String>::new();
     let mut datum_aliases = std::collections::HashMap::<String, String>::new();
     let mut geometry_aliases = std::collections::HashMap::<String, i64>::new();
+    let mut endpoint_aliases = std::collections::HashMap::<String, u64>::new();
+    let mut extrusion_baseline: Option<Value> = None;
+    let mut extrusion_target: Option<Value> = None;
+    let mut extrusion_preview: Option<Value> = None;
     let mut plane_baseline: Option<(
         std::collections::BTreeSet<String>,
         String,
@@ -1885,10 +2235,44 @@ fn tutorial_replay_from_json() {
                 .expect("resolved native geometry alias");
             action["target"]["persistent_id"] = json!(id);
         }
+        if let Some(key) = action["target"]["endpoint_alias"].as_str() {
+            action["target"]["endpoint"] = json!(
+                *endpoint_aliases
+                    .get(key)
+                    .expect("resolved native endpoint alias")
+            );
+        }
         let action = &action;
         let kind = action["kind"].as_str().unwrap();
-        let navigation_before =
-            (action["provenance"] == "reconstructed_navigation").then(|| n.editor.state.clone());
+        let navigation_before = (action["provenance"] == "reconstructed_navigation"
+            || action["presentation_only"] == true)
+            .then(|| n.editor.state.clone());
+        if action["capture_extrude_baseline"] == true {
+            let active = n
+                .editor
+                .sketch
+                .as_ref()
+                .expect("active source sketch before Extrude");
+            let source = object(&n.editor.state, active);
+            let body = object(
+                &n.editor.state,
+                source["body"].as_str().expect("source Body"),
+            );
+            let tip = object(
+                &n.editor.state,
+                body["body_state"]["tip"].as_str().expect("source Body Tip"),
+            );
+            let names: Vec<_> = objects(&n.editor.state)
+                .iter()
+                .map(|o| o["name"].clone())
+                .collect();
+            extrusion_baseline = Some(
+                json!({"names":names,"source":source["name"],"source_id":source["native_id"],
+                "body":body["name"],"body_id":body["native_id"],"tip":tip["name"],"tip_id":tip["native_id"],
+                "line_id":geometry_aliases.get("slot_source").expect("original slot source line"),
+                "history":{"revision":n.editor.state["revision"],"undo_count":n.editor.state["undo_count"],"redo_count":n.editor.state["redo_count"]}}),
+            );
+        }
         let before_geometry = if action["capture_line_alias"].is_string()
             || action["capture_point_alias"].is_string()
         {
@@ -1948,6 +2332,7 @@ fn tutorial_replay_from_json() {
         let mods = modifiers(action, &held);
         settle(&mut n, mods);
         let mut resolved = Value::Null;
+        let mut verification = Value::Null;
         match kind {
             "click" => {
                 let pos = point(&mut n, &action["target"], mods, &datum_aliases);
@@ -2049,14 +2434,30 @@ fn tutorial_replay_from_json() {
                         .iter()
                         .find(|h| h.object == name && h.revision == Some(revision))
                         .unwrap();
-                    assert!(
-                        n.editor
-                            .viewport
-                            .selections
-                            .iter()
-                            .any(|s| s.object == name && s.subelement == vertex.subelement),
-                        "ordinary click did not select the intended current vertex"
-                    );
+                    if action["target"]["context"] == "vertex-extrusion" {
+                        let draft = n.editor.draft.as_ref().expect("active extrusion task");
+                        assert_eq!(draft.id, "native.slot_extrude");
+                        assert_eq!(draft.parameters["mode"], "Up to vertex");
+                        assert_eq!(draft.parameters["target"], name);
+                        assert_eq!(draft.parameters["target_id"], owner["native_id"]);
+                        assert_eq!(draft.parameters["vertex"], vertex.subelement);
+                        assert_eq!(
+                            draft.parameters["vertex_map"].as_str(),
+                            vertex.mapped_name.as_deref()
+                        );
+                        extrusion_target =
+                            Some(json!({"target":name,"target_id":owner["native_id"],
+                            "vertex":vertex.subelement,"vertex_map":vertex.mapped_name}));
+                    } else {
+                        assert!(
+                            n.editor
+                                .viewport
+                                .selections
+                                .iter()
+                                .any(|s| s.object == name && s.subelement == vertex.subelement),
+                            "ordinary click did not select the intended current vertex"
+                        );
+                    }
                 }
                 if action["target"]["kind"] == "native-origin-plane" {
                     let name = native_origin_plane(&n.editor, &action["target"]);
@@ -2339,6 +2740,94 @@ fn tutorial_replay_from_json() {
             );
         }
         settle(&mut n, mods);
+        if action["id"] == "Q11" {
+            let active = n
+                .editor
+                .sketch
+                .as_ref()
+                .expect("active sketch after Pierce");
+            let (id, endpoint) = lower_parent_vertex(&n.editor.state, active, "MASTER LAYOUT");
+            assert!(
+                geometry_aliases
+                    .insert("left_master_parent".into(), id)
+                    .is_none()
+            );
+            assert!(
+                endpoint_aliases
+                    .insert("left_master_lower".into(), endpoint)
+                    .is_none()
+            );
+        }
+        if action["id"] == "Q13" {
+            assert!(
+                n.editor.sketch_ui.session.is_none(),
+                "Extrude must finish the source sketch through the UI"
+            );
+            let draft = n.editor.draft.as_ref().expect("new extrusion task");
+            assert_eq!(draft.id, "native.slot_extrude");
+            assert_eq!(draft.parameters["mode"], "Blind");
+            assert_eq!(draft.parameters["length"], 25.0);
+            assert!(draft.valid, "accepted Blind preview required");
+            let identity = check_new_extrusion(
+                &n.editor.state,
+                extrusion_baseline.as_ref().unwrap(),
+                "Blind",
+                None,
+            );
+            assert_eq!(identity["body"], draft.parameters["new_body"]);
+            assert_eq!(identity["pad"], draft.parameters["name"]);
+            verification = json!({"baseline":extrusion_baseline,"blind_preview":identity,"draft_parameters":draft.parameters});
+        }
+        if action["id"] == "Q15" {
+            let draft = n.editor.draft.as_ref().expect("extrusion task");
+            assert_eq!(draft.parameters["mode"], "Up to vertex");
+            assert!(draft.parameters["target"].is_null() && !draft.valid);
+        }
+        if action["id"] == "Q16" {
+            let draft = n.editor.draft.as_ref().expect("extrusion task");
+            assert!(draft.valid, "accepted vertex preview required");
+            let identity = check_new_extrusion(
+                &n.editor.state,
+                extrusion_baseline.as_ref().unwrap(),
+                "Up to vertex",
+                extrusion_target.as_ref(),
+            );
+            assert_eq!(identity["body"], draft.parameters["new_body"]);
+            assert_eq!(identity["pad"], draft.parameters["name"]);
+            extrusion_preview = Some(identity.clone());
+            verification = json!({"vertex_preview":identity});
+        }
+        if action["id"] == "Q17" {
+            assert!(n.editor.draft.is_none(), "Apply must commit the extrusion");
+            assert!(
+                n.editor.state["preview"].is_null(),
+                "accepted preview must be committed"
+            );
+            let identity = check_new_extrusion(
+                &n.editor.state,
+                extrusion_baseline.as_ref().unwrap(),
+                "Up to vertex",
+                extrusion_target.as_ref(),
+            );
+            let previous = extrusion_preview.as_ref().expect("accepted vertex preview");
+            for key in [
+                "body",
+                "body_id",
+                "pad",
+                "pad_id",
+                "binder",
+                "binder_id",
+                "plane",
+                "plane_id",
+                "target",
+            ] {
+                assert_eq!(
+                    identity[key], previous[key],
+                    "native identity changed during commit: {key}"
+                );
+            }
+            verification = json!({"committed":identity});
+        }
         if action["id"] == "Q04" {
             let center = n.editor.viewport.response.as_ref().unwrap().rect.center();
             edge_trace(&n, "after-source-escape", action, center, None);
@@ -2419,7 +2908,7 @@ fn tutorial_replay_from_json() {
                 "busy line entry must not move Features"
             );
         }
-        n.events.push(json!({"replay_action":action,"resolved_target":resolved,"ui":n.ui_state(),"camera":camera(&n),"state":n.editor.state,"physical_desktop":false,
+        n.events.push(json!({"replay_action":action,"resolved_target":resolved,"verification":verification,"ui":n.ui_state(),"camera":camera(&n),"state":n.editor.state,"physical_desktop":false,
             "features_rect":features.map(|r|[r.min.x,r.min.y,r.max.x,r.max.y]),
             "canvas_rect":canvas.map(|r|[r.min.x,r.min.y,r.max.x,r.max.y])}));
         n.record();
