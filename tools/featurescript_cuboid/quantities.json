@@ -1,0 +1,14 @@
+{
+  "length": {
+    "value": 2,
+    "unit": "cm"
+  },
+  "width": {
+    "value": 0.5,
+    "unit": "in"
+  },
+  "height": {
+    "value": 0.03,
+    "unit": "m"
+  }
+}

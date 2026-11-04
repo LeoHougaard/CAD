@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "id": "ported.boundedCuboid",
+  "label": "Bounded FeatureScript cuboid",
+  "description": "Manual fCuboid port. Native Box properties regenerate; no FeatureScript runtime. Lengths in mm.",
+  "parameters": {
+    "name": {
+      "type": "identifier",
+      "default": "Cuboid"
+    },
+    "length": {
+      "type": "number",
+      "unit": "mm",
+      "minimum": 1e-06,
+      "default": 20
+    },
+    "width": {
+      "type": "number",
+      "unit": "mm",
+      "minimum": 1e-06,
+      "default": 12.7
+    },
+    "height": {
+      "type": "number",
+      "unit": "mm",
+      "minimum": 1e-06,
+      "default": 30.0
+    }
+  },
+  "edits": [
+    {
+      "op": "add_object",
+      "type": "Part::Box",
+      "name": {
+        "$param": "name"
+      }
+    },
+    {
+      "op": "set",
+      "object": {
+        "$param": "name"
+      },
+      "property": "Length",
+      "value": {
+        "$param": "length"
+      }
+    },
+    {
+      "op": "set",
+      "object": {
+        "$param": "name"
+      },
+      "property": "Width",
+      "value": {
+        "$param": "width"
+      }
+    },
+    {
+      "op": "set",
+      "object": {
+        "$param": "name"
+      },
+      "property": "Height",
+      "value": {
+        "$param": "height"
+      }
+    }
+  ]
+}
