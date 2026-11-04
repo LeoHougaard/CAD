@@ -616,6 +616,8 @@ impl Editor {
                             .get(&property)
                             .cloned()
                             .unwrap_or_else(|| schema["properties"][&property].clone());
+                        let mut draft_angle = crate::extrusion_commands::draft_angle(
+                            &draft.parameters, schema, &property);
                         let mut expression = draft.parameters["expressions"]
                             .get(&property)
                             .cloned()
@@ -642,7 +644,15 @@ impl Editor {
                             }
                             ui.horizontal(|ui| {
                                 ui.add_enabled_ui(!expression.is_string(), |ui| {
-                                    if let Some(base) = &edge_base {
+                                    if let Some(angle) = &mut draft_angle {
+                                        ui.label("Draft magnitude");
+                                        // Native schema text is signed; the task value is a magnitude.
+                                        let quantity = json!({"default_unit":metadata["quantity"]["default_unit"]});
+                                        value_changed = super::units::quantity_field(ui, &mut angle["magnitude"], &quantity);
+                                        let mut inward = angle["inward"].as_bool().unwrap_or(false);
+                                        value_changed |= ui.checkbox(&mut inward, "Inward").changed();
+                                        angle["inward"] = json!(inward);
+                                    } else if let Some(base) = &edge_base {
                                         let before = value.clone();
                                         fillet_edges_widget(
                                             ui,
@@ -777,11 +787,16 @@ impl Editor {
                                 &mut draft.parameters,
                                 &property,
                             );
-                            draft.parameters["properties"][&property] = value;
+                            if let Some(angle) = draft_angle {
+                                draft.parameters["draft_angles"][&property] = angle;
+                            } else {
+                                draft.parameters["properties"][&property] = value;
+                            }
                             changed = true;
                         }
                         if expression_changed {
                             draft.parameters["expressions"][&property] = expression;
+                            crate::extrusion_commands::relinquish_draft_angle(&mut draft.parameters, &property);
                             changed = true;
                         }
                     }
@@ -809,6 +824,7 @@ impl Editor {
                                 .clicked()
                             {
                                 draft.parameters["expressions"][&path] = json!(expr);
+                                crate::extrusion_commands::relinquish_draft_angle(&mut draft.parameters, &path);
                                 changed = true;
                             }
                             if ui
@@ -819,6 +835,7 @@ impl Editor {
                                 .clicked()
                             {
                                 draft.parameters["expressions"][&path] = Value::Null;
+                                crate::extrusion_commands::relinquish_draft_angle(&mut draft.parameters, &path);
                                 changed = true;
                             }
                         });

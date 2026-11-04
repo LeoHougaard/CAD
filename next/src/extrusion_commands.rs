@@ -133,9 +133,106 @@ pub fn task_schema(schema: &Value, parameters: &Value) -> Value {
     result
 }
 
+/// Task-only magnitude and direction. Existing signed native properties are
+/// untouched until the user changes the draft control.
+pub fn draft_angle(parameters: &Value, schema: &Value, property: &str) -> Option<Value> {
+    if !supported(parameters["type"].as_str().unwrap_or_default())
+        || !matches!(property, "TaperAngle" | "TaperAngle2")
+    {
+        return None;
+    }
+    if let Some(value) = parameters["draft_angles"].get(property) {
+        return Some(value.clone());
+    }
+    let signed = parameters["properties"].get(property)
+        .unwrap_or(&schema["properties"][property]).as_f64()?;
+    Some(json!({"magnitude":signed.abs(),"inward":signed < 0.0}))
+}
+
+/// A native expression owns its angle; discard any obsolete literal task override.
+pub(crate) fn relinquish_draft_angle(parameters: &mut Value, path: &str) {
+    let property = path.trim_start_matches('.');
+    if matches!(property, "TaperAngle" | "TaperAngle2") {
+        if let Some(angles) = parameters["draft_angles"].as_object_mut() {
+            angles.remove(property);
+        }
+    }
+}
+
+/// Compile only explicit task controls to the native signed representation.
+/// Unit text must first pass through the existing native quantity query.
+pub fn active_parameters(parameters: &Value) -> Result<Value, String> {
+    let Some(angles) = parameters.get("draft_angles") else { return Ok(parameters.clone()) };
+    if !supported(parameters["type"].as_str().unwrap_or_default()) {
+        return Err("Draft direction requires an Extrude task".into());
+    }
+    let spec: crate::packages::Parameter = serde_json::from_value(json!({"type":"number","minimum":0.0})).unwrap();
+    let mut result = parameters.clone();
+    result.as_object_mut().unwrap().remove("draft_angles");
+    for (property, angle) in angles.as_object().ok_or("Invalid draft controls")? {
+        if !matches!(property.as_str(), "TaperAngle" | "TaperAngle2") {
+            return Err("Unknown draft angle field".into());
+        }
+        crate::packages::validate_parameter("Draft magnitude", &spec, &angle["magnitude"])
+            .map_err(|_| "Draft magnitude must be nonnegative. Use Inward to change direction".to_owned())?;
+        let inward = angle["inward"].as_bool().ok_or("Choose a draft direction")?;
+        let magnitude = angle["magnitude"].as_f64().unwrap();
+        result["properties"][property] = json!(if inward { -magnitude } else { magnitude });
+    }
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn expression_paths_relinquish_rejected_task_angle_without_changing_native_expression() {
+        for field in ["TaperAngle", "TaperAngle2"] {
+            for prefix in ["", ".", ".."] {
+                let path = format!("{prefix}{field}");
+                for expression in [json!("3 deg"), json!("-3 deg"), Value::Null] {
+                    let mut task = json!({"type":"PartDesign::Pad","draft_angles":{field:{"magnitude":-3.0,"inward":false}},"expressions":{path.clone():expression.clone()}});
+                    assert!(active_parameters(&task).is_err());
+                    relinquish_draft_angle(&mut task, &path);
+                    let compiled = active_parameters(&task).unwrap();
+                    assert_eq!(compiled["expressions"][&path], expression);
+                    assert!(task["draft_angles"].get(field).is_none());
+                }
+            }
+        }
+        let mut unrelated = json!({"type":"PartDesign::Pad","draft_angles":{"TaperAngle":{"magnitude":-3.0,"inward":false}}});
+        relinquish_draft_angle(&mut unrelated, "Other.TaperAngle");
+        assert!(active_parameters(&unrelated).is_err());
+        relinquish_draft_angle(&mut unrelated, "TaperAngle2");
+        assert!(active_parameters(&unrelated).is_err());
+    }
+
+    #[test]
+    fn draft_contract_preserves_signed_storage_and_checks_only_explicit_task_magnitudes() {
+        for kind in ["PartDesign::Pad", "PartDesign::Pocket"] {
+            let native = json!({"type":kind,"properties":{"TaperAngle":-3.0,"TaperAngle2":-4.0}});
+            assert_eq!(active_parameters(&native).unwrap(), native);
+            for field in ["TaperAngle", "TaperAngle2"] {
+                assert_eq!(draft_angle(&native, &Value::Null, field).unwrap(), json!({"magnitude":if field == "TaperAngle" {3.0} else {4.0},"inward":true}));
+                for inward in [false, true] {
+                    let mut task = native.clone();
+                    task["draft_angles"][field] = json!({"magnitude":3.0,"inward":inward});
+                    let compiled = active_parameters(&task).unwrap();
+                    assert_eq!(compiled["properties"][field], if inward {-3.0} else {3.0});
+                    assert!(compiled.get("draft_angles").is_none());
+                    task["draft_angles"][field]["magnitude"] = json!(-3.0);
+                    assert!(active_parameters(&task).unwrap_err().contains("nonnegative"));
+                    task["draft_angles"][field]["magnitude"] = json!({"quantity_input":"-0.1 rad","default_unit":"deg"});
+                    assert!(active_parameters(&task).is_err(), "unparsed quantities cannot reach a native edit");
+                    task["draft_angles"][field]["magnitude"] = json!(0.0);
+                    assert!(active_parameters(&task).is_ok());
+                }
+            }
+        }
+        let signed_rotation = json!({"type":"PartDesign::Revolution","properties":{"Angle":-30}});
+        assert_eq!(active_parameters(&signed_rotation).unwrap(), signed_rotation);
+    }
+
     #[test]
     fn expression_controllers_keep_dependent_form_fields_reachable_without_evaluation() {
         let schema = json!({"properties":{"SideType":"One side","Type":"Length","Type2":"Length", "UseCustomVector":false,"ReferenceAxis":null,"Length2":17},

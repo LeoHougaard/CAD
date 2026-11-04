@@ -311,7 +311,7 @@ fn feature_edits(registry: &Registry, draft: &Draft, schema: &Value) -> Result<V
     } else if draft.id == "native.properties" {
         crate::property_commands::build(&crate::hole_commands::active_parameters(
             schema,
-            &draft.parameters,
+            &crate::extrusion_commands::active_parameters(&draft.parameters)?,
         ))
     } else if draft.id == "native.property" {
         Ok(vec![
@@ -731,6 +731,7 @@ impl Editor {
             return;
         };
         d.changed = None;
+        d.valid = false;
         let edits = feature_edits(&self.registry, d, &self.property_ui.schema);
         match edits {
             Ok(edits) => {
