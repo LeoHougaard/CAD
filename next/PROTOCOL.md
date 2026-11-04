@@ -1024,3 +1024,19 @@ Expression-driven changes use the same native before/after callbacks. Formula
 suppression is edited in Properties rather than the tree toggle. Legacy files
 already lacking original suppression state reject unsuppression atomically;
 placement and topology are not inferred. Downstream native errors remain errors.
+# Constraint-result datum references
+
+A `datum` edit may use `"index_from": N` instead of `index` to target the
+native index returned by an earlier `constraint` edit in the same batch.
+The source must create a dimensional constraint on the same named sketch.
+Only further constraint creations may intervene. Existing constraint edits
+continue to use explicit `index` with their existing identity guards.
+
+The worker validates symbolic reference shape before transaction opening or
+preview rollback. Boolean, self, forward, foreign-object, nonconstraint and
+ambiguous references reject as `invalid_request`. On execution and replay it
+resolves the new native result again, checks returned object/index and native
+constraint type, and passes the unchanged value to the native datum setter.
+The journal stores the original symbolic request. No index from a previous
+execution is persisted as the identity for a new constraint.
+

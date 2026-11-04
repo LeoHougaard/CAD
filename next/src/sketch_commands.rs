@@ -359,7 +359,7 @@ struct Sketch<'a> {
     geometry: &'a [Value],
     externals: &'a [Value],
     axes: &'a [Value],
-    constraints: usize,
+    _constraints: usize,
 }
 
 impl<'a> Sketch<'a> {
@@ -384,7 +384,7 @@ impl<'a> Sketch<'a> {
                 .as_array()
                 .map(Vec::as_slice)
                 .unwrap_or_default(),
-            constraints,
+            _constraints: constraints,
         })
     }
 
@@ -1267,7 +1267,9 @@ pub fn constrain(
         ));
     }
     if let Some(value) = value {
-        edits.push(json!({"op":"datum", "object":sketch.name, "index":sketch.constraints, "value":value.trim()}));
+        edits.push(
+            json!({"op":"datum", "object":sketch.name, "index_from":0, "value":value.trim()}),
+        );
     }
     Ok(edits)
 }
@@ -1472,7 +1474,7 @@ mod tests {
         assert_eq!(line[0]["args"], json!([0, 5.]));
         assert_eq!(
             line[1],
-            json!({"op":"datum","object":"Sketch","index":7,"value":"25 mm"})
+            json!({"op":"datum","object":"Sketch","index_from":0,"value":"25 mm"})
         );
         let radius = constrain(&sketch(), "Diameter", &[e(2, 0)], Some("8 mm")).unwrap();
         assert_eq!(radius[0]["args"], json!([2, 6.]));
@@ -1503,7 +1505,7 @@ mod tests {
         );
         assert_eq!(
             edits[2],
-            json!({"op":"datum","object":"Sketch","index":0,"value":"10 mm"})
+            json!({"op":"datum","object":"Sketch","index_from":0,"value":"10 mm"})
         );
         snapshot["sketch"]["constraints"] =
             json!([{"type":"Parallel","first":0,"second":1,"active":true,"driving":true}]);
@@ -1693,7 +1695,7 @@ mod tests {
             );
             assert_eq!(
                 edits[1],
-                json!({"op":"datum","object":"Sketch","index":0,"value":"45 deg"})
+                json!({"op":"datum","object":"Sketch","index_from":0,"value":"45 deg"})
             );
             let supplementary = angle_rays_at(&snapshot, &selection, [-15., 2., 0.]).unwrap();
             assert_eq!(supplementary, [e(1, 1), e(0, 1)]);

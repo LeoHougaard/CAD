@@ -971,6 +971,32 @@ mod tests {
         }
         assert_eq!(ok(&mut s, "metadata", json!({}), json!({})), before);
     }
+
+    #[test]
+    fn symbolic_datum_keeps_sketch_lease_and_request_bytes() {
+        let mut leases = Leases::default();
+        begin(&mut leases);
+        let before = ok(&mut leases, "metadata", json!({}), json!({}));
+        let edits = json!([
+            {"op":"constraint","object":"Sketch","kind":"Angle","args":[0,1,1,1,1.0]},
+            {"op":"datum","object":"Sketch","index_from":0,"value":"45 deg"}
+        ]);
+        let saved = edits.clone();
+        ok(
+            &mut leases,
+            "sketch_edits_shape",
+            json!({}),
+            json!({"edits":edits}),
+        );
+        ok(
+            &mut leases,
+            "sketch_edits",
+            json!({}),
+            json!({"edits":edits}),
+        );
+        assert_eq!(edits, saved);
+        assert_eq!(ok(&mut leases, "metadata", json!({}), json!({})), before);
+    }
     #[test]
     fn feature_history_preview_preflight_keeps_alias_and_owner_precedence() {
         let mut s = Leases::default();

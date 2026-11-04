@@ -387,6 +387,43 @@ fn fresh_rows(state: &Value) -> &Value {
         .find(|o| o["name"] == "Sketch")
         .unwrap()["sketch"]["constraints"]
 }
+
+#[test]
+fn placed_angle_datum_uses_native_creation_result_after_rejection() {
+    // Existing native capture supplies editor state only. This is a wire and
+    // dialog regression, not a reconstruction of the Pixel Receiver sketch.
+    let native = fresh_native();
+    let base = &native["ordinary_base"];
+    let mut h = Harness::new(base);
+    h.editor.begin_dimension_with_rays(
+        "Angle",
+        vec![
+            SketchElement { index: 0, point: 0 },
+            SketchElement { index: 1, point: 0 },
+        ],
+        Some([
+            SketchElement { index: 0, point: 1 },
+            SketchElement { index: 1, point: 1 },
+        ]),
+    );
+    assert_eq!(h.input.try_recv().unwrap().op, "quantities");
+    h.reply("quantities", base, true);
+    for accepted in [false, true] {
+        h.apply("45", false);
+        let job = h.request("transaction");
+        let edits = &job.parameters["edits"];
+        assert_eq!(edits[0]["kind"], "Angle");
+        assert_eq!(
+            &edits[0]["args"].as_array().unwrap()[..4],
+            &[json!(0), json!(1), json!(1), json!(1)]
+        );
+        assert_eq!(edits[1]["index_from"], 0);
+        assert!(edits[1].get("index").is_none());
+        assert_eq!(edits[1]["value"], "45");
+        h.reply("transaction", base, accepted);
+        assert_eq!(h.editor.sketch_ui.dimension.is_none(), accepted);
+    }
+}
 fn fresh_begin(h: &mut Harness, selection: Vec<SketchElement>) {
     h.editor.begin_dimension("Angle", selection);
 }

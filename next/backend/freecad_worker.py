@@ -1047,6 +1047,48 @@ def apply_edit(doc, edit):
     return result
 
 
+def preflight_constraint_results(edits):
+    # Pure wire validation must run before opening or replaying native history.
+    for position, edit in enumerate(edits):
+        if not isinstance(edit, dict):
+            continue  # Existing edit-shape validation retains its error policy.
+        if "index_from" in edit:
+            source = edit["index_from"]
+            if (edit.get("op") != "datum" or "index" in edit
+                    or type(source) is not int or not 0 <= source < position
+                    or not isinstance(edits[source], dict)
+                    or edits[source].get("op") != "constraint"
+                    or not isinstance(edits[source].get("kind"), str)
+                    or edits[source].get("kind") not in {"Distance", "DistanceX", "DistanceY", "Radius", "Diameter", "Angle", "Weight", "SnellsLaw"}
+                    or not isinstance(edit.get("object"), str) or not edit["object"]
+                    or edits[source].get("object") != edit.get("object")
+                    or any(not isinstance(item, dict) or item.get("op") != "constraint"
+                           for item in edits[source + 1:position])):
+                fail("invalid_request", "Datum must reference a preceding native constraint result on its sketch")
+
+
+def apply_edits(doc, edits, apply=None):
+    # Resolve native results afresh on every execution, including preview replay.
+    preflight_constraint_results(edits)
+    apply = apply_edit if apply is None else apply
+    results = []
+    for edit in edits:
+        if "index_from" in edit:
+            source = edit["index_from"]
+            result = results[source]
+            if (not isinstance(result, dict) or result.get("object") != edit.get("object")
+                    or type(result.get("index")) is not int or result["index"] < 0):
+                fail("invalid_request", "Native constraint result has invalid ownership or index")
+            obj = object_in(doc, edit["object"])
+            index = sketch_index(result["index"], obj.ConstraintCount)
+            if obj.Constraints[index].Type != edits[source]["kind"]:
+                fail("invalid_request", "Native constraint result has changed type")
+            edit = dict(edit, index=index)
+            del edit["index_from"]
+        results.append(apply(doc, edit))
+    return results
+
+
 def datum_quantity(doc, obj, edit, index):
     value = edit["value"]
     if "input_default_unit" in edit:
@@ -1379,7 +1421,7 @@ def transaction(doc, request, terminal_recovery=False):
                 'edits': [{'object': edit['object'], 'recovered': True} for edit in edits], 'state': state}
     doc.openTransaction(request.get("label", "Edit"))
     try:
-        results = [apply_edit(doc, edit) for edit in edits]
+        results = apply_edits(doc, edits)
         if recompute_document(doc) is False:
             fail("invalid_model", "Native recompute failed")
         validate(doc)
@@ -1427,6 +1469,7 @@ def transaction(doc, request, terminal_recovery=False):
 
 
 def preflight_constraints(edits):
+    preflight_constraint_results(edits)
     for edit in edits:
         # New bindings can resolve external native owners. Defer them during
         # failed-load recovery before opening native history; clearing remains
@@ -1509,6 +1552,8 @@ def journal(doc, action, **parameters):
 
 
 def replay_sketch(doc, session, candidate=None):
+    if candidate:
+        preflight_constraint_results(candidate["edits"])
     if session["opened"]:
         abort_transaction(doc)
         session["opened"] = False
@@ -1528,7 +1573,7 @@ def replay_sketch(doc, session, candidate=None):
                     SketchCheckpoints.restore(sketch, checkpoint)
                 check_suppression()
                 solve_sketch(doc, session)
-            results = [apply_edit(doc, edit) for edit in candidate["edits"]] if candidate else []
+            results = apply_edits(doc, candidate["edits"]) if candidate else []
     else:
         results = []
     solve_sketch(doc, session)
@@ -1571,7 +1616,7 @@ def sketch_transaction(doc, request):
         if not session["opened"]:
             doc.openTransaction(session["label"])
             session["opened"] = True
-        results = [apply_edit(doc, edit) for edit in edits]
+        results = apply_edits(doc, edits)
         solve_sketch(doc, session)
         checkpoint = SketchCheckpoints.capture(object_in(doc, session["object"]))
         journal(doc, "stage_accept", group={"label": request.get("label", "Edit sketch"), "edits": edits,
@@ -1808,6 +1853,8 @@ def accepted_revolve_axis_master(doc, active):
 def preview(doc, request):
     lease("preview_validate", doc.Name, request=request)
     active = _native_previews.get(doc.Name)
+    if active:
+        preflight_constraint_results(active["edits"])
     if sketch_metadata(doc):
         return sketch_preview(doc, request, active)
     op = request["op"]
@@ -1884,7 +1931,7 @@ def preview(doc, request):
     doc.openTransaction(label)
     staged = False
     try:
-        results = [apply_preview_edit(doc, edit) for edit in edits]
+        results = apply_edits(doc, edits, apply_preview_edit)
         if recompute_document(doc) is False:
             fail("invalid_model", "Native recompute failed")
         validate(doc)
@@ -1901,8 +1948,7 @@ def preview(doc, request):
             recompute_document(doc)
             if active:
                 doc.openTransaction(active["label"])
-                for edit in active["edits"]:
-                    apply_preview_edit(doc, edit)
+                apply_edits(doc, active["edits"], apply_preview_edit)
                 recompute_document(doc)
             validate(doc)
         except Exception:
