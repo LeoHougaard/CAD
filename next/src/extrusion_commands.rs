@@ -154,10 +154,10 @@ pub fn draft_angle(parameters: &Value, schema: &Value, property: &str) -> Option
 /// A native expression owns its angle; discard any obsolete literal task override.
 pub(crate) fn relinquish_draft_angle(parameters: &mut Value, path: &str) {
     let property = path.trim_start_matches('.');
-    if matches!(property, "TaperAngle" | "TaperAngle2") {
-        if let Some(angles) = parameters["draft_angles"].as_object_mut() {
-            angles.remove(property);
-        }
+    if matches!(property, "TaperAngle" | "TaperAngle2")
+        && let Some(angles) = parameters["draft_angles"].as_object_mut()
+    {
+        angles.remove(property);
     }
 }
 
