@@ -227,7 +227,16 @@ pub fn build(parameters: &Value) -> Result<Vec<Value>, String> {
             .iter()
             .position(|field| *field == property.as_str())
             .unwrap_or(controllers.len());
-        if crate::extrusion_commands::supported(parameters["type"].as_str().unwrap_or_default()) {
+        if parameters["type"] == "PartDesign::Chamfer" {
+            // Creation previews recreate the default equal-distance object.
+            // Its mode enables dependent native properties synchronously.
+            (
+                usize::from(!is_reference(value)),
+                usize::from(property.as_str() != "ChamferType"),
+            )
+        } else if crate::extrusion_commands::supported(
+            parameters["type"].as_str().unwrap_or_default(),
+        ) {
             // Assemble task controllers before targets, then dimensional values.
             // Do not recompute between them: a mode can require a new target.
             let rank = match property.as_str() {
@@ -519,5 +528,68 @@ mod tests {
             vec![json!({"op":"add_object","name":"Box","type":"Part::Box"})]
         );
         assert!(build(&json!({"name":"Box","create":false,"properties":{}})).is_err());
+    }
+    #[test]
+    fn chamfer_creation_replays_mode_before_dependent_dimensions() {
+        for (mode, dependent, value) in [
+            (
+                "Distance and Angle",
+                "Angle",
+                json!({"quantity_input":"30 deg","default_unit":"deg"}),
+            ),
+            (
+                "Two distances",
+                "Size2",
+                json!({"quantity_input":"3 mm","default_unit":"mm"}),
+            ),
+        ] {
+            let mut properties = json!({"Base":{"link":"Fillet","subelements":["Edge15"]},
+                "ChamferType":mode,"Size":{"quantity_input":"5 mm","default_unit":"mm"}});
+            properties[dependent] = value.clone();
+            let edits = build(&json!({"name":"Chamfer","type":"PartDesign::Chamfer",
+                "body":"Body","create":true,"properties":properties}))
+            .unwrap();
+            assert_eq!(
+                edits[0],
+                json!({"op":"add_object","type":"PartDesign::Chamfer","name":"Chamfer","body":"Body"})
+            );
+            assert_eq!(edits[1]["property"], "Base");
+            assert_eq!(edits[2]["property"], "ChamferType");
+            let dimension = edits
+                .iter()
+                .find(|edit| edit["property"] == dependent)
+                .unwrap();
+            assert_eq!(dimension["value"], value);
+            assert!(
+                edits
+                    .iter()
+                    .position(|edit| edit["property"] == dependent)
+                    .unwrap()
+                    > 2
+            );
+            assert_eq!(
+                edits[edits.len() - 2],
+                json!({"op":"set","object":"Body","property":"Tip","value":{"link":"Chamfer"}})
+            );
+            assert_eq!(
+                edits.last().unwrap(),
+                &json!({"op":"set","object":"Chamfer","property":"Visibility","value":true})
+            );
+        }
+    }
+    #[test]
+    fn chamfer_mode_priority_preserves_unrelated_feature_order() {
+        let edits = build(
+            &json!({"name":"Fillet","type":"PartDesign::Fillet","create":false,
+            "properties":{"Radius":5,"Refine":true,"Base":{"link":"Pad","subelements":["Edge1"]}}}),
+        )
+        .unwrap();
+        assert_eq!(
+            edits
+                .iter()
+                .map(|edit| edit["property"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["Base", "Radius", "Refine"]
+        );
     }
 }
