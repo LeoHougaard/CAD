@@ -501,17 +501,25 @@ fn offset_plane_controller_owns_context_and_preserves_rejected_preview() {
     editor.finish_preview(false);
     assert_eq!(input.try_recv().unwrap().op, "preview_cancel");
     let reply = |op: &str, accepted: bool, snapshot: Value| Reply {
-        op: op.into(), accepted, state: snapshot, scenes: vec![],
+        op: op.into(),
+        accepted,
+        state: snapshot,
+        scenes: vec![],
         error: (!accepted).then(|| "cancel rejected".into()),
-        elapsed: Duration::ZERO, data: Value::Null,
+        elapsed: Duration::ZERO,
+        data: Value::Null,
     };
-    _output.send(reply("preview_cancel", false, editor.state.clone())).unwrap();
+    _output
+        .send(reply("preview_cancel", false, editor.state.clone()))
+        .unwrap();
     editor.poll();
     assert!(editor.draft.is_some());
     assert!(editor.offset_plane_invalid());
     editor.finish_preview(false);
     assert_eq!(input.try_recv().unwrap().op, "preview_cancel");
-    _output.send(reply("preview_cancel", true, state.clone())).unwrap();
+    _output
+        .send(reply("preview_cancel", true, state.clone()))
+        .unwrap();
     editor.poll();
     assert!(editor.draft.is_none());
     assert!(editor.property_ui.offset.is_none());
@@ -523,7 +531,9 @@ fn offset_plane_controller_owns_context_and_preserves_rejected_preview() {
     let reorder = input.try_recv().unwrap();
     assert_eq!(reorder.op, "transaction");
     assert_eq!(reorder.parameters["edits"][0]["op"], "body_reorder");
-    _output.send(reply("transaction", true, state.clone())).unwrap();
+    _output
+        .send(reply("transaction", true, state.clone()))
+        .unwrap();
     editor.poll();
     assert!(editor.draft.is_none());
 

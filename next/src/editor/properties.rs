@@ -48,13 +48,19 @@ fn selected_line_slot_candidate(source: &Value) -> bool {
 
 impl Editor {
     pub(super) fn owns_offset_plane(&self) -> bool {
-        self.draft.as_ref().zip(self.property_ui.offset.as_ref())
+        self.draft
+            .as_ref()
+            .zip(self.property_ui.offset.as_ref())
             .is_some_and(|(draft, offset)| draft.token == offset.owner_token)
     }
 
     pub(super) fn offset_plane_invalid(&self) -> bool {
         self.owns_offset_plane()
-            && self.property_ui.offset.as_ref().is_some_and(|offset| offset.invalid)
+            && self
+                .property_ui
+                .offset
+                .as_ref()
+                .is_some_and(|offset| offset.invalid)
     }
 
     pub(super) fn offset_plane_supported(&self, name: &str) -> bool {
