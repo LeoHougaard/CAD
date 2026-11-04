@@ -172,7 +172,11 @@ fn identifier(value: &str) -> bool {
         && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 
-pub(crate) fn validate_parameter(name: &str, spec: &Parameter, value: &Value) -> Result<(), String> {
+pub(crate) fn validate_parameter(
+    name: &str,
+    spec: &Parameter,
+    value: &Value,
+) -> Result<(), String> {
     let valid = match spec.kind {
         ParameterType::Identifier => value.as_str().is_some_and(identifier),
         ParameterType::Edge => value

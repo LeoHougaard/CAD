@@ -144,8 +144,10 @@ pub fn draft_angle(parameters: &Value, schema: &Value, property: &str) -> Option
     if let Some(value) = parameters["draft_angles"].get(property) {
         return Some(value.clone());
     }
-    let signed = parameters["properties"].get(property)
-        .unwrap_or(&schema["properties"][property]).as_f64()?;
+    let signed = parameters["properties"]
+        .get(property)
+        .unwrap_or(&schema["properties"][property])
+        .as_f64()?;
     Some(json!({"magnitude":signed.abs(),"inward":signed < 0.0}))
 }
 
@@ -162,11 +164,14 @@ pub(crate) fn relinquish_draft_angle(parameters: &mut Value, path: &str) {
 /// Compile only explicit task controls to the native signed representation.
 /// Unit text must first pass through the existing native quantity query.
 pub fn active_parameters(parameters: &Value) -> Result<Value, String> {
-    let Some(angles) = parameters.get("draft_angles") else { return Ok(parameters.clone()) };
+    let Some(angles) = parameters.get("draft_angles") else {
+        return Ok(parameters.clone());
+    };
     if !supported(parameters["type"].as_str().unwrap_or_default()) {
         return Err("Draft direction requires an Extrude task".into());
     }
-    let spec: crate::packages::Parameter = serde_json::from_value(json!({"type":"number","minimum":0.0})).unwrap();
+    let spec: crate::packages::Parameter =
+        serde_json::from_value(json!({"type":"number","minimum":0.0})).unwrap();
     let mut result = parameters.clone();
     result.as_object_mut().unwrap().remove("draft_angles");
     for (property, angle) in angles.as_object().ok_or("Invalid draft controls")? {
@@ -174,8 +179,12 @@ pub fn active_parameters(parameters: &Value) -> Result<Value, String> {
             return Err("Unknown draft angle field".into());
         }
         crate::packages::validate_parameter("Draft magnitude", &spec, &angle["magnitude"])
-            .map_err(|_| "Draft magnitude must be nonnegative. Use Inward to change direction".to_owned())?;
-        let inward = angle["inward"].as_bool().ok_or("Choose a draft direction")?;
+            .map_err(|_| {
+                "Draft magnitude must be nonnegative. Use Inward to change direction".to_owned()
+            })?;
+        let inward = angle["inward"]
+            .as_bool()
+            .ok_or("Choose a draft direction")?;
         let magnitude = angle["magnitude"].as_f64().unwrap();
         result["properties"][property] = json!(if inward { -magnitude } else { magnitude });
     }
@@ -213,24 +222,41 @@ mod tests {
             let native = json!({"type":kind,"properties":{"TaperAngle":-3.0,"TaperAngle2":-4.0}});
             assert_eq!(active_parameters(&native).unwrap(), native);
             for field in ["TaperAngle", "TaperAngle2"] {
-                assert_eq!(draft_angle(&native, &Value::Null, field).unwrap(), json!({"magnitude":if field == "TaperAngle" {3.0} else {4.0},"inward":true}));
+                assert_eq!(
+                    draft_angle(&native, &Value::Null, field).unwrap(),
+                    json!({"magnitude":if field == "TaperAngle" {3.0} else {4.0},"inward":true})
+                );
                 for inward in [false, true] {
                     let mut task = native.clone();
                     task["draft_angles"][field] = json!({"magnitude":3.0,"inward":inward});
                     let compiled = active_parameters(&task).unwrap();
-                    assert_eq!(compiled["properties"][field], if inward {-3.0} else {3.0});
+                    assert_eq!(
+                        compiled["properties"][field],
+                        if inward { -3.0 } else { 3.0 }
+                    );
                     assert!(compiled.get("draft_angles").is_none());
                     task["draft_angles"][field]["magnitude"] = json!(-3.0);
-                    assert!(active_parameters(&task).unwrap_err().contains("nonnegative"));
-                    task["draft_angles"][field]["magnitude"] = json!({"quantity_input":"-0.1 rad","default_unit":"deg"});
-                    assert!(active_parameters(&task).is_err(), "unparsed quantities cannot reach a native edit");
+                    assert!(
+                        active_parameters(&task)
+                            .unwrap_err()
+                            .contains("nonnegative")
+                    );
+                    task["draft_angles"][field]["magnitude"] =
+                        json!({"quantity_input":"-0.1 rad","default_unit":"deg"});
+                    assert!(
+                        active_parameters(&task).is_err(),
+                        "unparsed quantities cannot reach a native edit"
+                    );
                     task["draft_angles"][field]["magnitude"] = json!(0.0);
                     assert!(active_parameters(&task).is_ok());
                 }
             }
         }
         let signed_rotation = json!({"type":"PartDesign::Revolution","properties":{"Angle":-30}});
-        assert_eq!(active_parameters(&signed_rotation).unwrap(), signed_rotation);
+        assert_eq!(
+            active_parameters(&signed_rotation).unwrap(),
+            signed_rotation
+        );
     }
 
     #[test]

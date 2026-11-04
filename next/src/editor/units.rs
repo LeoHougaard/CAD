@@ -121,7 +121,10 @@ impl Editor {
                     && let Some(draft) = &mut self.draft
                 {
                     if path.starts_with("/draft_angles/") {
-                        *draft.parameters.pointer_mut(path).expect("pending draft quantity") =
+                        *draft
+                            .parameters
+                            .pointer_mut(path)
+                            .expect("pending draft quantity") =
                             data["items"][i]["base_value"].clone();
                     } else {
                         draft.parameters[path] = data["items"][i]["base_value"].clone();
@@ -172,12 +175,21 @@ impl Editor {
             return false;
         };
         if draft.id == "native.properties" {
-            let fields: Vec<_> = draft.parameters["draft_angles"].as_object()
-                .into_iter().flatten().filter_map(|(property, angle)| {
+            let fields: Vec<_> = draft.parameters["draft_angles"]
+                .as_object()
+                .into_iter()
+                .flatten()
+                .filter_map(|(property, angle)| {
                     let value = &angle["magnitude"];
-                    (!value["quantity_input"].is_null() || value.is_string()).then(||
-                        (format!("/draft_angles/{property}/magnitude"), value.clone(), "deg".into()))
-                }).collect();
+                    (!value["quantity_input"].is_null() || value.is_string()).then(|| {
+                        (
+                            format!("/draft_angles/{property}/magnitude"),
+                            value.clone(),
+                            "deg".into(),
+                        )
+                    })
+                })
+                .collect();
             if !fields.is_empty() {
                 self.quantity_request(true, fields, resume);
                 return true;
