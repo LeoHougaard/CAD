@@ -12,6 +12,7 @@ pub(super) struct Picker {
     rect: Rect,
     mode: SelectionMode,
     choices: Vec<Selection>,
+    plane: Option<String>,
 }
 
 struct Hit {
@@ -153,6 +154,10 @@ impl Viewport {
                 rect: self.rect,
                 mode: self.selection_mode,
                 choices: self.native_hits(position, triangles),
+                plane: self
+                    .pick(position, triangles)
+                    .map(|s| s.object)
+                    .filter(|name| self.offset_plane_targets.contains(name)),
             });
         }
         let mut chosen = None;
@@ -164,6 +169,12 @@ impl Viewport {
                     ui.close_kind(egui::UiKind::Menu);
                     return;
                 };
+                if let Some(plane) = &picker.plane
+                    && ui.button("Offset plane").clicked()
+                {
+                    self.offset_plane_request = Some(plane.clone());
+                    ui.close_kind(egui::UiKind::Menu);
+                }
                 ui.label("Select other");
                 ui.weak("Native elements, front to back. Shift toggles selection.");
                 ui.separator();
@@ -291,6 +302,7 @@ mod tests {
             rect: v.rect,
             mode: v.selection_mode,
             choices: vec![],
+            plane: None,
         });
         v.other_hover = Some(Selection {
             object: "Rear".into(),

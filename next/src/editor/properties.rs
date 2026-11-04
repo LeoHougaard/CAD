@@ -12,6 +12,7 @@ use std::{
 pub(super) struct PropertyUi {
     pub(super) schema: Value,
     loading: bool,
+    pub(super) offset: Option<OffsetPlaneUi>,
     filter: String,
     advanced: bool,
     buffers: BTreeMap<String, String>,
@@ -19,6 +20,15 @@ pub(super) struct PropertyUi {
     pub(super) axis_profile: Option<String>,
     pub(super) axis_pick: bool,
     pub(super) axis_overlap: bool,
+}
+
+#[derive(Default)]
+pub(super) struct OffsetPlaneUi {
+    owner_token: String,
+    input: String,
+    magnitude: f64,
+    flipped: bool,
+    pub(super) invalid: bool,
 }
 
 fn selected_line_slot_candidate(source: &Value) -> bool {
@@ -37,6 +47,119 @@ fn selected_line_slot_candidate(source: &Value) -> bool {
 }
 
 impl Editor {
+    pub(super) fn owns_offset_plane(&self) -> bool {
+        self.draft.as_ref().zip(self.property_ui.offset.as_ref())
+            .is_some_and(|(draft, offset)| draft.token == offset.owner_token)
+    }
+
+    pub(super) fn offset_plane_invalid(&self) -> bool {
+        self.owns_offset_plane()
+            && self.property_ui.offset.as_ref().is_some_and(|offset| offset.invalid)
+    }
+
+    pub(super) fn offset_plane_supported(&self, name: &str) -> bool {
+        objects(&self.state).iter().any(|o| {
+            o["name"] == name
+                && matches!(o["type"].as_str(), Some("App::Plane" | "PartDesign::Plane"))
+                && crate::body_commands::body_of(&self.state, name).is_some()
+        })
+    }
+
+    pub(super) fn start_offset_plane(&mut self, support: &str) {
+        if !self.tree_mutable() || !self.offset_plane_supported(support) {
+            return;
+        }
+        // The context target owns both the support and Body, regardless of stale selection.
+        self.start_native_feature_for_profile("PartDesign::Plane", Some(support));
+        if let Some(draft) = &mut self.draft {
+            draft.name = "Offset plane".into();
+            draft.parameters["body"] = json!(crate::body_commands::body_of(&self.state, support));
+            draft.parameters["properties"]["AttachmentSupport"] =
+                json!([{"link":support,"subelements":[""]}]);
+            draft.parameters["properties"]["MapMode"] = json!("FlatFace");
+            draft.parameters["properties"]["AttachmentOffset"] =
+                json!({"position":[0.,0.,0.],"rotation":[0.,0.,0.,1.]});
+            self.property_ui.offset = Some(OffsetPlaneUi {
+                owner_token: draft.token.clone(),
+                ..OffsetPlaneUi::default()
+            });
+        }
+    }
+
+    pub(super) fn offset_quantity_reply(&mut self, data: &Value) {
+        if !self.owns_offset_plane() {
+            return;
+        }
+        let Some(offset) = &mut self.property_ui.offset else {
+            return;
+        };
+        let value = data["items"][0]["base_value"].as_f64();
+        offset.invalid = value.is_none_or(|v| !v.is_finite() || v < 0.);
+        if offset.invalid {
+            self.error = Some("Offset magnitude must be nonnegative".into());
+            return;
+        }
+        offset.magnitude = value.unwrap();
+        let z = if offset.flipped {
+            -offset.magnitude
+        } else {
+            offset.magnitude
+        };
+        if let Some(draft) = &mut self.draft {
+            draft.parameters["properties"]["AttachmentOffset"]["position"][2] = json!(z);
+            draft.changed = Some(Instant::now());
+            draft.valid = false;
+        }
+    }
+
+    fn offset_plane_fields(&mut self, ui: &mut egui::Ui) {
+        let offset = self.property_ui.offset.as_mut().unwrap();
+        ui.label("Offset magnitude");
+        let mut changed = false;
+        ui.add_enabled_ui(!self.busy, |ui| {
+            let color = if offset.invalid {
+                egui::Color32::from_rgb(225, 142, 138)
+            } else {
+                ui.visuals().text_color()
+            };
+            changed = ui
+                .add(
+                    egui::TextEdit::singleline(&mut offset.input)
+                        .id_salt("offset_magnitude")
+                        .hint_text("0 mm")
+                        .text_color(color),
+                )
+                .changed();
+            if ui.button("Flip direction").clicked() && !offset.invalid {
+                offset.flipped = !offset.flipped;
+                let z = if offset.flipped {
+                    -offset.magnitude
+                } else {
+                    offset.magnitude
+                };
+                let draft = self.draft.as_mut().unwrap();
+                draft.parameters["properties"]["AttachmentOffset"]["position"][2] = json!(z);
+                draft.changed = Some(Instant::now());
+                draft.valid = false;
+            }
+        });
+        if changed {
+            offset.invalid = true;
+            let input = offset.input.clone();
+            let draft = self.draft.as_mut().unwrap();
+            draft.valid = false;
+            draft.changed = None;
+            let metadata = &self.property_ui.schema["property_metadata"]["AttachmentOffset"]["quantity"]
+                ["position"][2];
+            let value = crate::document_units::input(&input, metadata);
+            self.quantity_request(
+                false,
+                vec![("@offset_magnitude".into(), value, "mm".into())],
+                false,
+            );
+        }
+    }
+
     pub(super) fn start_slot_extrusion(&mut self, profile: &str) -> bool {
         let Some(source) = objects(&self.state).iter().find(|o| o["name"] == profile) else {
             return false;
@@ -264,6 +387,11 @@ impl Editor {
                 .first()
                 .and_then(|(n, _)| crate::body_commands::body_of(&self.state, n))
         });
+        if type_id == "PartDesign::Plane"
+            && let Some(support) = profile
+        {
+            body = crate::body_commands::body_of(&self.state, support);
+        }
         if !definition.type_id.starts_with("PartDesign::") {
             body = None;
         }
@@ -465,6 +593,14 @@ impl Editor {
     }
 
     pub(super) fn native_property_fields(&mut self, ui: &mut egui::Ui) {
+        if self.owns_offset_plane() {
+            ui.label("Offset plane");
+            if let Some(error) = &self.error {
+                ui.colored_label(egui::Color32::from_rgb(225, 142, 138), error);
+            }
+            self.offset_plane_fields(ui);
+            return;
+        }
         let selected = self.native_link_selection();
         let axis_editable = !self.busy && !self.unavailable();
         let draft = self.draft.as_mut().unwrap();

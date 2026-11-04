@@ -445,7 +445,7 @@ impl Editor {
             && self.file_dialog.is_none()
             && !self.overwrite
     }
-    fn tree_mutable(&self) -> bool {
+    pub(super) fn tree_mutable(&self) -> bool {
         self.tree_selectable() && self.draft.is_none()
     }
     pub(super) fn toggle_feature_suppression(&mut self, name: &str) {
@@ -710,6 +710,10 @@ impl Editor {
         }
         response.context_menu(|ui| {
             ui.add_enabled_ui(mutable, |ui| {
+                if self.offset_plane_supported(name) && ui.button("Offset plane").clicked() {
+                    self.start_offset_plane(name);
+                    ui.close();
+                }
                 if ui.button("Properties").clicked() {
                     self.edit_native_properties(name);
                     ui.close();

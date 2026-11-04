@@ -111,6 +111,8 @@ pub struct Viewport {
     dimension_hits: Vec<sketch::DimensionHit>,
     standard_plane: Option<StandardPlane>,
     standard_plane_document: Option<(String, u64)>,
+    pub offset_plane_targets: Vec<String>,
+    pub offset_plane_request: Option<String>,
     other_picker: Option<select_other::Picker>,
     other_hover: Option<Selection>,
 }
@@ -153,6 +155,8 @@ impl Default for Viewport {
             dimension_hits: vec![],
             standard_plane: None,
             standard_plane_document: None,
+            offset_plane_targets: Vec::new(),
+            offset_plane_request: None,
             other_picker: None,
             other_hover: None,
         };

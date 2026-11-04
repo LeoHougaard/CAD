@@ -423,3 +423,126 @@ fn valid_replacements_close_old_document_after_acceptance() {
     assert_eq!(opened.scenes[0].0["open_documents"], json!(["Saved"]));
     assert!(actor.edit(&opened.state, "").accepted);
 }
+
+#[test]
+fn offset_plane_controller_owns_context_and_preserves_rejected_preview() {
+    let state: Value = serde_json::from_str(include_str!(
+        "../../tests/fixtures/view_cube_corner_state.json"
+    ))
+    .unwrap();
+    let (jobs, input) = mpsc::sync_channel(1);
+    let (_output, replies) = mpsc::channel();
+    // Controller checks use a retained native snapshot and explicit mock replies.
+    // Expected schema, cancellation and successor transaction jobs are consumed below.
+    let mut editor = Editor {
+        jobs,
+        replies,
+        busy: false,
+        registry: Registry::builtin().unwrap(),
+        state: state.clone(),
+        viewport: Viewport::default(),
+        sketch: None,
+        selected_object: None,
+        sketch_ui: SketchUi::default(),
+        sketch_creation: None,
+        body_ui: BodyUi::default(),
+        property_ui: properties::PropertyUi::default(),
+        measurement_ui: measurements::MeasurementUi::default(),
+        units_ui: Default::default(),
+        transform_ui: transforms::TransformUi::default(),
+        exchange_ui: exchange::ExchangeUi::default(),
+        draft: None,
+        sequence: 17,
+        error: None,
+        status: String::new(),
+        path: "retained-prefix.FCStd".into(),
+        file_input: String::new(),
+        file_dialog: None,
+        file_browser: file_browser::FileBrowser::default(),
+        overwrite: false,
+        dirty: true,
+        pending_file: None,
+        allow_close: false,
+        fit_next: false,
+    };
+
+    editor.start_offset_plane("XY_Plane");
+    let job = input.try_recv().unwrap();
+    assert_eq!(job.op, "feature_schema");
+    editor.busy = false;
+    assert_eq!(
+        editor.draft.as_ref().unwrap().parameters["body"],
+        crate::body_commands::body_of(&state, "XY_Plane").unwrap()
+    );
+    assert_eq!(
+        editor.draft.as_ref().unwrap().parameters["properties"]["AttachmentSupport"],
+        json!([{"link":"XY_Plane","subelements":[""]}])
+    );
+    editor.offset_quantity_reply(&json!({"items":[{"base_value":38.1}]}));
+    let accepted = editor.draft.as_ref().unwrap().parameters.clone();
+    editor.offset_quantity_reply(&json!({"items":[{"base_value":-25.4}]}));
+    assert_eq!(editor.draft.as_ref().unwrap().parameters, accepted);
+    assert!(editor.property_ui.offset.as_ref().unwrap().invalid);
+    editor.finish_preview(true);
+    assert!(matches!(input.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    assert_eq!(editor.state, state);
+    editor.offset_quantity_reply(&json!({"items":[{"base_value":0.0}]}));
+    assert!(!editor.property_ui.offset.as_ref().unwrap().invalid);
+
+    // An unrelated draft must not inherit a retired task's validation flag.
+    editor.offset_quantity_reply(&json!({"items":[{"base_value":-25.4}]}));
+    let owner = editor.draft.as_ref().unwrap().token.clone();
+    editor.draft.as_mut().unwrap().token = "unrelated-task".into();
+    assert!(!editor.offset_plane_invalid());
+    editor.draft.as_mut().unwrap().token = owner.clone();
+    assert!(editor.offset_plane_invalid());
+
+    editor.state["preview"] = json!({"token":owner});
+    editor.finish_preview(false);
+    assert_eq!(input.try_recv().unwrap().op, "preview_cancel");
+    let reply = |op: &str, accepted: bool, snapshot: Value| Reply {
+        op: op.into(), accepted, state: snapshot, scenes: vec![],
+        error: (!accepted).then(|| "cancel rejected".into()),
+        elapsed: Duration::ZERO, data: Value::Null,
+    };
+    _output.send(reply("preview_cancel", false, editor.state.clone())).unwrap();
+    editor.poll();
+    assert!(editor.draft.is_some());
+    assert!(editor.offset_plane_invalid());
+    editor.finish_preview(false);
+    assert_eq!(input.try_recv().unwrap().op, "preview_cancel");
+    _output.send(reply("preview_cancel", true, state.clone())).unwrap();
+    editor.poll();
+    assert!(editor.draft.is_none());
+    assert!(editor.property_ui.offset.is_none());
+
+    // Exercise the real successor constructor and Apply route, not a fabricated draft.
+    editor.start_reorder("Sketch1");
+    assert_eq!(editor.draft.as_ref().unwrap().id, "native.history");
+    editor.finish_preview(true);
+    let reorder = input.try_recv().unwrap();
+    assert_eq!(reorder.op, "transaction");
+    assert_eq!(reorder.parameters["edits"][0]["op"], "body_reorder");
+    _output.send(reply("transaction", true, state.clone())).unwrap();
+    editor.poll();
+    assert!(editor.draft.is_none());
+
+    editor.start_offset_plane("XY_Plane");
+    assert_eq!(input.try_recv().unwrap().op, "feature_schema");
+    editor.busy = false;
+    editor.offset_quantity_reply(&json!({"items":[{"base_value":-25.4}]}));
+    editor.draft.as_mut().unwrap().deferred = true;
+    editor.finish_preview(false);
+    assert!(editor.draft.is_none());
+    assert!(editor.property_ui.offset.is_none());
+    assert!(matches!(input.try_recv(), Err(mpsc::TryRecvError::Empty)));
+
+    // The successful deferred transaction reply has the same cleanup obligation.
+    editor.start_offset_plane("XY_Plane");
+    assert_eq!(input.try_recv().unwrap().op, "feature_schema");
+    editor.draft.as_mut().unwrap().committing = true;
+    _output.send(reply("transaction", true, state)).unwrap();
+    editor.poll();
+    assert!(editor.draft.is_none());
+    assert!(editor.property_ui.offset.is_none());
+}

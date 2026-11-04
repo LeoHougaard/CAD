@@ -669,6 +669,7 @@ impl Editor {
                 {
                     if self.state["preview"].is_null() {
                         self.draft = None;
+                        self.property_ui.offset = None;
                     } else if let Some(draft) = &mut self.draft {
                         draft.valid = false;
                     }
@@ -677,6 +678,7 @@ impl Editor {
             if reply.op == "transaction" && self.draft.as_ref().is_some_and(|d| d.committing) {
                 if success {
                     self.draft = None;
+                    self.property_ui.offset = None;
                 } else if let Some(d) = &mut self.draft {
                     d.committing = false;
                 }
@@ -847,11 +849,15 @@ impl Editor {
         }
     }
     fn finish_preview(&mut self, commit: bool) {
+        if commit && self.offset_plane_invalid() {
+            return;
+        }
         if let Some(d) = &mut self.draft
             && d.deferred
         {
             if !commit {
                 self.draft = None;
+                self.property_ui.offset = None;
                 return;
             }
             let edits = feature_edits(&self.registry, d, &self.property_ui.schema);
@@ -1603,6 +1609,11 @@ impl eframe::App for Editor {
             self.selected_object = None;
         }
         self.units_ui.workspace_input_blocked = was_busy || self.busy || guide_was_open;
+        if self.offset_plane_invalid()
+            && let Some(draft) = &mut self.draft
+        {
+            draft.valid = false;
+        }
         if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close {
             if self.unavailable() && !self.source_recovery() && !self.busy {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -1717,6 +1728,16 @@ impl eframe::App for Editor {
                 });
             });
         });
+        self.viewport.offset_plane_targets = if self.tree_mutable() {
+            objects(&self.state)
+                .iter()
+                .filter_map(|o| o["name"].as_str())
+                .filter(|name| self.offset_plane_supported(name))
+                .map(str::to_owned)
+                .collect()
+        } else {
+            Vec::new()
+        };
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(Color32::from_rgb(5, 7, 9)))
             .show(ctx, |ui| {
@@ -1746,6 +1767,9 @@ impl eframe::App for Editor {
                     },
                 );
             });
+        if let Some(support) = self.viewport.offset_plane_request.take() {
+            self.start_offset_plane(&support);
+        }
         if self.source_recovery() && !guide_was_open && !workflow_guide::active(ctx) {
             self.panels(ctx);
             self.file_browser_ui(ctx);

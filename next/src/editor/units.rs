@@ -112,6 +112,10 @@ impl Editor {
 
     pub(super) fn quantity_reply(&mut self, data: &Value) {
         if let Some((package, paths, resume)) = self.units_ui.pending.take() {
+            if paths == ["@offset_magnitude"] {
+                self.offset_quantity_reply(data);
+                return;
+            }
             for (i, path) in paths.iter().enumerate() {
                 self.units_ui
                     .fields
