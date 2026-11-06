@@ -1,0 +1,21 @@
+{
+  "TechDraw::DrawPage": {
+    "ProjectionType": [
+      "First angle",
+      "Third angle"
+    ]
+  },
+  "TechDraw::DrawSVGTemplate": {
+    "Orientation": [
+      "Portrait",
+      "Landscape"
+    ]
+  },
+  "TechDraw::DrawViewPart": {
+    "ScaleType": [
+      "Page",
+      "Automatic",
+      "Custom"
+    ]
+  }
+}

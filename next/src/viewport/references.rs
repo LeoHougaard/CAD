@@ -55,6 +55,17 @@ impl Reference {
             self.lines().into_iter().flatten().collect()
         }
     }
+    pub(super) fn selected_bounds(&self, selections: &[Selection]) -> Vec<Vec3> {
+        if selections.iter().any(|selection| {
+            selection.object.as_str() == self.object.as_ref()
+                && (selection.subelement.is_empty()
+                    || self.native_subelements.contains(&selection.subelement))
+        }) {
+            self.bounds_points()
+        } else {
+            vec![]
+        }
+    }
     fn allowed(&self, mode: SelectionMode) -> bool {
         match mode {
             SelectionMode::All => true,
@@ -67,11 +78,48 @@ impl Reference {
     }
 }
 impl Viewport {
+    pub fn planes_visible(&self) -> bool {
+        self.planes_visible
+    }
+
+    /// Hide display planes without changing native object visibility or history.
+    pub fn toggle_planes(&mut self, state: &Value) {
+        self.planes_visible = !self.planes_visible;
+        if !self.planes_visible {
+            self.clear_standard_plane();
+        }
+        self.set_references(state);
+    }
+
     /// Refresh presentation-only native datums directly from the solved snapshot.
     /// Infinite reference Shapes are deliberately never tessellated for display.
     pub fn set_references(&mut self, state: &Value) {
+        self.cancel_other_picker();
+        let frame = &state["units"]["sketch_frame"];
+        self.sketch_frame_size = (frame["purpose"] == "editing-guide")
+            .then(|| {
+                Some(Vec2::new(frame["size_mm"][0].as_f64()? as f32,
+                               frame["size_mm"][1].as_f64()? as f32))
+            })
+            .flatten()
+            .filter(|size| size.is_finite() && size.x > 0. && size.y > 0.);
         let revision = state["revision"].as_u64();
         let mut revisions = BTreeMap::new();
+        // Origin planes are infinite. Give their display a useful extent in
+        // an existing model so their selectable area is not buried in a solid.
+        let model_extent = state["objects"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .flat_map(|object| {
+                (0..3).filter_map(move |axis| {
+                    let min = object["shape"]["bounds"]["min"][axis].as_f64()?;
+                    let max = object["shape"]["bounds"]["max"][axis].as_f64()?;
+                    let extent = (max - min) as f32;
+                    (extent.is_finite() && extent > 0.).then_some(extent)
+                })
+            })
+            .fold(0_f32, f32::max);
         let references = state["objects"]
             .as_array()
             .into_iter()
@@ -96,6 +144,9 @@ impl Viewport {
                     return None;
                 }
                 let kind = descriptor["kind"].as_str()?;
+                if kind == "plane" && !self.planes_visible {
+                    return None;
+                }
                 if !matches!(
                     kind,
                     "plane" | "line" | "point" | "coordinate_system" | "origin"
@@ -104,10 +155,14 @@ impl Viewport {
                 }
                 let name = object["name"].as_str()?;
                 let (origin, rotation) = placement(&descriptor["placement"]);
-                let size = Vec2::new(
+                let mut size = Vec2::new(
                     descriptor["size"][0].as_f64().unwrap_or(20.) as f32,
                     descriptor["size"][1].as_f64().unwrap_or(20.) as f32,
                 );
+                if kind == "plane" && object["type"] == "App::Plane" {
+                    size.x = size.x.max(model_extent * 1.25);
+                    size.y = size.y.max(model_extent * 1.25);
+                }
                 if !origin.is_finite() || !size.is_finite() || size.x <= 0. || size.y <= 0. {
                     return None;
                 }
@@ -176,7 +231,7 @@ impl Viewport {
                     let b = self.project(line[1]);
                     let (distance, fraction) = segment_distance(pos, a.0, b.0);
                     let depth = a.1 + (b.1 - a.1) * fraction;
-                    if distance <= 6. && candidate.is_none_or(|(d, _)| distance < d) {
+                    if distance <= super::EDGE_PICK_RADIUS && candidate.is_none_or(|(d, _)| distance < d) {
                         candidate = Some((distance, depth));
                     }
                 }
@@ -190,13 +245,13 @@ impl Viewport {
                             colors: [Color32::TRANSPARENT; 3],
                         };
                         if let Some(depth) = triangle_depth(pos, &triangle) {
-                            candidate = Some((6., depth));
+                            candidate = Some((super::EDGE_PICK_RADIUS, depth));
                         }
                     }
                 } else if reference.kind == "point" {
                     let (point, depth) = self.project(reference.origin);
                     let distance = point.distance(pos);
-                    if distance <= 7. {
+                    if distance <= super::POINT_PICK_RADIUS {
                         candidate = Some((distance, depth));
                     }
                 }
@@ -292,6 +347,52 @@ impl Viewport {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn plane_display_toggle_preserves_axes_and_native_visibility() {
+        let mut viewport = Viewport::default();
+        viewport.top();
+        let state = json!({"revision":1,"objects":[
+            {"name":"Plane","properties":{"Visibility":true},"reference_display":{"kind":"plane","size":[20,20],"placement":{"position":[100,0,0]},"subelement":"Face1"}},
+            {"name":"Axis","properties":{"Visibility":true},"reference_display":{"kind":"line","size":[20,20],"line_axis":"x","subelement":"Edge1"}}
+        ]});
+        viewport.set_references(&state);
+        viewport.select_native_element(
+            Some(Selection {
+                object: "Plane".into(),
+                subelement: "Face1".into(),
+            }),
+            false,
+        );
+        viewport.toggle_planes(&state);
+        assert!(!viewport.planes_visible());
+        assert!(viewport.selected.is_none() && viewport.selections.is_empty());
+        assert_eq!(viewport.references.len(), 1);
+        assert_eq!(viewport.references[0].object.as_ref(), "Axis");
+        assert_eq!(state["objects"][0]["properties"]["Visibility"], true);
+        assert!(
+            viewport
+                .pick(viewport.project(Vec3::new(100., 0., 0.)).0, &[])
+                .is_none()
+        );
+        assert_eq!(
+            viewport
+                .pick(viewport.project(Vec3::new(5., 0., 0.)).0, &[])
+                .unwrap()
+                .object,
+            "Axis"
+        );
+        viewport.toggle_planes(&state);
+        assert!(viewport.planes_visible());
+        assert_eq!(viewport.references.len(), 2);
+        assert_eq!(
+            viewport
+                .pick(viewport.project(Vec3::new(100., 0., 0.)).0, &[])
+                .unwrap()
+                .object,
+            "Plane"
+        );
+    }
+
     #[test]
     fn infinite_native_reference_uses_finite_native_display_size_and_actual_native_face() {
         let mut viewport = Viewport::default();

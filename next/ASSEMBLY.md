@@ -1,5 +1,9 @@
 # Local native assembly authoring
 
+External FCStd insertion and identity-matched version-path updates have a
+separate [current workflow](EXTERNAL-ASSEMBLY.md), also available in Help.
+The local workflow and its historical verification scope below remain unchanged.
+
 This bounded implementation authors FreeCAD `Assembly::AssemblyObject` containers,
 `Assembly::JointGroup`, local `App::Link` instances, shipped `GroundedJoint` proxies
 and shipped `JointObject.Joint` constraints. FreeCAD owns connector frames,

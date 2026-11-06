@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::f64::consts::TAU;
 
+mod polygon;
+pub use polygon::regular_polygon;
+
 const EPS: f64 = 1e-9;
 
 /// Native point 0 selects a whole entity, 1/2 its endpoints, 3 its center.
@@ -24,7 +27,9 @@ pub enum Tool {
     Line,
     Polyline,
     Rectangle,
+    CenterRectangle,
     Circle,
+    RegularPolygon { sides: u32, circumscribed: bool },
     Arc,
     Ellipse,
     EllipseArc,
@@ -102,13 +107,16 @@ pub fn draw_edits(
     for point in points {
         finite_point(point)?;
     }
+    if let Tool::RegularPolygon { sides, circumscribed } = tool {
+        return polygon::draw(object, points, geometry_count, construction, sides, circumscribed);
+    }
     if crate::sketch_curve_commands::advanced(tool) {
         return crate::sketch_curve_commands::draw(object, tool, points, construction);
     }
     let expected = match tool {
         Tool::Select => return Err("Choose a drawing tool".into()),
         Tool::Point => 1,
-        Tool::Line | Tool::Rectangle | Tool::Circle => 2,
+        Tool::Line | Tool::Rectangle | Tool::CenterRectangle | Tool::Circle => 2,
         Tool::Arc => 3,
         Tool::Polyline if points.len() >= 2 => points.len(),
         Tool::Polyline => return Err("A polyline needs at least two points".into()),
@@ -118,7 +126,7 @@ pub fn draw_edits(
         return Err(format!("{tool:?} needs {expected} points"));
     }
     let count = match tool {
-        Tool::Rectangle => 4,
+        Tool::Rectangle | Tool::CenterRectangle => 4,
         Tool::Polyline => points.len() - 1,
         _ => 1,
     };
@@ -160,7 +168,7 @@ pub fn draw_edits(
                 ));
             }
         }
-        Tool::Rectangle => {
+        Tool::Rectangle | Tool::CenterRectangle => {
             nonzero(
                 points[1][0] - points[0][0],
                 "A rectangle needs a nonzero width",
@@ -169,14 +177,18 @@ pub fn draw_edits(
                 points[1][1] - points[0][1],
                 "A rectangle needs a nonzero height",
             )?;
-            let (x, y) = (
-                points[0][0].min(points[1][0]),
-                points[0][1].min(points[1][1]),
-            );
-            let (right, top) = (
-                points[0][0].max(points[1][0]),
-                points[0][1].max(points[1][1]),
-            );
+            let opposite = if tool == Tool::CenterRectangle {
+                [
+                    2. * points[0][0] - points[1][0],
+                    2. * points[0][1] - points[1][1],
+                    0.,
+                ]
+            } else {
+                points[0]
+            };
+            finite_point(&opposite)?;
+            let (x, y) = (opposite[0].min(points[1][0]), opposite[1].min(points[1][1]));
+            let (right, top) = (opposite[0].max(points[1][0]), opposite[1].max(points[1][1]));
             let corners = [[x, y, 0.], [right, y, 0.], [right, top, 0.], [x, top, 0.]];
             for offset in 0..4 {
                 edits.push(line(corners[offset], corners[(offset + 1) % 4]));
@@ -244,6 +256,11 @@ pub fn draw_snapped_edits(
         return Err("Snap targets must identify native geometry or point handles".into());
     }
     let refs: Vec<(usize, usize, i32)> = match tool {
+        Tool::RegularPolygon { circumscribed, .. } => {
+            let mut refs = vec![(0, geometry_count, 3)];
+            if !circumscribed { refs.push((1, geometry_count + 1, 1)); }
+            refs
+        }
         Tool::Point => vec![(0, geometry_count, 1)],
         Tool::Line => {
             vec![
@@ -274,6 +291,36 @@ pub fn draw_snapped_edits(
             (0, geometry_count, 1),
             (points.len() - 1, geometry_count, 2),
         ],
+        Tool::CenterRectangle => {
+            if let Some(target) = snaps[0] {
+                if target.point == 0 {
+                    return Err(
+                        "Center rectangle cannot yet constrain its center to an edge".into(),
+                    );
+                }
+                let start = i32::try_from(geometry_count)
+                    .map_err(|_| "Native geometry index is too large")?;
+                edits.push(constraint(
+                    object,
+                    "Symmetric",
+                    json!([start, 1, start + 2, 1, target.index, target.point]),
+                ));
+            }
+            let opposite = [
+                2. * points[0][0] - points[1][0],
+                2. * points[0][1] - points[1][1],
+                0.,
+            ];
+            let minx = opposite[0].min(points[1][0]);
+            let miny = opposite[1].min(points[1][1]);
+            let corner = match (points[1][0] > minx, points[1][1] > miny) {
+                (false, false) => 0,
+                (true, false) => 1,
+                (true, true) => 2,
+                (false, true) => 3,
+            };
+            vec![(1, geometry_count + corner, 1)]
+        }
         Tool::Rectangle => {
             let minx = points[0][0].min(points[1][0]);
             let miny = points[0][1].min(points[1][1]);
@@ -324,7 +371,7 @@ struct Sketch<'a> {
     geometry: &'a [Value],
     externals: &'a [Value],
     axes: &'a [Value],
-    constraints: usize,
+    _constraints: usize,
 }
 
 impl<'a> Sketch<'a> {
@@ -349,7 +396,7 @@ impl<'a> Sketch<'a> {
                 .as_array()
                 .map(Vec::as_slice)
                 .unwrap_or_default(),
-            constraints,
+            _constraints: constraints,
         })
     }
 
@@ -498,6 +545,363 @@ fn point_args(first: SketchElement, second: SketchElement) -> Value {
     json!([first.index, first.point, second.index, second.point])
 }
 
+fn coincident_points(snapshot: &Value, start: (i32, i32)) -> Vec<(i32, i32)> {
+    let mut reached = vec![start];
+    let mut cursor = 0;
+    while cursor < reached.len() {
+        let point = reached[cursor];
+        for constraint in snapshot["sketch"]["constraints"]
+            .as_array()
+            .into_iter()
+            .flatten()
+        {
+            if constraint["type"] != "Coincident"
+                || constraint["active"] == false
+                || constraint["driving"] == false
+            {
+                continue;
+            }
+            let get = |key: &str| constraint[key].as_i64().and_then(|i| i32::try_from(i).ok());
+            if let (Some(a), Some(ap), Some(b), Some(bp)) = (
+                get("first"),
+                get("first_pos"),
+                get("second"),
+                get("second_pos"),
+            ) && ap > 0
+                && bp > 0
+            {
+                let next = if point == (a, ap) {
+                    Some((b, bp))
+                } else if point == (b, bp) {
+                    Some((a, ap))
+                } else {
+                    None
+                };
+                if let Some(next) = next
+                    && !reached.contains(&next)
+                {
+                    reached.push(next);
+                }
+            }
+        }
+        cursor += 1;
+    }
+    reached
+}
+
+fn native_orientation_relations(snapshot: &Value) -> Vec<(i32, i32, bool)> {
+    let mut relations = vec![(-1, -2, true)];
+    for c in snapshot["sketch"]["constraints"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        if c["active"] == false || c["driving"] == false {
+            continue;
+        }
+        let get = |key: &str| c[key].as_i64().and_then(|i| i32::try_from(i).ok());
+        let Some(first) = get("first") else { continue };
+        if get("first_pos").unwrap_or(0) != 0 {
+            continue;
+        }
+        match c["type"].as_str().unwrap_or_default() {
+            "Horizontal" => relations.push((first, -1, false)),
+            "Vertical" => relations.push((first, -2, false)),
+            "Parallel" | "Perpendicular" if get("second_pos").unwrap_or(0) == 0 => {
+                if let Some(second) = get("second") {
+                    relations.push((first, second, c["type"] == "Perpendicular"));
+                }
+            }
+            _ => {}
+        }
+    }
+    relations
+}
+
+/// Prove point membership on a native line or axis using active constraints.
+pub(crate) fn native_point_on_axis(snapshot: &Value, point: SketchElement, axis: i32) -> bool {
+    let line = snapshot["sketch"]["geometry"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|g| g["index"] == axis && g["kind"] == "line");
+    if !matches!(axis, -1 | -2) && !line {
+        return false;
+    }
+    let mut reached = coincident_points(snapshot, (point.index, point.point));
+    let relations = native_orientation_relations(snapshot);
+    let mut cursor = 0;
+    while cursor < reached.len() {
+        let (index, pos) = reached[cursor];
+        let is_line = snapshot["sketch"]["geometry"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|g| g["index"] == index && g["kind"] == "line");
+        if is_line && matches!(pos, 1 | 2) && orientation(&relations, index, axis) == Some(false) {
+            for next in coincident_points(snapshot, (index, 3 - pos)) {
+                if !reached.contains(&next) {
+                    reached.push(next);
+                }
+            }
+        }
+        cursor += 1;
+    }
+    if matches!(axis, -1 | -2) && reached.contains(&(-1, 1)) {
+        return true;
+    }
+    if line && (reached.contains(&(axis, 1)) || reached.contains(&(axis, 2))) {
+        return true;
+    }
+    snapshot["sketch"]["constraints"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|c| {
+            c["type"] == "PointOnObject"
+                && c["active"] != false
+                && c["driving"] != false
+                && c["second"] == axis
+                && c["second_pos"].as_i64().unwrap_or(0) == 0
+                && c["first"]
+                    .as_i64()
+                    .zip(c["first_pos"].as_i64())
+                    .is_some_and(|(i, p)| {
+                        i32::try_from(i)
+                            .ok()
+                            .zip(i32::try_from(p).ok())
+                            .is_some_and(|pair| reached.contains(&pair))
+                    })
+        })
+}
+
+/// Find an orientation relation using only active native constraints.
+fn orientation(relations: &[(i32, i32, bool)], first: i32, second: i32) -> Option<bool> {
+    let mut reached = vec![(first, false)];
+    let mut cursor = 0;
+    while cursor < reached.len() {
+        let (node, perpendicular) = reached[cursor];
+        if node == second {
+            return Some(perpendicular);
+        }
+        for &(a, b, turn) in relations {
+            let next = if a == node {
+                Some(b)
+            } else if b == node {
+                Some(a)
+            } else {
+                None
+            };
+            if let Some(next) = next
+                && !reached.iter().any(|(old, _)| *old == next)
+            {
+                reached.push((next, perpendicular ^ turn));
+            }
+        }
+        cursor += 1;
+    }
+    None
+}
+
+/// Whether two whole native lines retain the same orientation through active
+/// native constraints. This reads constraint identities; it does not solve them.
+fn constrained_parallel(snapshot: &Value, first: i32, second: i32) -> bool {
+    let constraints: Vec<_> = snapshot["sketch"]["constraints"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|c| c["active"] != false && c["driving"] != false)
+        .collect();
+    let mut relations = native_orientation_relations(snapshot);
+    let mut symmetric = Vec::new();
+    for constraint in constraints {
+        let get = |key: &str| constraint[key].as_i64().and_then(|i| i32::try_from(i).ok());
+        let Some(a) = get("first") else { continue };
+        let ap = get("first_pos").unwrap_or(0);
+        let b = get("second");
+        let bp = get("second_pos").unwrap_or(0);
+        match constraint["type"].as_str().unwrap_or_default() {
+            "Symmetric" if matches!(ap, 1 | 2) && matches!(bp, 1 | 2) => {
+                if let (Some(b), Some(axis)) = (b, get("third"))
+                    && get("third_pos").unwrap_or(0) == 0
+                    && a != b
+                    && axis != a
+                    && axis != b
+                {
+                    let pair = if a < b {
+                        (a, b, ap, bp)
+                    } else {
+                        (b, a, bp, ap)
+                    };
+                    symmetric.push((pair.0, pair.1, pair.2, pair.3, axis));
+                }
+            }
+            _ => {}
+        }
+    }
+    for geometry in snapshot["sketch"]["geometry"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        if geometry["kind"] != "line" {
+            continue;
+        }
+        let Some(index) = geometry["index"]
+            .as_i64()
+            .and_then(|i| i32::try_from(i).ok())
+        else {
+            continue;
+        };
+        for axis in [-1, -2] {
+            if native_point_on_axis(snapshot, SketchElement { index, point: 1 }, axis)
+                && native_point_on_axis(snapshot, SketchElement { index, point: 2 }, axis)
+            {
+                relations.push((index, axis, false));
+            }
+        }
+    }
+    // Reflecting a line keeps it parallel only when its orientation is known
+    // to be parallel or perpendicular to the mirror axis. Both endpoint pairs
+    // must be constrained to the same axis, including a shared endpoint on it.
+    loop {
+        let mut added = false;
+        for (i, &(a, b, ap, bp, axis)) in symmetric.iter().enumerate() {
+            if orientation(&relations, a, b).is_some() {
+                continue;
+            }
+            let paired = symmetric[i + 1..]
+                .iter()
+                .any(|&(c, d, cp, dp, other_axis)| {
+                    (a, b, axis) == (c, d, other_axis) && ap != cp && bp != dp
+                });
+            let remaining_a = SketchElement {
+                index: a,
+                point: 3 - ap,
+            };
+            let remaining_b = SketchElement {
+                index: b,
+                point: 3 - bp,
+            };
+            let shared_on_axis =
+                coincident_points(snapshot, (remaining_a.index, remaining_a.point))
+                    .contains(&(remaining_b.index, remaining_b.point))
+                    && native_point_on_axis(snapshot, remaining_a, axis);
+            if (paired || shared_on_axis) && orientation(&relations, a, axis).is_some() {
+                relations.push((a, b, false));
+                added = true;
+            }
+        }
+        if !added {
+            break;
+        }
+    }
+    orientation(&relations, first, second) == Some(false)
+}
+
+/// Smart Dimension's whole-line spacing case. Unconstrained lines must be
+/// exactly parallel in the solved native snapshot, never merely close by angle.
+/// Applying the dimension also adds a genuine native Parallel constraint when
+/// the snapshot does not already prove the retained orientation.
+pub fn parallel_lines(snapshot: &Value, selection: &[SketchElement]) -> bool {
+    let Ok(sketch) = Sketch::new(snapshot) else {
+        return false;
+    };
+    let Ok((first, second)) = pair(selection) else {
+        return false;
+    };
+    if first == second || first.point != 0 || second.point != 0 {
+        return false;
+    }
+    let (Ok(a), Ok(b)) = (sketch.line(first), sketch.line(second)) else {
+        return false;
+    };
+    let left = a[0] * b[1];
+    let right = a[1] * b[0];
+    constrained_parallel(snapshot, first.index, second.index)
+        || left.is_finite() && right.is_finite() && left == right
+}
+
+/// Pick the two rays enclosing the placement point. The native endpoint
+/// positions preserve this branch when the constraint is edited or reopened.
+pub(crate) fn angle_rays_at(
+    snapshot: &Value,
+    selection: &[SketchElement],
+    cursor: [f64; 3],
+) -> Result<[SketchElement; 2], String> {
+    let sketch = Sketch::new(snapshot)?;
+    let (first, second) = pair(selection)?;
+    let u = sketch.line(first)?;
+    let v = sketch.line(second)?;
+    let a = vector(&sketch.geometry(first)?["start"])?;
+    let b = vector(&sketch.geometry(second)?["start"])?;
+    finite_point(&cursor)?;
+    let cross = |p: [f64; 2], q: [f64; 2]| p[0] * q[1] - p[1] * q[0];
+    let determinant = cross(u, v);
+    if determinant == 0. || !determinant.is_finite() {
+        return Err("Select two nonparallel lines for an angle".into());
+    }
+    let t = cross(delta(a, b), v) / determinant;
+    let w = [cursor[0] - (a[0] + t * u[0]), cursor[1] - (a[1] + t * u[1])];
+    let alpha = cross(w, v) / determinant;
+    let beta = cross(u, w) / determinant;
+    if !alpha.is_finite() || !beta.is_finite() {
+        return Err("Angle placement exceeds finite native coordinates".into());
+    }
+    let mut rays = [
+        SketchElement {
+            index: first.index,
+            point: if alpha < 0. { 2 } else { 1 },
+        },
+        SketchElement {
+            index: second.index,
+            point: if beta < 0. { 2 } else { 1 },
+        },
+    ];
+    if determinant * if alpha < 0. { -1. } else { 1. } * if beta < 0. { -1. } else { 1. } < 0. {
+        rays.swap(0, 1);
+    }
+    Ok(rays)
+}
+
+/// Build the native two-line angle with its persisted ray endpoints.
+pub(crate) fn constrain_angle_rays(
+    snapshot: &Value,
+    rays: [SketchElement; 2],
+    value: Option<&str>,
+) -> Result<Vec<Value>, String> {
+    if !rays.iter().all(|ray| matches!(ray.point, 1 | 2)) {
+        return Err("Choose two native angle rays".into());
+    }
+    let whole = rays.map(|ray| SketchElement {
+        index: ray.index,
+        point: 0,
+    });
+    let mut edits = constrain(snapshot, "Angle", &whole, value)?;
+    let sketch = Sketch::new(snapshot)?;
+    let mut first = sketch.line(whole[0])?;
+    let mut second = sketch.line(whole[1])?;
+    if rays[0].point == 2 {
+        first = [-first[0], -first[1]];
+    }
+    if rays[1].point == 2 {
+        second = [-second[0], -second[1]];
+    }
+    let angle = (first[0] * second[1] - first[1] * second[0])
+        .atan2(first[0] * second[0] + first[1] * second[1]);
+    if angle < 0. || !angle.is_finite() {
+        return Err("Angle rays have invalid orientation".into());
+    }
+    edits[0]["args"] = json!([
+        rays[0].index,
+        rays[0].point,
+        rays[1].index,
+        rays[1].point,
+        angle
+    ]);
+    Ok(edits)
+}
+
 /// Build a constraint from the current solved object snapshot. Dimensional
 /// constraints start at the measured native value, then an optional `datum`
 /// edit applies the user's explicit unit string in the same transaction.
@@ -508,6 +912,10 @@ pub fn constrain(
     value: Option<&str>,
 ) -> Result<Vec<Value>, String> {
     let sketch = Sketch::new(snapshot)?;
+    let whole_parallel_lines = kind == "Distance"
+        && selection.len() == 2
+        && selection.iter().all(|element| element.point == 0)
+        && parallel_lines(snapshot, selection);
     if selection.is_empty() {
         return Err("Select sketch geometry or points first".into());
     }
@@ -809,7 +1217,18 @@ pub fn constrain(
                     (args, measure(kind, [point[0], point[1]]))
                 } else {
                     let (mut first, mut second) = pair(selection)?;
-                    if kind == "Distance" && (first.point == 0 || second.point == 0) {
+                    if whole_parallel_lines {
+                        let point = vector(&sketch.geometry(first)?["start"])?;
+                        let direction = sketch.line(second)?;
+                        let start = vector(&sketch.geometry(second)?["start"])?;
+                        let offset = delta(start, point);
+                        let distance = (direction[0] * offset[1] - direction[1] * offset[0]).abs()
+                            / length(direction);
+                        (
+                            vec![json!(first.index), json!(1), json!(second.index)],
+                            distance,
+                        )
+                    } else if kind == "Distance" && (first.point == 0 || second.point == 0) {
                         if first.point == 0 {
                             std::mem::swap(&mut first, &mut second);
                         }
@@ -849,8 +1268,20 @@ pub fn constrain(
         }
     };
     let mut edits = vec![constraint(sketch.name, kind, args)];
+    if whole_parallel_lines
+        && !constrained_parallel(snapshot, selection[0].index, selection[1].index)
+        && selection.iter().any(|element| element.index >= 0)
+    {
+        edits.push(constraint(
+            sketch.name,
+            "Parallel",
+            json!([selection[0].index, selection[1].index]),
+        ));
+    }
     if let Some(value) = value {
-        edits.push(json!({"op":"datum", "object":sketch.name, "index":sketch.constraints, "value":value.trim()}));
+        let mut datum = json!({"op":"datum", "object":sketch.name, "index_from":0, "value":value.trim()});
+        first_scale_intent(snapshot, &mut datum, Some(&edits[0]));
+        edits.push(datum);
     }
     Ok(edits)
 }
@@ -877,6 +1308,28 @@ pub fn angle_via_point_edits(
         edits[0]["driving"] = json!(false);
     }
     Ok(edits)
+}
+
+/// Consume native finite-domain descriptors; never infer geometry eligibility here.
+fn first_scale_intent(snapshot: &Value, datum: &mut Value, creator: Option<&Value>) {
+    let capability = &snapshot["sketch"]["first_scale"];
+    let admitted = if let Some(creator) = creator {
+        capability["creators"].as_array().is_some_and(|descriptors| {
+            let args = creator["args"].as_array();
+            descriptors.iter().any(|descriptor| {
+                descriptor["kind"] == creator["kind"]
+                    && args.is_some_and(|args| !args.is_empty()
+                        && descriptor["args"].as_array().is_some_and(|prefix|
+                            prefix.as_slice() == &args[..args.len() - 1]))
+            })
+        })
+    } else {
+        capability["constraints"].as_array().is_some_and(|indices|
+            indices.iter().any(|index| index == &datum["index"]))
+    };
+    if admitted {
+        datum["first_scale"] = json!(true);
+    }
 }
 
 /// Compile existing native datum/expression edits from the same snapshot used by the UI.
@@ -940,7 +1393,9 @@ pub fn datum_edits(
             json!({"op":"expression","object":sketch.name,"property":path,"expression":null}),
         );
     }
-    edits.push(json!({"op":"datum","object":sketch.name,"index":index,"value":value}));
+    let mut datum = json!({"op":"datum","object":sketch.name,"index":index,"value":value});
+    first_scale_intent(snapshot, &mut datum, None);
+    edits.push(datum);
     Ok(edits)
 }
 
@@ -981,6 +1436,46 @@ mod tests {
     }
 
     #[test]
+    fn center_rectangle_uses_center_and_corner_without_faking_center_snap() {
+        let edits = draw_snapped_edits(
+            "Sketch",
+            Tool::CenterRectangle,
+            &[[2., 3., 0.], [5., 7., 0.]],
+            4,
+            true,
+            &[None, None],
+        )
+        .unwrap();
+        assert_eq!(edits.len(), 12);
+        assert_eq!(edits[0]["start"], json!([-1., -1., 0.]));
+        assert_eq!(edits[0]["end"], json!([5., -1., 0.]));
+        assert_eq!(edits[0]["construction"], true);
+        assert_eq!(edits[4]["args"], json!([4, 2, 5, 1]));
+        let snapped = draw_snapped_edits(
+            "Sketch",
+            Tool::CenterRectangle,
+            &[[2., 3., 0.], [5., 7., 0.]],
+            4,
+            false,
+            &[Some(e(-1, 1)), None],
+        )
+        .unwrap();
+        assert_eq!(snapped[12]["kind"], "Symmetric");
+        assert_eq!(snapped[12]["args"], json!([4, 1, 6, 1, -1, 1]));
+        assert!(
+            draw_snapped_edits(
+                "Sketch",
+                Tool::CenterRectangle,
+                &[[2., 3., 0.], [5., 7., 0.]],
+                4,
+                false,
+                &[Some(e(0, 0)), None]
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn drawing_preserves_freedom_and_native_indices() {
         let rectangle = draw_edits(
             "Sketch",
@@ -1015,7 +1510,7 @@ mod tests {
         assert_eq!(line[0]["args"], json!([0, 5.]));
         assert_eq!(
             line[1],
-            json!({"op":"datum","object":"Sketch","index":7,"value":"25 mm"})
+            json!({"op":"datum","object":"Sketch","index_from":0,"value":"25 mm"})
         );
         let radius = constrain(&sketch(), "Diameter", &[e(2, 0)], Some("8 mm")).unwrap();
         assert_eq!(radius[0]["args"], json!([2, 6.]));
@@ -1023,6 +1518,258 @@ mod tests {
         assert_eq!(projected[0]["args"], json!([0, 1, 0, 2, 3.]));
         let center = constrain(&sketch(), "DistanceX", &[e(2, 3)], None).unwrap();
         assert_eq!(center[0]["args"], json!([2, 3, 4.]));
+    }
+
+    #[test]
+    fn whole_parallel_lines_use_native_point_line_and_retained_parallelism() {
+        let mut snapshot = json!({"name":"Sketch","sketch":{"constraint_count":0,"constraints":[],"geometry":[
+            {"index":0,"kind":"line","start":[2,3,0],"end":[12,13,0]},
+            {"index":1,"kind":"line","start":[2,8,0],"end":[12,18,0]}
+        ]}});
+        let selection = [e(0, 0), e(1, 0)];
+        assert!(parallel_lines(&snapshot, &selection));
+        let edits = constrain(&snapshot, "Distance", &selection, Some("10 mm")).unwrap();
+        assert_eq!(edits.len(), 3);
+        assert_eq!(edits[0]["kind"], "Distance");
+        assert_eq!(
+            &edits[0]["args"].as_array().unwrap()[..3],
+            &[json!(0), json!(1), json!(1)]
+        );
+        assert_eq!(
+            edits[1],
+            json!({"op":"constraint","object":"Sketch","kind":"Parallel","args":[0,1]})
+        );
+        assert_eq!(
+            edits[2],
+            json!({"op":"datum","object":"Sketch","index_from":0,"value":"10 mm"})
+        );
+        snapshot["sketch"]["constraints"] =
+            json!([{"type":"Parallel","first":0,"second":1,"active":true,"driving":true}]);
+        snapshot["sketch"]["constraint_count"] = json!(1);
+        let edits = constrain(&snapshot, "Distance", &selection, None).unwrap();
+        assert_eq!(
+            edits.len(),
+            1,
+            "retained native relation must not be added twice"
+        );
+        snapshot["sketch"]["geometry"][1]["end"][1] = json!(18.000000000000004);
+        assert!(
+            parallel_lines(&snapshot, &selection),
+            "authoritative native relation survives solved floating residue"
+        );
+        snapshot["sketch"]["constraints"][0]["active"] = json!(false);
+        assert!(
+            !parallel_lines(&snapshot, &selection),
+            "almost parallel without an active native relation remains an angle"
+        );
+    }
+
+    #[test]
+    fn whole_line_spacing_uses_transitive_native_orientation_without_extra_parallel() {
+        let snapshot = json!({"name":"Sketch","sketch":{"constraint_count":3,"constraints":[
+            {"type":"Horizontal","first":0,"active":true,"driving":true},
+            {"type":"Vertical","first":2,"active":true,"driving":true},
+            {"type":"Perpendicular","first":2,"second":1,"active":true,"driving":true}],"geometry":[
+            {"index":0,"kind":"line","start":[0,0,0],"end":[10,0,0]},
+            {"index":1,"kind":"line","start":[0,5,0],"end":[10,5,0]},
+            {"index":2,"kind":"line","start":[0,0,0],"end":[0,10,0]}
+        ]}});
+        for selection in [[e(0, 0), e(1, 0)], [e(1, 0), e(0, 0)]] {
+            let edits = constrain(&snapshot, "Distance", &selection, None).unwrap();
+            assert_eq!(edits.len(), 1);
+            assert_eq!(edits[0]["args"].as_array().unwrap().last().unwrap(), 5.);
+        }
+        assert!(!parallel_lines(&snapshot, &[e(0, 0), e(2, 0)]));
+        assert!(
+            constrain(&snapshot, "Angle", &[e(0, 0), e(2, 0)], None).is_ok(),
+            "explicit Angle remains available"
+        );
+    }
+
+    #[test]
+    fn mirrored_lines_retain_orientation_only_when_axis_and_both_pairs_are_constrained() {
+        let mut snapshot = json!({"name":"Sketch","sketch":{"constraint_count":6,"constraints":[
+            {"type":"Vertical","first":0},
+            {"type":"Coincident","first":2,"first_pos":1,"second":-1,"second_pos":1},
+            {"type":"Coincident","first":2,"first_pos":2,"second":3,"second_pos":1},
+            {"type":"PointOnObject","first":3,"first_pos":1,"second":-2},
+            {"type":"Symmetric","first":0,"first_pos":1,"second":1,"second_pos":1,"third":2,"third_pos":0},
+            {"type":"Symmetric","first":0,"first_pos":2,"second":1,"second_pos":2,"third":2,"third_pos":0}
+        ],"geometry":[
+            {"index":0,"kind":"line","start":[-5,0,0],"end":[-5,8,0]},
+            {"index":1,"kind":"line","start":[5,0,0],"end":[5,8,0]},
+            {"index":2,"kind":"line","start":[0,0,0],"end":[0,10,0]},
+            {"index":3,"kind":"line","start":[0,10,0],"end":[2,10,0]}
+        ]}});
+        for selection in [[e(0, 0), e(1, 0)], [e(1, 0), e(0, 0)]] {
+            assert!(constrained_parallel(
+                &snapshot,
+                selection[0].index,
+                selection[1].index
+            ));
+            let edits = constrain(&snapshot, "Distance", &selection, Some("80")).unwrap();
+            assert_eq!(edits.len(), 2, "no redundant Parallel is added");
+            assert_eq!(edits[1]["op"], "datum");
+        }
+        snapshot["sketch"]["constraints"][5]["active"] = json!(false);
+        assert!(
+            !constrained_parallel(&snapshot, 0, 1),
+            "both endpoint pairs are required"
+        );
+        snapshot["sketch"]["constraints"][5]["active"] = json!(true);
+        snapshot["sketch"]["constraints"][3]["driving"] = json!(false);
+        assert!(
+            !constrained_parallel(&snapshot, 0, 1),
+            "axis must be fixed by active native relations"
+        );
+        snapshot["sketch"]["constraints"][3]["driving"] = json!(true);
+        snapshot["sketch"]["constraints"][0]["active"] = json!(false);
+        assert!(
+            !constrained_parallel(&snapshot, 0, 1),
+            "mirror alone does not retain an arbitrary line orientation"
+        );
+        let unconstrained_orientation =
+            constrain(&snapshot, "Distance", &[e(0, 0), e(1, 0)], None).unwrap();
+        assert_eq!(
+            unconstrained_orientation[1]["kind"], "Parallel",
+            "equal solved directions without a retained orientation still require Parallel"
+        );
+        snapshot["sketch"]["constraints"][0]["active"] = json!(true);
+        snapshot["sketch"]["constraints"][5]["third"] = json!(3);
+        assert!(
+            !constrained_parallel(&snapshot, 0, 1),
+            "endpoint pairs need the same axis"
+        );
+    }
+
+    #[test]
+    fn axis_membership_follows_native_parallel_orientation_between_endpoints() {
+        let mut snapshot = json!({"sketch":{"constraints":[
+            {"type":"Vertical","first":0,"active":true},
+            {"type":"PointOnObject","first":0,"first_pos":2,"second":-2,"second_pos":0,"active":true}
+        ],"geometry":[{"index":0,"kind":"line"}]}});
+        assert!(native_point_on_axis(&snapshot, e(0, 1), -2));
+        snapshot["sketch"]["constraints"][0]["active"] = json!(false);
+        assert!(!native_point_on_axis(&snapshot, e(0, 1), -2));
+        snapshot["sketch"]["constraints"]
+            .as_array_mut()
+            .unwrap()
+            .extend([
+                json!({"type":"Parallel","first":0,"second":1,"active":true}),
+                json!({"type":"Vertical","first":1,"active":true}),
+            ]);
+        assert!(native_point_on_axis(&snapshot, e(0, 1), -2));
+        snapshot["sketch"]["constraints"][2]["active"] = json!(false);
+        assert!(!native_point_on_axis(&snapshot, e(0, 1), -2));
+    }
+
+    #[test]
+    fn shared_mirror_endpoint_requires_axis_and_orientation_proof() {
+        let mut snapshot = json!({"name":"Sketch","sketch":{"constraint_count":6,"constraints":[
+            {"type":"Horizontal","first":0},
+            {"type":"Vertical","first":2},
+            {"type":"Symmetric","first":0,"first_pos":1,"second":1,"second_pos":1,"third":2,"third_pos":0},
+            {"type":"Coincident","first":0,"first_pos":2,"second":1,"second_pos":2},
+            {"type":"PointOnObject","first":0,"first_pos":2,"second":2,"second_pos":0},
+            {"type":"Horizontal","first":3}
+        ],"geometry":[
+            {"index":0,"kind":"line","start":[-6,10,0],"end":[0,10,0]},
+            {"index":1,"kind":"line","start":[6,10,0],"end":[0,10,0]},
+            {"index":2,"kind":"line","start":[0,0,0],"end":[0,20,0]},
+            {"index":3,"kind":"line","start":[0,0,0],"end":[6,0,0]}
+        ]}});
+        assert!(native_point_on_axis(&snapshot, e(1, 2), 2));
+        for pair in [[e(3, 0), e(1, 0)], [e(1, 0), e(3, 0)]] {
+            assert!(constrained_parallel(
+                &snapshot,
+                pair[0].index,
+                pair[1].index
+            ));
+            let edits = constrain(&snapshot, "Distance", &pair, Some("182")).unwrap();
+            assert_eq!(edits.len(), 2);
+            assert_eq!(edits[1]["op"], "datum");
+        }
+        snapshot["sketch"]["constraints"][4]["active"] = json!(false);
+        assert!(!native_point_on_axis(&snapshot, e(1, 2), 2));
+        assert!(
+            !constrained_parallel(&snapshot, 0, 1),
+            "shared endpoint must be on the axis"
+        );
+        snapshot["sketch"]["constraints"][4] =
+            json!({"type":"Coincident","first":0,"first_pos":2,"second":2,"second_pos":1});
+        assert!(
+            native_point_on_axis(&snapshot, e(1, 2), 2),
+            "an endpoint of the native axis is on that axis"
+        );
+        assert!(constrained_parallel(&snapshot, 0, 1));
+        snapshot["sketch"]["constraints"][0]["active"] = json!(false);
+        assert!(
+            !constrained_parallel(&snapshot, 0, 1),
+            "oblique mirror does not prove parallelism"
+        );
+        snapshot["sketch"]["constraints"][0]["active"] = json!(true);
+        snapshot["sketch"]["constraints"][3]["active"] = json!(false);
+        assert!(
+            !constrained_parallel(&snapshot, 0, 1),
+            "unconnected endpoints do not match"
+        );
+    }
+
+    #[test]
+    fn angle_placement_persists_native_rays_for_acute_and_supplementary_sectors() {
+        let snapshot = json!({"name":"Sketch","sketch":{"constraint_count":0,"constraints":[],"geometry":[
+            {"index":0,"kind":"line","start":[0,0,0],"end":[-10,0,0]},
+            {"index":1,"kind":"line","start":[0,10,0],"end":[10,20,0]}
+        ]}});
+        for selection in [[e(0, 0), e(1, 0)], [e(1, 0), e(0, 0)]] {
+            let acute = angle_rays_at(&snapshot, &selection, [-5., 2., 0.]).unwrap();
+            assert_eq!(acute, [e(0, 2), e(1, 1)]);
+            let edits = constrain_angle_rays(&snapshot, acute, Some("45 deg")).unwrap();
+            assert_eq!(
+                edits[0]["args"],
+                json!([0, 2, 1, 1, std::f64::consts::FRAC_PI_4])
+            );
+            assert_eq!(
+                edits[1],
+                json!({"op":"datum","object":"Sketch","index_from":0,"value":"45 deg"})
+            );
+            let supplementary = angle_rays_at(&snapshot, &selection, [-15., 2., 0.]).unwrap();
+            assert_eq!(supplementary, [e(1, 1), e(0, 1)]);
+            let args = &constrain_angle_rays(&snapshot, supplementary, None).unwrap()[0]["args"];
+            assert_eq!(args, &json!([1, 1, 0, 1, 3. * std::f64::consts::FRAC_PI_4]));
+            let opposite = angle_rays_at(&snapshot, &selection, [-15., -2., 0.]).unwrap();
+            assert_eq!(opposite, [e(0, 1), e(1, 2)]);
+        }
+        let nonhorizontal = json!({"name":"Sketch","sketch":{"constraint_count":0,"constraints":[],"geometry":[
+            {"index":0,"kind":"line","start":[0,0,0],"end":[10,10,0]},
+            {"index":1,"kind":"line","start":[0,5,0],"end":[-5,10,0]}
+        ]}});
+        for selection in [[e(0, 0), e(1, 0)], [e(1, 0), e(0, 0)]] {
+            let rays = angle_rays_at(&nonhorizontal, &selection, [2.5, 8., 0.]).unwrap();
+            assert_eq!(rays, [e(0, 1), e(1, 1)]);
+            assert_eq!(
+                constrain_angle_rays(&nonhorizontal, rays, Some("60 deg")).unwrap()[0]["args"],
+                json!([0, 1, 1, 1, std::f64::consts::FRAC_PI_2])
+            );
+        }
+        let upper = json!({"name":"Sketch","sketch":{"constraint_count":0,"constraints":[],"geometry":[
+            {"index":0,"kind":"line","start":[0,0,0],"end":[-10,0,0]},
+            {"index":1,"kind":"line","start":[0,10,0],"end":[-10,20,0]}
+        ]}});
+        let upper_rays = angle_rays_at(&upper, &[e(0, 0), e(1, 0)], [0., 2., 0.]).unwrap();
+        assert_eq!(upper_rays, [e(1, 1), e(0, 1)]);
+        let upper_edits = constrain_angle_rays(&upper, upper_rays, Some("30 deg")).unwrap();
+        assert_eq!(
+            upper_edits[0]["args"],
+            json!([1, 1, 0, 1, std::f64::consts::FRAC_PI_4])
+        );
+        assert_eq!(upper_edits[1]["value"], "30 deg");
+        let legacy = constrain(&snapshot, "Angle", &[e(0, 0), e(1, 0)], None).unwrap();
+        assert_eq!(
+            legacy[0]["args"].as_array().unwrap().len(),
+            3,
+            "selection-first D path remains unchanged"
+        );
     }
 
     #[test]
@@ -1373,4 +2120,34 @@ mod tests {
             .is_err()
         );
     }
+    #[test]
+    fn native_first_scale_descriptors_control_both_datum_compilers() {
+        let mut snapshot = sketch();
+        snapshot["sketch"]["first_scale"] = json!({"constraints":[0],
+            "creators":[{"kind":"Distance","args":[0]}]});
+        snapshot["sketch"]["constraints"] = json!([
+            {"index":0,"type":"Distance","driving":true},
+            {"index":1,"type":"Radius","driving":true},
+            {"index":2,"type":"Angle","driving":true},
+            {"index":3,"type":"Distance","driving":false}]);
+        let before = snapshot.clone();
+        assert_eq!(datum_edits(&snapshot, 0, "2 in", false).unwrap()[0]["first_scale"], true);
+        for index in [1, 2] {
+            assert!(datum_edits(&snapshot,index,"3",false).unwrap()[0].get("first_scale").is_none());
+        }
+        assert!(datum_edits(&snapshot,3,"3",false).is_err());
+        assert!(datum_edits(&snapshot,99,"3",false).is_err());
+        assert!(datum_edits(&snapshot,0,"",false).is_err());
+        assert!(datum_edits(&snapshot,0,"3 mm",true).unwrap()[0].get("first_scale").is_none());
+        let edits = constrain(&snapshot,"Distance",&[e(0,0)],Some("2 in")).unwrap();
+        assert_eq!(edits[1]["first_scale"],true);
+        assert_eq!(edits[1]["index_from"],0);
+        for (kind, selection) in [("Distance",vec![e(1,0)]),("Radius",vec![e(2,0)])] {
+            assert!(constrain(&snapshot,kind,&selection,Some("3 mm")).unwrap()[1].get("first_scale").is_none());
+        }
+        assert_eq!(snapshot,before);
+        snapshot["sketch"].as_object_mut().unwrap().remove("first_scale");
+        assert!(datum_edits(&snapshot,0,"2 in",false).unwrap()[0].get("first_scale").is_none());
+    }
+
 }

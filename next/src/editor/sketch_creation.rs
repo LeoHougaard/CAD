@@ -9,9 +9,11 @@ pub(super) struct SketchCreation {
     request: Value,
     pending: bool,
     show_options: bool,
+    waiting_for_guide: bool,
     reversed: bool,
     detach: bool,
     position: [f64; 3],
+    quantity_offset: Option<Value>,
     axis: [f64; 3],
     angle: f64,
     expression: bool,
@@ -34,22 +36,13 @@ impl SketchCreation {
             {
                 return Err("Enter finite sketch offset and rotation values".into());
             }
-            let mut rotation = [0., 0., 0., 1.];
-            if self.angle != 0. {
-                let length = self.axis.iter().fold(0_f64, |n, v| n.hypot(*v));
-                let half = self.angle.to_radians() * 0.5;
-                if length == 0. || !length.is_finite() || !half.is_finite() {
-                    return Err("Choose a nonzero rotation axis and a finite angle".into());
-                }
-                let (sin, cos) = half.sin_cos();
-                rotation = [
-                    self.axis[0] / length * sin,
-                    self.axis[1] / length * sin,
-                    self.axis[2] / length * sin,
-                    cos,
-                ];
+            if self.angle != 0. && self.axis.iter().all(|v| *v == 0.) {
+                return Err("Choose a nonzero rotation axis".into());
             }
-            request["offset"] = json!({"position":self.position,"rotation":rotation});
+            request["offset"] = json!({"position":self.position,"rotation":[0.,0.,0.,1.],"axis_angle":{"axis":self.axis,"angle":self.angle}});
+        }
+        if let Some(offset) = &self.quantity_offset {
+            request["offset"] = offset.clone();
         }
         if self.expression {
             request["offset_expression"] = json!(self.offset_expression);
@@ -140,16 +133,24 @@ impl Editor {
                     .as_deref()
                     .and_then(|name| reference_support(&self.state, &body, name, None))
             });
+        let selected = selected.or_else(|| {
+            self.viewport
+                .selected_standard_plane()
+                .map(|plane| json!({"kind":"origin","role":plane.role()}))
+        });
         let apply = selected.is_some() && !show_options;
+        let waiting_for_guide = create_body && selected.is_none() && !show_options;
         self.sketch_creation = Some(SketchCreation {
             state: self.state.clone(),
             request: json!({"name":name,"body":body,"create_body":create_body,
                 "support":selected.unwrap_or_else(|| json!({"kind":"origin","role":"XY_Plane"}))}),
             pending: false,
             show_options,
+            waiting_for_guide,
             reversed: false,
             detach: false,
             position: [0.; 3],
+            quantity_offset: None,
             axis: [0., 0., 1.],
             angle: 0.,
             expression: false,
@@ -158,6 +159,24 @@ impl Editor {
         if apply {
             self.create_attached_sketch();
         }
+    }
+
+    pub(super) fn awaiting_standard_plane(&self) -> bool {
+        self.sketch_creation
+            .as_ref()
+            .is_some_and(|task| task.waiting_for_guide && !task.pending)
+    }
+
+    pub(super) fn choose_standard_plane(&mut self, plane: crate::viewport::StandardPlane) {
+        let Some(task) = &mut self.sketch_creation else {
+            return;
+        };
+        if !task.waiting_for_guide || task.pending {
+            return;
+        }
+        task.request["support"] = json!({"kind":"origin","role":plane.role()});
+        task.waiting_for_guide = false;
+        self.create_attached_sketch();
     }
 
     fn create_attached_sketch(&mut self) {
@@ -186,13 +205,13 @@ impl Editor {
         self.prepare_new_sketch();
         self.selected_object = Some(name.clone());
         self.sketch = Some(name);
-        self.transaction(
-            if request["detach"] == true {
+        self.send(
+            "create_sketch",
+            json!({"label":if request["detach"] == true {
                 "Create unattached sketch"
             } else {
                 "Create attached sketch"
-            },
-            edits,
+            },"edits":edits}),
         );
     }
 
@@ -223,6 +242,24 @@ impl Editor {
         let Some(task) = &mut self.sketch_creation else {
             return;
         };
+        if task.pending {
+            return;
+        }
+        if task.waiting_for_guide {
+            let mut cancel = false;
+            egui::Window::new("Select a sketch plane")
+                .id(egui::Id::new("new_sketch_guide"))
+                .default_pos([180., 85.])
+                .collapsible(false)
+                .show(ctx, |ui| {
+                    ui.label("Select Top, Front or Right in the viewport.");
+                    cancel = ui.button("Cancel").clicked();
+                });
+            if cancel {
+                self.sketch_creation = None;
+            }
+            return;
+        }
         let mut apply = false;
         let mut cancel = false;
         egui::Modal::new(egui::Id::new("new_sketch_support")).show(ctx, |ui| {
@@ -276,8 +313,10 @@ impl Editor {
                         ui.horizontal(|ui| {
                             for (i, label) in ["X", "Y", "Z"].iter().enumerate() {
                                 ui.label(*label);
-                                ui.add_enabled(!task.expression || i != 2,
-                                    egui::DragValue::new(&mut task.position[i]).speed(0.1).suffix(" mm"));
+                                let offset = task.quantity_offset.get_or_insert_with(|| json!({"position":[0.,0.,0.],"rotation":[0.,0.,0.,1.],"axis_angle":{"axis":[0.,0.,1.],"angle":0.}}));
+                                ui.add_enabled_ui(!task.expression || i != 2, |ui| {
+                                    super::units::quantity_field(ui, &mut offset["position"][i], &task.state["units"]["defaults"]["mm"]);
+                                });
                             }
                         });
                         ui.checkbox(&mut task.expression, "Normal offset expression");
@@ -289,12 +328,14 @@ impl Editor {
                         ui.horizontal(|ui| {
                             for (i, label) in ["X", "Y", "Z"].iter().enumerate() {
                                 ui.label(*label);
-                                ui.add(egui::DragValue::new(&mut task.axis[i]).speed(0.05));
+                                if ui.add(egui::DragValue::new(&mut task.axis[i]).speed(0.05)).changed()
+                                    && let Some(offset) = &mut task.quantity_offset { offset["axis_angle"]["axis"] = json!(task.axis); }
                             }
                         });
                         ui.horizontal(|ui| {
                             ui.label("Angle");
-                            ui.add(egui::DragValue::new(&mut task.angle).speed(1.).suffix(" deg"));
+                            let offset = task.quantity_offset.get_or_insert_with(|| json!({"position":[0.,0.,0.],"rotation":[0.,0.,0.,1.],"axis_angle":{"axis":task.axis,"angle":0.}}));
+                            super::units::quantity_field(ui, &mut offset["axis_angle"]["angle"], &task.state["units"]["defaults"]["deg"]);
                         });
                     });
                 ui.horizontal(|ui| {
@@ -322,9 +363,11 @@ mod tests {
                 "support":{"kind":"origin","role":"XY_Plane"}}),
             pending: false,
             show_options: true,
+            waiting_for_guide: false,
             reversed: false,
             detach: false,
             position: [0.; 3],
+            quantity_offset: None,
             axis: [0., 0., 1.],
             angle: 0.,
             expression: false,
@@ -350,13 +393,9 @@ mod tests {
         creation.detach = true;
         let request = creation.native_request().unwrap();
         assert_eq!(request["offset"]["position"], json!([1., 2., 3.]));
-        let rotation: Vec<f64> =
-            serde_json::from_value(request["offset"]["rotation"].clone()).unwrap();
-        assert!(
-            rotation[0].abs() < 1e-12
-                && (rotation[1] - 1.).abs() < 1e-12
-                && rotation[2].abs() < 1e-12
-                && rotation[3].abs() < 1e-12
+        assert_eq!(
+            request["offset"]["axis_angle"],
+            json!({"axis":[0.,2.,0.],"angle":180.})
         );
         assert_eq!(request["offset_expression"], "Base.Height / 2");
         assert_eq!(request["reversed"], true);

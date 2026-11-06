@@ -1,0 +1,228 @@
+--- a/next/backend/freecad_worker.py
++++ b/next/backend/freecad_worker.py
+@@ -25,7 +25,7 @@
+ import PartDesign  # Register the native feature classes in headless mode.
+ # Prospective immutable bundle admission, before any transitive helper import.
+ _bundle = Path(__file__).resolve().parent
+-_helper_pins = {'standalone_helix.py': '4b7e14d8aece0632f5a56e81fea7404e71c34060d62d6b00f73e4a8bb376f554', 'plane_offset.py': 'a75f7781c6718c72ecd711b02ad45eb501defc6cc76432c012fe49e6c9c1696f', 'extrude_handle.py': '07ed516ed0d79ed31f7a7894928c1b6a82d4de634e52b34fab4e4a9871d693e4', 'drawing.py': 'cfe1574e88f733281f4acdef69c73ea11c36f64e9491137dc5bf0b67bb4195e9', 'drawing_admission.py': '50241e4bec787725249cf576d7154160234b1dc999feffbf0bef8b0c2aed573c', 'drawing_persistence.py': 'bfe3564002a88ff285429f9557ea4bef5855ab4cb6c95e5ad1f20045e6bd1407', 'rectangular_draft.py': '9d0de6e35612f44da804f73cbf90d66536bdbe88e828c01cb096fea0e433b94a', 'planar_regions.py': '911b43706ccd3f3b0674c02846e95606f156a600211a1b316076853aa7139f75', 'region_graph.py': 'cd8de8a51c1d1a87e5f6b6108ddbfbaf88bc4a213ccb738ed4b89dc9e25882fc', 'sketch_operations.py': '6c96d3c50dbba470905bd07e035199a4f2b316cf484c1d8fe88103ec16c90831', 'sketch_circular_pattern.py': '5861a337d8d498379cd56982561fc7ff0d5a215acf205df7e9fe3978043fca60', 'sketch_mirror.py': '62e63e6b1effeced50dcb6bfafb16c6eb01910c92297f82ef3fb4ef928eff46b', 'sketch_mirror_linux.py': '21f0c2ab2f5206abb0fd85a79aed56e219315ba1b3418f5e523ca9e9ade22936', 'checkpoint_linux.py': 'b464dcdff478fb85434aefd5907520e0d583fad68fd8a334efcf796bdd4549a0'}
++_helper_pins = {'standalone_helix.py': 'd3231bcd5656c0ff1a741bd063d44cb774e430405740421c660f7d2bfa4cc5fd', 'plane_offset.py': 'a75f7781c6718c72ecd711b02ad45eb501defc6cc76432c012fe49e6c9c1696f', 'extrude_handle.py': '07ed516ed0d79ed31f7a7894928c1b6a82d4de634e52b34fab4e4a9871d693e4', 'drawing.py': 'cfe1574e88f733281f4acdef69c73ea11c36f64e9491137dc5bf0b67bb4195e9', 'drawing_admission.py': '50241e4bec787725249cf576d7154160234b1dc999feffbf0bef8b0c2aed573c', 'drawing_persistence.py': 'bfe3564002a88ff285429f9557ea4bef5855ab4cb6c95e5ad1f20045e6bd1407', 'rectangular_draft.py': '9d0de6e35612f44da804f73cbf90d66536bdbe88e828c01cb096fea0e433b94a', 'planar_regions.py': '911b43706ccd3f3b0674c02846e95606f156a600211a1b316076853aa7139f75', 'region_graph.py': 'cd8de8a51c1d1a87e5f6b6108ddbfbaf88bc4a213ccb738ed4b89dc9e25882fc', 'sketch_operations.py': '6c96d3c50dbba470905bd07e035199a4f2b316cf484c1d8fe88103ec16c90831', 'sketch_circular_pattern.py': '5861a337d8d498379cd56982561fc7ff0d5a215acf205df7e9fe3978043fca60', 'sketch_mirror.py': '62e63e6b1effeced50dcb6bfafb16c6eb01910c92297f82ef3fb4ef928eff46b', 'sketch_mirror_linux.py': '21f0c2ab2f5206abb0fd85a79aed56e219315ba1b3418f5e523ca9e9ade22936', 'checkpoint_linux.py': 'b464dcdff478fb85434aefd5907520e0d583fad68fd8a334efcf796bdd4549a0'}
+ for _name, _digest in _helper_pins.items():
+     _path = _bundle / _name
+     _spec = importlib.util.find_spec(_name[:-3])
+--- a/next/backend/standalone_helix.py
++++ b/next/backend/standalone_helix.py
+@@ -1,7 +1,7 @@
+ """Native Part::Helix authoring. No proxy, cached shape or recompute observer.
+ 
+-Two root SubShapeBinders retain mapped native face/edge references. Native
+-expressions derive cylindrical radius and height from their measured shapes.
++Native SubShapeBinders retain mapped circular-edge and optional cylinder references.
++Expressions derive radius and either cylindrical height or the chosen numeric extent.
+ The native attachment engine owns the axis and frame.
+ """
+ import math
+@@ -9,6 +9,11 @@
+ import FreeCAD as App
+ import Part
+ import document_units as DocumentUnits
++
++EXTENTS = {"Height and pitch": ("Height", "Pitch", "Turns", "Height / Pitch"),
++           "Height and turns": ("Height", "Turns", "Pitch", "Height / Turns"),
++           "Pitch and turns": ("Pitch", "Turns", "Height", "Pitch * Turns")}
++
+ 
+ class HelixError(ValueError):
+     code = "invalid_helix_reference"
+@@ -29,13 +34,22 @@
+ def reference(doc, edit):
+     source = doc.getObject(edit.get("source", ""))
+     require(source is not None and str(source.ID) == edit.get("source_id"),
+-            "Cylinder source identity changed; select it again")
++            "Reference source identity changed; select it again")
+     sub = edit.get("subelement", "")
+     require(re.fullmatch(r"(?:Face|Edge)[1-9][0-9]*", sub) is not None,
+             "Select a cylindrical face or a complete circular edge")
+     require(edit.get("mapped_name") and source.Shape.getElementMappedName(sub) == edit["mapped_name"],
+             "Selected native topology changed; select it again")
+     shape = source.Shape
++    mode = edit.get("reference_mode", "Cylinder")
++    require(mode in ("Cylinder", "Circle"), "Choose Cylinder or Circle reference mode")
++    if mode == "Circle":
++        require(sub.startswith("Edge"), "Circle mode requires a complete circular edge")
++        edge = shape.getElement(sub)
++        require(not edge.Degenerated and isinstance(edge.Curve, Part.Circle) and edge.isClosed()
++                and edge.Curve.Radius > 1e-7, "Select a complete, nondegenerate circular edge")
++        require(edit.get("extent_mode", "Height and pitch") in EXTENTS, "Choose two independent extent parameters")
++        return source, None, sub, False
+     if sub.startswith("Face"):
+         face = shape.getElement(sub)
+         require(isinstance(face.Surface, Part.Cylinder), "Select a cylindrical face")
+@@ -63,13 +77,24 @@
+ 
+ def preflight(doc, edits):
+     for edit in edits:
+-        if edit.get("op") == "set" and edit.get("property") in ("Turns", "StartAngle"):
++        obj = doc.getObject(edit.get("object", ""))
++        creation = next((e for e in edits if e.get("op") == "create_standalone_helix"
++                         and e.get("name") == edit.get("object")), None)
++        mode = (creation.get("extent_mode", "Height and pitch") if creation is not None
++                and creation.get("reference_mode") == "Circle" else
++                str(obj.ExtentMode) if obj is not None and obj.TypeId == "Part::Helix"
++                and "CircleReference" in obj.PropertiesList else None)
++        if mode in EXTENTS and edit.get("op") in ("set", "expression"):
++            require(edit.get("property") not in (EXTENTS[mode][2], "ExtentMode"),
++                    "The dependent extent is native expression-owned; edit the two authored parameters")
++        if edit.get("op") == "set" and edit.get("property") in ("Turns", "StartAngle", "Height", "Pitch"):
+             obj = doc.getObject(edit.get("object", ""))
+             created = any(e.get("op") == "create_standalone_helix" and e.get("name") == edit.get("object") for e in edits)
+             if created or (obj is not None and obj.TypeId == "Part::Helix"):
+-                value = DocumentUnits.value(edit["value"], "" if edit["property"] == "Turns" else "deg")
+-                require(math.isfinite(value) and (edit["property"] != "Turns" or 0 < value <= 10000),
+-                        "Turns must be positive and at most 10000; angle must be finite")
++                value = DocumentUnits.value(edit["value"], "" if edit["property"] == "Turns" else ("deg" if edit["property"] == "StartAngle" else "mm"))
++                require(math.isfinite(value) and (edit["property"] != "Turns" or 0 < value <= 10000)
++                        and (edit["property"] not in ("Height", "Pitch") or value > 1e-7),
++                        "Lengths must be positive; turns must be positive and at most 10000; angle must be finite")
+         if edit.get("op") == "create_standalone_helix":
+             reference(doc, edit)
+             keys = [edit.get(k) for k in ("name", "face_binder", "edge_binder")]
+@@ -83,6 +108,9 @@
+     require(not any(doc.getObject(k) for k in keys), "Helix dependency name is already in use")
+     binders = []
+     for key, sub in zip(keys[1:], (face_key, edge_key)):
++        if sub is None:
++            binders.append(None)
++            continue
+         binder = doc.addObject("PartDesign::SubShapeBinder", key)
+         binder.Support = [(source, [sub])]
+         binder.Visibility = False
+@@ -96,6 +124,19 @@
+     obj.MapReversed = reversed_axis
+     obj.AttachmentOffset = App.Placement(App.Vector(), App.Rotation(App.Vector(0, 0, 1), 1))
+     obj.setExpression("AttachmentOffset.Rotation.Angle", "StartAngle")
++    if face_key is None:
++        mode = edit.get("extent_mode", "Height and pitch")
++        obj.addProperty("App::PropertyString", "ExtentMode", "Helix", "Independent extent parameters (chosen at creation)")
++        obj.ExtentMode = mode
++        obj.setEditorMode("ExtentMode", 1)
++        obj.addProperty("App::PropertyLink", "CircleReference", "Helix reference")
++        obj.CircleReference = binders[1]
++        obj.setEditorMode("CircleReference", 1)
++        obj.setExpression("Radius", keys[2] + ".Shape.Length / (2 * pi) * 1 mm")
++        # Native primitive defaults (Height=2 mm, Pitch=1 mm) form a valid preview.
++        # For either turns pair keep the native one-turn dynamic default.
++        obj.setExpression(EXTENTS[mode][2], EXTENTS[mode][3])
++        return {"object": obj.Name}
+     obj.addProperty("App::PropertyLink", "CylinderFace", "Helix reference")
+     obj.CylinderFace = binders[0]
+     obj.setEditorMode("CylinderFace", 1)
+@@ -108,7 +149,17 @@
+ 
+ def validate(obj):
+     if obj.TypeId == "Part::Helix" and "Turns" in obj.PropertiesList:
+-        require(obj.CylinderFace is not None and len(obj.CylinderFace.Shape.Faces) == 1
++        if "CircleReference" in obj.PropertiesList:
++            binder = obj.CircleReference
++            require(binder is not None and len(binder.Shape.Edges) == 1, "Circle reference is unavailable")
++            edge = binder.Shape.Edges[0]
++            require(not edge.Degenerated and isinstance(edge.Curve, Part.Circle) and edge.isClosed(),
++                    "Helix reference is no longer a complete circle")
++            require(str(obj.ExtentMode) in EXTENTS, "Invalid helix extent relation")
++            require(all(math.isfinite(getattr(obj, key).Value) and getattr(obj, key).Value > 1e-7
++                        for key in ("Height", "Pitch", "Radius")), "Helix lengths must be finite and positive")
++        else:
++            require(obj.CylinderFace is not None and len(obj.CylinderFace.Shape.Faces) == 1
+                 and isinstance(obj.CylinderFace.Shape.Faces[0].Surface, Part.Cylinder),
+                 "Helix reference is no longer cylindrical")
+         require(math.isfinite(obj.Turns) and 0 < obj.Turns <= 10000,
+--- a/next/src/editor/properties.rs
++++ b/next/src/editor/properties.rs
+@@ -579,6 +579,36 @@
+         if self.property_ui.schema.is_null() {
+             ui.weak("Native property schema unavailable");
+             return;
++        }
++        if draft.parameters["type"] == "Part::Helix" && draft.parameters["create"] == true {
++            let reference = &mut draft.parameters["helix_reference"];
++            let mut mode = reference["reference_mode"].as_str().unwrap_or("Cylinder").to_owned();
++            let old_mode = mode.clone();
++            egui::ComboBox::from_id_salt("helix_reference_mode").selected_text(&mode).show_ui(ui, |ui| {
++                ui.selectable_value(&mut mode, "Cylinder".into(), "Cylinder");
++                ui.selectable_value(&mut mode, "Circle".into(), "Circle");
++            });
++            reference["reference_mode"] = json!(mode);
++            let mut extent = reference["extent_mode"].as_str().unwrap_or("Height and pitch").to_owned();
++            let old_extent = extent.clone();
++            if mode == "Circle" {
++                egui::ComboBox::from_id_salt("helix_extent_mode").selected_text(&extent).show_ui(ui, |ui| {
++                    for pair in ["Height and pitch", "Height and turns", "Pitch and turns"] {
++                        ui.selectable_value(&mut extent, pair.into(), pair);
++                    }
++                });
++            }
++            reference["extent_mode"] = json!(extent);
++            if old_mode != mode || old_extent != extent {
++                // Each preview recreates the native relation. Do not carry a formerly
++                // independent value or expression into the newly dependent field.
++                for field in ["Height", "Pitch", "Turns"] {
++                    draft.parameters["properties"].as_object_mut().unwrap().remove(field);
++                    draft.parameters["expressions"].as_object_mut().unwrap().remove(field);
++                }
++                draft.changed = Some(Instant::now());
++                draft.valid = false;
++            }
+         }
+         if let Some(point) = draft.parameters.get("plane_point") {
+             ui.label("Plane point");
+@@ -664,6 +694,16 @@
+                                 .contains(&filter)
+                         {
+                             continue;
++                        }
++                        if draft.parameters["type"] == "Part::Helix" {
++                            let circle = draft.parameters["helix_reference"]["reference_mode"] == "Circle"
++                                || schema["properties"]["ExtentMode"].is_string();
++                            let pair = draft.parameters["helix_reference"]["extent_mode"].as_str()
++                                .or_else(|| schema["properties"]["ExtentMode"].as_str()).unwrap_or("Height and pitch");
++                            let dependent = match pair { "Height and turns" => "Pitch", "Pitch and turns" => "Height", _ => "Turns" };
++                            if !self.property_ui.advanced && filter.is_empty()
++                                && ((circle && property == dependent)
++                                    || (!circle && matches!(property.as_str(), "Height" | "Pitch"))) { continue; }
+                         }
+                         if draft.parameters["type"] == "Part::Helix" && filter.is_empty()
+                             && !self.property_ui.advanced && !preferred.contains(&property.as_str())
+--- a/next/src/editor/standalone_helix_tests.rs
++++ b/next/src/editor/standalone_helix_tests.rs
+@@ -42,3 +42,21 @@
+     assert!(e.draft.is_none());assert!(input.try_recv().is_err());
+     assert!(e.error.as_deref().unwrap().contains("stale"));
+ }
++
++#[test]
++fn circle_helix_keeps_guarded_reference_and_two_extent_inputs() {
++    let parameters = json!({"create":true,"type":"Part::Helix","name":"Helix",
++        "helix_reference":{"source":"ProjectedCircle","source_id":"9007199254740993",
++            "subelement":"Edge1","mapped_name":"stable-circle","face_binder":"HF","edge_binder":"HC",
++            "reference_mode":"Circle","extent_mode":"Height and pitch"},
++        "properties":{"Height":{"quantity_input":"2 in","default_unit":"in"},
++            "Pitch":{"quantity_input":"5 mm","default_unit":"mm"},"StartAngle":0.,"MapReversed":true},
++        "expressions":{}});
++    let edits = crate::property_commands::build(&parameters).unwrap();
++    assert_eq!(edits[0]["reference_mode"], "Circle");
++    assert_eq!(edits[0]["extent_mode"], "Height and pitch");
++    assert_eq!(edits[0]["source_id"], "9007199254740993");
++    assert!(!edits.iter().any(|e| e["property"] == "Turns"));
++    assert!(edits.iter().any(|e| e["property"] == "Pitch"));
++    assert!(edits.iter().any(|e| e["property"] == "Height"));
++}
+--- a/next/src/feature_commands.rs
++++ b/next/src/feature_commands.rs
+@@ -25,7 +25,7 @@
+     feature!("feature.part_mirror", "Mirror part", "Part::Mirroring", "Part", ["Source", "MirrorPlane", "Base", "Normal"]),
+     feature!("feature.new_loft", "New Loft", "Part::Loft", "Part", ["Sections", "Solid", "Ruled", "Closed"]),
+     feature!("feature.helix", "Helix curve", "Part::Helix", "Reference",
+-        ["Turns", "LocalCoord", "StartAngle"]),
++        ["Height", "Pitch", "Turns", "MapReversed", "LocalCoord", "StartAngle"]),
+     feature!(
+         "feature.pad",
+         "Pad / Extrude",

@@ -174,10 +174,13 @@ def live_admission_and_recovery(args,fixtures):
         sentinel=s.folder/'Existing.step';sentinel.write_bytes(b'Preserve existing export bytes\n');sentinel_hash=sha(sentinel)
         (s.folder/'trigger.json').write_text(json.dumps(dict(document=doc,object='Ground')))
         s.call('save',document=doc,path=str(existing),expected_revision=revision-1,expect_error='stale_revision')
+        s.call('document_settings',document=doc,unit_system=state['units']['index'],
+            expected_revision=revision-1,expect_error='stale_revision')
         for op,parameters in [('inspect',{}),('mesh',dict(object='First')),('topology',dict(object='First')),
             ('save',dict(path=str(existing))),('save',dict(path=str(s.folder/'Denied.FCStd'))),
             ('transaction',dict(label='Denied before native transaction',edits=[dict(op='set',object='Source',property='Length',value=99)])),
             ('undo',{}),('redo',{}),
+            ('document_settings',dict(unit_system=state['units']['index'],expected_revision=revision)),
             ('export_exchange',dict(objects=['First'],path=str(sentinel),overwrite=True))]:
             s.call(op,document=doc,expect_error='assembly_proxy_restore',**parameters)
         assert s.revisions[doc]==revision and sha(existing)==existing_hash and sha(sentinel)==sentinel_hash

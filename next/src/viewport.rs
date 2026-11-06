@@ -9,9 +9,27 @@ use std::{
 mod gl_renderer;
 mod navigation;
 mod references;
+mod standard_planes;
+mod view_cube;
+pub use standard_planes::StandardPlane;
+mod select_other;
+#[cfg(test)]
+mod select_other_ui_tests;
+#[cfg(test)]
+mod wire_visibility_tests;
 pub use navigation::{DisplayMode, SelectionMode, StandardView};
 mod sketch;
 mod sketch_curves;
+mod regions;
+mod extrude_handle;
+pub(crate) use extrude_handle::DepthHandle;
+
+/// Picking allowance in logical screen points, independent of model units and zoom.
+pub(crate) const EDGE_PICK_RADIUS: f32 = 8.;
+/// Point handles are smaller visual targets than curves.
+pub(crate) const POINT_PICK_RADIUS: f32 = 10.;
+#[cfg(test)]
+mod pointer_forgiveness_tests;
 pub use crate::sketch_commands::SketchElement;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -30,12 +48,29 @@ struct Edge {
     object: Arc<str>,
     points: Vec<Vec3>,
     name: String,
+    mapped_name: Option<String>,
+    wire_only: bool,
 }
 struct Vertex {
     object: Arc<str>,
     isolated: bool,
     name: String,
+    mapped_name: Option<String>,
     point: Vec3,
+}
+#[derive(Clone, Debug)]
+pub struct SceneVertex {
+    pub object: String,
+    pub subelement: String,
+    pub mapped_name: Option<String>,
+    pub revision: Option<u64>,
+    pub point: [f64; 3],
+}
+#[derive(Clone, Debug)]
+pub struct SceneEdge {
+    pub selection: Selection,
+    pub mapped_name: Option<String>,
+    pub revision: Option<u64>,
 }
 struct SketchCurve {
     native: sketch_curves::NativeCurve,
@@ -50,14 +85,19 @@ struct ProjectedTriangle {
 }
 
 pub struct Viewport {
+    depth: extrude_handle::DepthUi,
+    pub loft_origins: Vec<(String, Vec3)>,
+    pub region_scene: Vec<(Selection, Vec<[Vec3;3]>)>,
     scene_revisions: BTreeMap<String, Option<u64>>,
     renderer: Option<Arc<gl_renderer::Renderer>>,
     triangles: Vec<Triangle>,
     edges: Vec<Edge>,
     vertices: Vec<Vertex>,
     topology_references: BTreeMap<String, Vec<String>>,
+    topology_identities: BTreeMap<(String, String), String>,
     references: Vec<references::Reference>,
     reference_revisions: BTreeMap<String, Option<u64>>,
+    planes_visible: bool,
     pub display_mode: DisplayMode,
     pub selection_mode: SelectionMode,
     sketch: Option<Value>,
@@ -69,28 +109,44 @@ pub struct Viewport {
     scale: f32,
     rect: Rect,
     pub response: Option<egui::Response>,
+    pub view_cube_input_enabled: bool,
+    cube_pointer_owned: bool,
+    cube_action_owned: bool,
+    cube_consumed: bool,
     pub selected: Option<Selection>,
     pub selections: Vec<Selection>,
     pub sketch_selection: Vec<SketchElement>,
+    pub pierce_edge: Option<SceneEdge>,
     sketch_pick_positions: HashMap<SketchElement, [f64; 3]>,
     last_sketch_pick: Option<SketchElement>,
     pub sketch_select_enabled: bool,
     /// Pick native solid subelements during the external-reference tool.
     pub solid_select_in_sketch: bool,
     dimension_hits: Vec<sketch::DimensionHit>,
+    standard_plane: Option<StandardPlane>,
+    standard_plane_document: Option<(String, u64)>,
+    sketch_frame_size: Option<Vec2>,
+    sketch_editing: bool,
+    other_picker: Option<select_other::Picker>,
+    other_hover: Option<Selection>,
 }
 
 impl Default for Viewport {
     fn default() -> Self {
         let mut result = Self {
+            depth: extrude_handle::DepthUi::default(),
+            loft_origins: vec![],
+            region_scene: vec![],
             scene_revisions: BTreeMap::new(),
             renderer: None,
             triangles: vec![],
             edges: vec![],
             vertices: vec![],
             topology_references: BTreeMap::new(),
+            topology_identities: BTreeMap::new(),
             references: vec![],
             reference_revisions: BTreeMap::new(),
+            planes_visible: true,
             display_mode: DisplayMode::Edges,
             selection_mode: SelectionMode::All,
             sketch: None,
@@ -102,14 +158,25 @@ impl Default for Viewport {
             scale: 8.,
             rect: Rect::from_min_size(Pos2::ZERO, Vec2::splat(600.)),
             response: None,
+            view_cube_input_enabled: true,
+            cube_pointer_owned: false,
+            cube_action_owned: false,
+            cube_consumed: false,
             selected: None,
             selections: vec![],
             sketch_selection: vec![],
+            pierce_edge: None,
             sketch_pick_positions: HashMap::new(),
             last_sketch_pick: None,
             sketch_select_enabled: true,
             solid_select_in_sketch: false,
             dimension_hits: vec![],
+            standard_plane: None,
+            standard_plane_document: None,
+            sketch_frame_size: None,
+            sketch_editing: false,
+            other_picker: None,
+            other_hover: None,
         };
         result.iso();
         result
@@ -154,8 +221,10 @@ impl Viewport {
         }
     }
     pub fn clear_selection(&mut self) {
+        self.cancel_other_picker();
         self.selected = None;
         self.selections.clear();
+        self.pierce_edge = None;
     }
     fn selected_element(&self, object: &str, subelement: &str) -> bool {
         self.selections
@@ -189,6 +258,7 @@ impl Viewport {
     /// Display every supplied native object in one depth-tested scene. Omitted objects
     /// are neither displayed nor pickable. Revisions scope all native element names.
     pub fn set_scenes(&mut self, scenes: Vec<(Value, Value)>) {
+        self.cancel_other_picker();
         let revisions: BTreeMap<String, Option<u64>> = scenes
             .iter()
             .filter_map(|(mesh, _)| {
@@ -220,6 +290,7 @@ impl Viewport {
         self.edges.clear();
         self.vertices.clear();
         self.topology_references.clear();
+        self.topology_identities.clear();
         for (mesh, topology) in scenes {
             self.append_scene(mesh, topology);
         }
@@ -228,6 +299,13 @@ impl Viewport {
         let Some(object) = mesh["object"].as_str().filter(|object| !object.is_empty()) else {
             return;
         };
+        for kind in ["faces", "edges", "vertices"] {
+            for element in topology[kind].as_array().into_iter().flatten() {
+                if let (Some(sub), Some(mapped)) = (element["subelement"].as_str(), element["mapped_name"].as_str().filter(|s| !s.is_empty())) {
+                    self.topology_identities.insert((object.to_owned(), sub.to_owned()), mapped.to_owned());
+                }
+            }
+        }
         let references = ["faces", "edges", "vertices"]
             .into_iter()
             .flat_map(|kind| {
@@ -302,8 +380,8 @@ impl Viewport {
             }
         }
         let (origin, rotation) = placement(&topology["world_from_shape"]);
-        let isolated = mesh["triangles"].as_array().is_none_or(Vec::is_empty)
-            && topology["edges"].as_array().is_none_or(Vec::is_empty);
+        let wire_only = mesh["triangles"].as_array().is_none_or(Vec::is_empty);
+        let isolated = wire_only && topology["edges"].as_array().is_none_or(Vec::is_empty);
         self.vertices.extend(
             topology["vertices"]
                 .as_array()
@@ -316,6 +394,7 @@ impl Viewport {
                         object: Arc::clone(&object),
                         isolated,
                         name: vertex["subelement"].as_str().unwrap_or("").to_owned(),
+                        mapped_name: vertex["mapped_name"].as_str().map(str::to_owned),
                         point,
                     })
                 }),
@@ -335,6 +414,8 @@ impl Viewport {
                     Some(Edge {
                         object: Arc::clone(&object),
                         name: edge["subelement"].as_str()?.to_owned(),
+                        mapped_name: edge["mapped_name"].as_str().map(str::to_owned),
+                        wire_only,
                         points: points
                             .iter()
                             .map(|p| origin + rotation * vector(p))
@@ -344,7 +425,15 @@ impl Viewport {
         );
     }
 
+    pub fn sketch_matches(&self, sketch: &Option<Value>) -> bool {
+        &self.sketch == sketch
+    }
+
     pub fn set_sketch(&mut self, sketch: Option<Value>) {
+        if sketch.is_none() {
+            self.sketch_editing = false;
+        }
+        self.cancel_other_picker();
         if self.sketch != sketch {
             self.sketch_pick_positions.clear();
             self.last_sketch_pick = None;
@@ -433,6 +522,11 @@ impl Viewport {
             .retain(|element, _| self.sketch_selection.contains(element));
     }
 
+    /// Distinguish an active editor from a finished profile's picking overlay.
+    pub fn set_sketch_editing(&mut self, active: bool) {
+        self.sketch_editing = active && self.sketch.is_some();
+    }
+
     pub fn align_sketch(&mut self) {
         self.rotation = self.sketch_rotation;
         self.center = self.sketch_origin;
@@ -456,6 +550,23 @@ impl Viewport {
             .chain(self.curves.iter().flat_map(|c| c.points.iter().copied()))
             .filter(|point| point.is_finite())
             .collect();
+        self.fit_points(points);
+    }
+    pub fn fit_sketch(&mut self) {
+        let points: Vec<Vec3> = self
+            .curves
+            .iter()
+            .flat_map(|curve| curve.points.iter().copied())
+            .filter(|point| point.is_finite())
+            .collect();
+        if points.is_empty() && self.rect.is_finite() && self.rect.is_positive() {
+            self.center = self.sketch_origin;
+            self.scale = (self.rect.height() / 250.).clamp(0.0001, 100000.);
+        } else {
+            self.fit_points(points);
+        }
+    }
+    fn fit_points(&mut self, points: Vec<Vec3>) {
         if points.is_empty() {
             self.center = self.sketch_origin;
             self.scale = 8.;
@@ -484,6 +595,31 @@ impl Viewport {
     fn project(&self, p: Vec3) -> (Pos2, f32) {
         let p = self.rotation.conjugate() * (p - self.center);
         (self.rect.center() + Vec2::new(p.x, -p.y) * self.scale, p.z)
+    }
+    #[cfg(test)]
+    pub fn test_world_screen_point(&self, point: [f64; 3]) -> Pos2 {
+        self.project(Vec3::new(point[0] as f32, point[1] as f32, point[2] as f32))
+            .0
+    }
+    #[cfg(test)]
+    pub fn test_scene_vertex_world(&self, object: &str, subelement: &str) -> Option<[f64; 3]> {
+        let vertex = self
+            .vertices
+            .iter()
+            .find(|v| v.object.as_ref() == object && v.name == subelement)?;
+        Some([
+            vertex.point.x as f64,
+            vertex.point.y as f64,
+            vertex.point.z as f64,
+        ])
+    }
+    #[cfg(test)]
+    pub fn test_reference_revision(&self, object: &str) -> Option<u64> {
+        self.reference_revisions.get(object).copied().flatten()
+    }
+    #[cfg(test)]
+    pub fn test_scene_pick(&self, pos: Pos2) -> Option<Selection> {
+        self.pick(pos, &self.projected())
     }
     pub fn sketch_screen_point(&self, point: [f64; 3]) -> Pos2 {
         self.project(
@@ -536,6 +672,80 @@ impl Viewport {
             })
             .collect()
     }
+    /// Native scene vertex hits, with no inference from coincident coordinates.
+    pub fn scene_vertices_at(&self, pos: Pos2) -> Vec<SceneVertex> {
+        let triangles = self.projected();
+        let front = front_triangle(pos, &triangles);
+        self.vertices
+            .iter()
+            .filter_map(|vertex| {
+                let (screen, depth) = self.project(vertex.point);
+                if screen.distance(pos) > POINT_PICK_RADIUS
+                    || !self.point_visible(&vertex.object, depth, front, &triangles)
+                {
+                    return None;
+                }
+                let local = self.sketch_rotation.conjugate() * (vertex.point - self.sketch_origin);
+                Some(SceneVertex {
+                    object: vertex.object.to_string(),
+                    subelement: vertex.name.clone(),
+                    mapped_name: vertex.mapped_name.clone(),
+                    revision: self
+                        .scene_revisions
+                        .get(vertex.object.as_ref())
+                        .copied()
+                        .flatten(),
+                    point: [local.x as f64, local.y as f64, local.z as f64],
+                })
+            })
+            .collect()
+    }
+    /// Visible scene edges under the cursor; retain every owner for ambiguity checks.
+    pub fn scene_edges_at(&self, pos: Pos2) -> Vec<SceneEdge> {
+        let triangles = self.projected();
+        let front = front_triangle(pos, &triangles);
+        self.edges
+            .iter()
+            .filter(|edge| {
+                edge.points.windows(2).any(|line| {
+                    let a = self.project(line[0]);
+                    let b = self.project(line[1]);
+                    let (distance, t) = segment_distance(pos, a.0, b.0);
+                    distance <= EDGE_PICK_RADIUS
+                        && self.edge_visible(edge, a.1 + t * (b.1 - a.1), front, &triangles)
+                })
+            })
+            .map(|edge| SceneEdge {
+                selection: Selection {
+                    object: edge.object.to_string(),
+                    subelement: edge.name.clone(),
+                },
+                mapped_name: edge.mapped_name.clone(),
+                revision: self
+                    .scene_revisions
+                    .get(edge.object.as_ref())
+                    .copied()
+                    .flatten(),
+            })
+            .collect()
+    }
+    pub fn scene_subelement_identity(&self, selection: &Selection) -> Option<(String, u64)> {
+        Some((self.topology_identities.get(&(selection.object.clone(), selection.subelement.clone()))?.clone(),
+            self.scene_revisions.get(&selection.object).copied().flatten()?))
+    }
+    pub fn scene_vertex_identity(&self, selection: &Selection) -> Option<(String, u64)> {
+        let vertex = self
+            .vertices
+            .iter()
+            .find(|v| v.object.as_ref() == selection.object && v.name == selection.subelement)?;
+        Some((
+            vertex.mapped_name.clone()?,
+            self.scene_revisions
+                .get(&selection.object)
+                .copied()
+                .flatten()?,
+        ))
+    }
     fn edge_visible(
         &self,
         edge: &Edge,
@@ -570,19 +780,21 @@ impl Viewport {
         depth >= front_depth - tolerance
     }
     fn pick(&self, pos: Pos2, triangles: &[ProjectedTriangle]) -> Option<Selection> {
+        if let Some(hit) = self.loft_origin_hit(pos) { return Some(hit); }
+        if let Some(hit) = self.region_hit(pos) { return Some(hit); }
         let front = front_triangle(pos, triangles);
         if matches!(
             self.selection_mode,
             SelectionMode::Vertices | SelectionMode::All
-        ) {
+        ) || !self.loft_origins.is_empty() {
             let hit = self
                 .vertices
                 .iter()
-                .filter(|vertex| self.selection_mode == SelectionMode::Vertices || vertex.isolated)
+                .filter(|vertex| !self.loft_origins.is_empty() || self.selection_mode == SelectionMode::Vertices || vertex.isolated)
                 .filter_map(|vertex| {
                     let (point, depth) = self.project(vertex.point);
                     let distance = point.distance(pos);
-                    (distance <= 6. && self.point_visible(&vertex.object, depth, front, triangles))
+                    (distance <= POINT_PICK_RADIUS && self.point_visible(&vertex.object, depth, front, triangles))
                         .then_some((vertex, distance, depth))
                 })
                 .min_by(|a, b| a.1.total_cmp(&b.1).then_with(|| b.2.total_cmp(&a.2)));
@@ -605,7 +817,7 @@ impl Viewport {
                 let b = self.project(line[1]);
                 let (distance, t) = segment_distance(pos, a.0, b.0);
                 let depth = a.1 + t * (b.1 - a.1);
-                if distance < 6.
+                if distance <= EDGE_PICK_RADIUS
                     && self.edge_visible(edge, depth, front, triangles)
                     && edge_hit
                         .as_ref()
@@ -645,18 +857,21 @@ impl Viewport {
     pub fn ui(&mut self, ui: &mut egui::Ui) -> Option<Selection> {
         let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         self.rect = rect;
+        self.validate_other_picker(ui.is_enabled());
+        if !self.depth.consumed { self.view_cube_input(ui); } else { self.cube_consumed = false; }
+        self.depth_input(ui, &response);
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 0., Color32::from_rgb(8, 10, 12));
         let delta = ui.input(|i| i.pointer.delta());
-        if response.dragged_by(egui::PointerButton::Secondary) {
+        if !self.cube_consumed && !self.depth.consumed && response.dragged_by(egui::PointerButton::Secondary) {
             let yaw = Quat::from_axis_angle(Vec3::Z, -delta.x * 0.008);
             let pitch = Quat::from_axis_angle(self.rotation * Vec3::X, -delta.y * 0.008);
             self.rotation = (yaw * pitch * self.rotation).normalize();
         }
-        if response.dragged_by(egui::PointerButton::Middle) {
+        if !self.cube_consumed && !self.depth.consumed && response.dragged_by(egui::PointerButton::Middle) {
             self.center -= self.rotation * Vec3::new(delta.x, -delta.y, 0.) / self.scale;
         }
-        if response.hovered() {
+        if !self.cube_consumed && !self.depth.consumed && response.hovered() {
             let scroll = ui.input(|i| i.smooth_scroll_delta.y);
             if scroll != 0. {
                 let anchor = ui.input(|i| i.pointer.hover_pos()).unwrap_or(rect.center());
@@ -699,17 +914,21 @@ impl Viewport {
             }
             painter.add(renderer.callback(rect, vertices));
         }
+        self.draw_regions(&painter);
+        self.draw_loft_origins(&painter);
         let depth_index = DepthIndex::new(rect, &triangles);
         // Test each small edge segment against the visible surface.
         for edge in &self.edges {
             let selected = self.selected_element(&edge.object, &edge.name);
-            if self.display_mode == DisplayMode::Shaded && !selected {
+            if self.display_mode == DisplayMode::Shaded && !selected && !edge.wire_only {
                 continue;
             }
             let stroke = Stroke::new(
                 if selected { 2.5_f32 } else { 1.1_f32 },
                 if selected {
                     Color32::from_rgb(95, 221, 207)
+                } else if edge.wire_only || self.display_mode == DisplayMode::Wireframe {
+                    Color32::from_rgb(174, 187, 193)
                 } else {
                     Color32::from_rgb(32, 42, 48)
                 },
@@ -759,6 +978,7 @@ impl Viewport {
         self.draw_references(&painter, &triangles, &depth_index);
         self.draw_sketch(&painter);
         self.draw_dimensions(&painter);
+        self.draw_other_hover(&painter);
         let origin = rect.left_bottom() + Vec2::new(36., -36.);
         for (axis, label, color) in [
             (Vec3::X, "X", Color32::from_rgb(184, 94, 104)),
@@ -776,24 +996,57 @@ impl Viewport {
                 color,
             );
         }
+        self.paint_depth_handle(&painter);
         let mut selection = None;
-        if response.clicked()
+        if !self.cube_consumed && !self.depth.consumed
+            && response.clicked()
             && let Some(pos) = response.interact_pointer_pos()
         {
             if self.sketch.is_some() && !self.solid_select_in_sketch {
                 if self.sketch_select_enabled && self.dimension_hit(pos).is_none() {
                     let toggle =
                         ui.input(|i| i.modifiers.ctrl || i.modifiers.shift || i.modifiers.command);
-                    let hit = self.select_sketch_at(pos, toggle);
-                    selection = hit.map(|element| Selection {
-                        object: self
-                            .sketch
-                            .as_ref()
-                            .and_then(|s| s["name"].as_str())
-                            .unwrap_or("")
-                            .to_owned(),
-                        subelement: format!("Geometry{}", element.index),
-                    });
+                    let hit = self.sketch_hit(pos);
+                    if let Some(hit) = hit {
+                        if self.pierce_edge.is_some() {
+                            let mut handles = Vec::new();
+                            for (id, world) in self.curves.iter().flat_map(|curve| &curve.handles) {
+                                if self.project(*world).0.distance(pos) <= POINT_PICK_RADIUS
+                                    && !handles.contains(id)
+                                {
+                                    handles.push(*id);
+                                }
+                            }
+                            if hit.point == 0 || handles.len() != 1 || handles[0] != hit {
+                                self.pierce_edge = None;
+                            }
+                        }
+                        let hit = self.select_sketch_at(pos, toggle);
+                        selection = hit.map(|element| Selection {
+                            object: self
+                                .sketch
+                                .as_ref()
+                                .and_then(|s| s["name"].as_str())
+                                .unwrap_or("")
+                                .to_owned(),
+                            subelement: format!("Geometry{}", element.index),
+                        });
+                    } else {
+                        let edges = if matches!(
+                            self.selection_mode,
+                            SelectionMode::All | SelectionMode::Edges
+                        ) {
+                            self.scene_edges_at(pos)
+                        } else {
+                            Vec::new()
+                        };
+                        self.clear_sketch_selection();
+                        if let [edge] = edges.as_slice() {
+                            self.pierce_edge = Some(edge.clone());
+                            self.selections = vec![edge.selection.clone()];
+                            selection = Some(edge.selection.clone());
+                        }
+                    }
                 }
                 self.selected = selection.clone();
             } else {
@@ -805,6 +1058,12 @@ impl Viewport {
                 selection = self.selected.clone();
             }
         }
+        if !self.depth.consumed && (!self.cube_consumed || egui::Popup::is_any_open(ui.ctx()))
+            && let Some(hit) = self.select_other_menu(ui, &response, &triangles)
+        {
+            selection = Some(hit);
+        }
+        self.draw_view_cube(ui);
         self.response = Some(response);
         selection
     }
@@ -901,6 +1160,37 @@ impl DepthIndex {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn scene_vertex_hits_keep_mapped_names_and_distinct_owners() {
+        let mut viewport = Viewport::default();
+        viewport.set_sketch(Some(json!({"name":"Follower","sketch":{"geometry":[]}})));
+        viewport.align_sketch();
+        viewport.scale = 10.;
+        viewport.set_scenes(vec![
+            (
+                json!({"object":"Master","revision":7}),
+                json!({"vertices":[
+                {"subelement":"Vertex2","mapped_name":"g1v2;SKT","point":[-40,0,0]}]}),
+            ),
+            (
+                json!({"object":"Other","revision":7}),
+                json!({"vertices":[
+                {"subelement":"Vertex1","mapped_name":"g1v1;SKT","point":[-40,0,0]}]}),
+            ),
+        ]);
+        let hits = viewport.scene_vertices_at(viewport.sketch_screen_point([-40., 0., 0.]));
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].object, "Master");
+        assert_eq!(hits[0].mapped_name.as_deref(), Some("g1v2;SKT"));
+        assert_eq!(hits[0].revision, Some(7));
+        assert_eq!(hits[1].object, "Other");
+        assert_ne!(hits[0].mapped_name, hits[1].mapped_name);
+        assert!(
+            viewport
+                .scene_vertices_at(viewport.sketch_screen_point([-39., 2., 0.]))
+                .is_empty()
+        );
+    }
     #[test]
     fn pick_uses_interpolated_front_depth_and_rejects_hidden_edges() {
         let mut viewport = Viewport::default();

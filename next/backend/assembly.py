@@ -2,11 +2,13 @@
 import math
 import re
 import FreeCAD as App
+import document_units as DocumentUnits
 import Assembly
 import UtilsAssembly
+import assembly_sources as Sources
 
 OPERATIONS = {"assembly_create", "assembly_insert", "assembly_placement", "assembly_ground",
-              "assembly_joint", "assembly_remove", "assembly_solve"}
+              "assembly_joint", "assembly_remove", "assembly_solve", "assembly_relink"}
 # The pinned task interface, also declared by Rust's assembly_commands. Loading
 # the shipped joint proxies imports Qt and Coin; ordinary Part Studios and Link
 # display do not need those modules. Actual joint creation still uses the native
@@ -106,8 +108,10 @@ def local_instance(assembly, value):
     if obj.TypeId != "App::Link" or obj not in assembly.Group:
         reject("Choose a component instance in this assembly")
     source = obj.LinkedObject
-    if source is None or source.Document != assembly.Document:
-        reject("External or missing component references are preserved but cannot be authored here")
+    if source is None:
+        reject("Component source is missing; explicitly relink its native identity")
+    if source.Document != assembly.Document and Sources.stored(obj) is None:
+        reject("External component has no accepted source identity")
     return obj
 
 
@@ -117,6 +121,10 @@ def placement(value):
     p, q = value["position"], value["rotation"]
     if not isinstance(p, list) or len(p) != 3 or not isinstance(q, list) or len(q) != 4:
         reject("Placement requires three position and four quaternion values")
+    try:
+        p = [DocumentUnits.value(v, "mm") for v in p]
+    except (ValueError, TypeError) as error:
+        reject(str(error))
     if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in p + q):
         reject("Placement values must be finite")
     if sum(v * v for v in q) < 1e-24:
@@ -179,6 +187,8 @@ def metadata(obj):
         data["instance_state"] = {"source": None if source is None else source.Name,
                                   "source_document": None if source is None else source.Document.Name,
                                   "source_path": None if source is None else source.Document.FileName,
+                                  "external_source": Sources.stored(obj),
+                                  "source_status": Sources.status(obj),
                                   "local": source is not None and source.Document == obj.Document,
                                   "grounded": bool(assembly.isPartGrounded(obj))}
     return data
@@ -209,19 +219,44 @@ def apply(doc, edit):
     if assembly.TypeId != "Assembly::AssemblyObject":
         reject("Choose a native Assembly container")
     group = joint_group(assembly)
+    if op == "assembly_relink":
+        obj = local_instance(assembly, edit["object"])
+        old = Sources.stored(obj)
+        if old is None:
+            reject("Choose a registered external component")
+        value = edit["external_source"]
+        source = Sources.resolve(value)
+        if any(old.get(k) != value.get(k) for k in ('document_uid', 'object', 'object_id', 'type')):
+            reject("Relink requires the same native document UUID and object ID", "source_identity")
+        updated = []
+        # A source update is root-owned and updates every instance of this exact
+        # source in the root, preserving instances, grounds and joint references.
+        for link in doc.Objects:
+            if link.TypeId == 'App::Link' and Sources.stored(link) == old:
+                pose = link.LinkPlacement
+                link.setLink(source)
+                link.LinkPlacement = pose
+                Sources.put(link, value)
+                updated.append(link.Name)
+        return {"object": obj.Name, "updated_instances": updated}
     if op == "assembly_insert":
         key = unique(doc, edit["name"])
-        source = object_in(doc, edit["source"])
-        if source.TypeId == "App::Link":
+        external = edit.get("external_source")
+        if external is not None and not doc.FileName:
+            reject("Save as the root assembly FCStd before inserting an external component", "assembly_save_required")
+        source = Sources.resolve(external) if external is not None else object_in(doc, edit["source"])
+        if source.TypeId == "App::Link" and external is None:
             source = source.getLinkedObject(True)
-        if source.Document != doc or source == assembly or assembly in source.OutListRecursive:
+        if (external is None and source.Document != doc) or source == assembly or assembly in source.OutListRecursive:
             reject("Component must be a local document source without an assembly dependency")
-        if not (source.isDerivedFrom("Part::Feature") or source.TypeId == "PartDesign::Body"):
+        if not (Sources.supported(source)):
             reject("Choose a local native Part feature or Body as the component source")
         if not hasattr(source, "Shape") or source.Shape.isNull():
             reject("Component source requires a native shape")
         link = assembly.newObject("App::Link", key)
         link.setLink(source)
+        if external is not None:
+            Sources.put(link, external)
         if "placement" in edit:
             link.LinkPlacement = placement(edit["placement"])
         return {"object": key, "source": source.Name}
@@ -267,11 +302,35 @@ def apply(doc, edit):
         properties = edit.get("properties", {})
         if not isinstance(properties, dict) or set(properties) - JOINT_PROPERTIES:
             reject("Unsupported joint task property")
+        flips = edit.get("flip_primary", [False, False])
+        if not isinstance(flips, list) or len(flips) != 2 or any(type(v) is not bool for v in flips):
+            reject("Primary axis reversal requires two boolean values")
+        for index, flip in enumerate(flips, 1):
+            if not flip:
+                continue
+            prop = "Offset" + str(index)
+            status = joint.getPropertyStatus(prop)
+            mode = joint.getEditorMode(prop)
+            paths = list(dict(joint.ExpressionEngine)) + list(edit.get("expressions", {}))
+            if ("ReadOnly" in status or "ReadOnly" in mode or any(
+                    str(path).lstrip(".").split(".")[0].split("[")[0] == prop for path in paths)):
+                reject("Connector offset is read-only or expression driven")
         # The shipped proxy owns connector placement, presolve and solver calls.
         # Assign both native references before task properties so offsets are live.
         joint.Proxy.setJointConnectors(joint, refs)
         for prop, value in properties.items():
+            if not prop.startswith("Offset") and isinstance(value, dict) and "quantity_input" in value:
+                value = DocumentUnits.property_input(value, getattr(joint, prop).Unit)
             setattr(joint, prop, placement(value) if prop.startswith("Offset") else value)
+        # Native findPlacement is reference_frame * OffsetN. Post-multiply the
+        # offset rotation so this half turn is in connector-local X, preserving
+        # origin, reference association and all authored translation.
+        for index, flip in enumerate(flips, 1):
+            if flip:
+                prop = "Offset" + str(index)
+                offset = getattr(joint, prop)
+                offset = UtilsAssembly.flipPlacement(offset)
+                setattr(joint, prop, offset)
         for prop, expression in edit.get("expressions", {}).items():
             if prop.split(".")[0] not in JOINT_PROPERTIES:
                 reject("Unsupported joint expression property")

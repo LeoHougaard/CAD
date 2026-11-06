@@ -1,4 +1,10 @@
 //! Real Editor methods and egui Apply/Cancel, with the pinned headless worker.
+#[path = "external_tests.rs"]
+mod external_tests;
+#[path = "partial_tests.rs"]
+mod partial_tests;
+#[path = "r1_tests.rs"]
+mod r1_tests;
 use super::super::*;
 use super::*;
 use std::{fs, thread::JoinHandle};
@@ -49,6 +55,7 @@ impl Native {
             body_ui: BodyUi::default(),
             property_ui: properties::PropertyUi::default(),
             measurement_ui: measurements::MeasurementUi::default(),
+            units_ui: Default::default(),
             transform_ui: transforms::TransformUi::default(),
             exchange_ui: exchange::ExchangeUi::default(),
             draft: None,
@@ -83,7 +90,7 @@ impl Native {
             .replies
             .recv_timeout(Duration::from_secs(25))
             .unwrap();
-        self.events.push(json!({"op":reply.op,"accepted":reply.accepted,"error":reply.error,"state":reply.state,
+        self.events.push(json!({"op":reply.op,"accepted":reply.accepted,"error":reply.error,"state":reply.state,"data":reply.data,
             "display_objects":reply.scenes.iter().map(|(m,_)|m["object"].clone()).collect::<Vec<_>>()}));
         fs::write(
             self.output.join("events.json"),
@@ -293,10 +300,29 @@ impl Native {
         self.replace_at(pos, value);
     }
 
-    fn literal_input(&mut self, previous: &str, value: &str) {
-        self.reveal(previous);
-        let pos = self.text_positions(previous)[0];
-        self.replace_at(pos, value);
+    fn literal_input(&mut self, property: &str, previous: f64, value: &str) {
+        let metadata = self.obj("Joint")["property_metadata"][property]["quantity"].clone();
+        assert_eq!(metadata["value"], previous);
+        assert_eq!(self.request()["properties"][property], previous);
+        let seed = metadata["input"].as_str().unwrap();
+        self.reveal(seed);
+        let labels = self.text_positions(property);
+        assert_eq!(labels.len(), 1, "one visible property {property}");
+        let positions: Vec<_> = self
+            .text_positions(seed)
+            .into_iter()
+            .filter(|pos| pos.y > labels[0].y && pos.y < labels[0].y + 50.)
+            .collect();
+        assert_eq!(
+            positions.len(),
+            1,
+            "one quantity input for {property}: {seed}"
+        );
+        self.replace_at(positions[0], value);
+        assert_eq!(
+            self.request()["properties"][property],
+            crate::document_units::input(value, &metadata)
+        );
     }
 
     fn edit_joint_values(&mut self) {
@@ -309,12 +335,28 @@ impl Native {
     }
 
     fn apply_joint(&mut self, accepted: bool) {
+        let request = self.request();
+        let offsets: Vec<_> = ["Offset1", "Offset2"]
+            .into_iter()
+            .filter(|property| {
+                request["properties"].get(*property).is_none()
+                    && !request["expressions"]
+                        .as_object()
+                        .unwrap()
+                        .keys()
+                        .any(|path| path.trim_start_matches('.').starts_with(property))
+            })
+            .map(|property| (property, self.obj("Joint")["properties"][property].clone()))
+            .collect();
         self.editor.preview();
         assert!(self.editor.draft.as_ref().unwrap().valid);
         self.click("Apply");
         assert!(self.editor.busy);
         self.receive(accepted);
         assert_eq!(self.editor.draft.is_none(), accepted);
+        for (property, before) in offsets {
+            assert_eq!(self.obj("Joint")["properties"][property], before);
+        }
     }
 
     fn request(&self) -> Value {
@@ -382,8 +424,21 @@ fn native_joint_override_opt_out() {
     }
     n.task(json!({"op":"assembly_joint","assembly":"Assembly","name":"Joint","create":true,"joint_type":"Gears",
         "reference1":{"link":"A","subelements":["Face2","Face2"]},"reference2":{"link":"B","subelements":["Face3","Face3"]},
-        "properties":{"Distance":"8 mm","Distance2":"12 mm"},"expressions":{}}),true);
+        "properties":{"Distance":"8 mm","Distance2":"12 mm",
+        "Offset2":{"position":[1.25,-2.5,3.75],"rotation":[0,0,0.6,0.8]}},"expressions":{}}),true);
     n.assert_distance(8., None);
+
+    // Repainting and applying untouched unit fields retain native values exactly.
+    let properties = n.obj("Joint")["properties"].clone();
+    let expressions = n.obj("Joint")["expressions"].clone();
+    n.edit_joint_values();
+    assert_eq!(n.request()["properties"], json!({}));
+    assert_eq!(n.request()["expressions"], json!({}));
+    let no_op = n.request();
+    n.apply_joint(true);
+    assert_eq!(n.obj("Joint")["properties"], properties);
+    assert_eq!(n.obj("Joint")["expressions"], expressions);
+    n.record_case("00-no-op-native-preservation", no_op);
 
     // Exact reviewer failure: type an expression, uncheck its property and Apply.
     n.edit_joint_values();
@@ -416,7 +471,7 @@ fn native_joint_override_opt_out() {
     n.expression_input("Source.Width + 3 mm");
     n.click_text("Distance");
     n.click_text("Distance2");
-    n.literal_input("12.0", "14 mm");
+    n.literal_input("Distance2", 12., "14 mm");
     let replaced_off = n.request();
     assert!(replaced_off["properties"].get("Distance").is_none());
     assert!(replaced_off["expressions"].get("Distance").is_none());
@@ -435,9 +490,12 @@ fn native_joint_override_opt_out() {
     // A pending expression clear and literal must both disappear on opt-out.
     n.edit_joint_values();
     n.click_text("Distance");
-    n.literal_input("15.0", "7.5 mm");
+    n.literal_input("Distance", 15., "7.5 mm");
     n.expression_input("");
-    assert_eq!(n.request()["properties"]["Distance"], "7.5 mm");
+    assert_eq!(
+        n.request()["properties"]["Distance"],
+        json!({"quantity_input":"7.5 mm","default_unit":n.obj("Joint")["property_metadata"]["Distance"]["quantity"]["default_unit"]})
+    );
     assert!(n.request()["expressions"]["Distance"].is_null());
     n.click_text("Distance");
     let unchecked = n.request();
@@ -449,7 +507,7 @@ fn native_joint_override_opt_out() {
     assert!(!n.text_positions("Source.Length").is_empty());
     n.click_text("Distance");
     n.click_text("Distance2");
-    n.literal_input("12.0", "13 mm");
+    n.literal_input("Distance2", 12., "13 mm");
     let clear_off = n.request();
     n.apply_joint(true);
     n.record_case("03-unchecked-clear-recheck", clear_off);
@@ -466,7 +524,7 @@ fn native_joint_override_opt_out() {
     // Explicit clear while checked switches the expression to a native quantity.
     n.edit_joint_values();
     n.click_text("Distance");
-    n.literal_input("15.0", "7.5 mm");
+    n.literal_input("Distance", 15., "7.5 mm");
     n.expression_input("");
     let clear = n.request();
     n.apply_joint(true);
@@ -484,7 +542,7 @@ fn native_joint_override_opt_out() {
     n.assert_distance(15., Some("Source.Width"));
     n.edit_joint_values();
     n.click_text("Distance");
-    n.literal_input("15.0", "8 mm");
+    n.literal_input("Distance", 15., "8 mm");
     n.expression_input("");
     n.apply_joint(true);
     n.assert_distance(8., None);
@@ -492,7 +550,7 @@ fn native_joint_override_opt_out() {
     // A literal-only override also disappears without changing the native value.
     n.edit_joint_values();
     n.click_text("Distance");
-    n.literal_input("8.0", "9.25 mm");
+    n.literal_input("Distance", 8., "9.25 mm");
     n.click_text("Distance");
     let literal_off = n.request();
     n.apply_joint(true);

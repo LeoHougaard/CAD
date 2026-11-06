@@ -1,0 +1,23 @@
+{
+  "goal_distinct_whole_tutorials": 100,
+  "individual_distinct_qualified_count": 2,
+  "final_same_build_mass_verified": false,
+  "goal_complete": false,
+  "qualified_cases": [
+    {
+      "case": "DAYS002",
+      "decision": "../cad-days002-accepted-native-root-20261106-r326/ACCEPTANCE-DECISION.json",
+      "artifact_sha256": "19771c5650b0df15d299148c21e9e904b08fd9b00f81b05811fe1aed312bc91f",
+      "candidate": "R315 worker plus exact R292 GUI",
+      "mass_rerun_still_required": true
+    },
+    {
+      "case": "DAYS001",
+      "decision": "../cad-days001-final-native-root-20261106-r394/ACCEPTANCE-DECISION.json",
+      "artifact_sha256": "b0b5159244ebdf8460400c050700019437480b4f1e426f2e76324e4368b6d424",
+      "candidate": "R386 worker plus exact R385 ARM64 GUI",
+      "mass_rerun_still_required": true
+    }
+  ],
+  "policy": "Current unsealed coordination ledger; historical zero counts and failed seals remain unchanged. Individual qualified workflows do not replace the final 100-distinct same-build mass."
+}

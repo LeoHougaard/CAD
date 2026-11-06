@@ -1,19 +1,36 @@
 //! Native sketch constraint authoring and its compact editor controls.
 
 use super::Editor;
-use crate::sketch_commands::{SketchElement, Tool, angle_via_point_edits, constrain, datum_edits};
+use crate::sketch_commands::{
+    SketchElement, Tool, angle_rays_at, angle_via_point_edits, constrain, constrain_angle_rays,
+    datum_edits,
+};
 use eframe::egui::{self, Color32};
 use serde_json::{Value, json};
+
+#[cfg(test)]
+fn record_pierce_widget(ui: &egui::Ui, role: &'static str, response: &egui::Response) {
+    let pass = ui.ctx().cumulative_pass_nr();
+    ui.ctx().data_mut(|data| {
+        data.insert_temp(
+            egui::Id::new(("pierce_widget_role", role)),
+            (pass, response.id),
+        );
+    });
+}
 
 pub(super) struct DimensionEdit {
     pub(super) index: Option<usize>,
     pub(super) kind: String,
     pub(super) selection: Vec<SketchElement>,
+    angle_rays: Option<[SketchElement; 2]>,
     pub(super) value: String,
+    native_input: Option<(String, String)>,
+    presentation_edited: bool,
     pub(super) expression: bool,
     focus: bool,
     submitting: bool,
-    constraint: Option<Value>,
+    pub(super) constraint: Option<Value>,
     preview: Option<DimensionPreview>,
 }
 
@@ -29,6 +46,22 @@ struct DimensionPreview {
 }
 
 impl DimensionEdit {
+    pub(super) fn seed_quantity(&mut self, quantity: &Value) {
+        self.value = quantity["edit_display"].as_str()
+            .or_else(|| quantity["input"].as_str()).unwrap_or_default().to_owned();
+        self.native_input = quantity["input"].as_str().map(|full| (full.to_owned(), self.value.clone()));
+        self.presentation_edited = false;
+    }
+
+    fn submitted_text(&self) -> String {
+        if !self.expression && !self.presentation_edited {
+            self.native_input.as_ref().filter(|(_, seed)| seed == &self.value)
+                .map(|(full, _)| full.as_str()).unwrap_or(&self.value).trim().to_owned()
+        } else {
+            self.value.trim().to_owned()
+        }
+    }
+
     fn preview_reply(
         &mut self,
         op: &str,
@@ -40,8 +73,12 @@ impl DimensionEdit {
         if op == "preview" {
             if preview.seeding {
                 preview.seeding = false;
-                if success && let Some(value) = current.and_then(|c| c["value"].as_f64()) {
-                    self.value = dimension_input("Angle", value);
+                if success && let Some(current) = current {
+                    self.value = current["quantity"]["edit_display"].as_str()
+                        .or_else(|| current["quantity"]["input"].as_str()).unwrap_or_default().to_owned();
+                    self.native_input = current["quantity"]["input"].as_str()
+                        .map(|full| (full.to_owned(), self.value.clone()));
+                    self.presentation_edited = false;
                 }
             } else if preview.applying {
                 if success {
@@ -80,47 +117,35 @@ fn dimensional(kind: &str) -> bool {
     .contains(&kind)
 }
 
-fn number(value: f64) -> String {
-    let text = format!("{value:.6}");
-    let text = text.trim_end_matches('0').trim_end_matches('.');
-    if text == "-0" {
-        "0".into()
+fn quantity_text(constraint: &Value, field: &str) -> String {
+    (if field == "display" {
+        crate::document_units::dimension_display(&constraint["quantity"])
     } else {
-        text.into()
-    }
+        constraint["quantity"][field].as_str()
+    })
+        .unwrap_or_default()
+        .to_owned()
 }
 
-fn dimension_value(kind: &str, value: f64) -> String {
-    if matches!(kind, "Weight" | "SnellsLaw") {
-        return number(value);
-    }
-    if kind == "Angle" {
-        format!("{} deg", number(value.to_degrees()))
+fn dimension_unit<'a>(state: &'a Value, edit: &DimensionEdit) -> &'a str {
+    let unit = if edit.kind == "Angle" {
+        "rad"
+    } else if matches!(edit.kind.as_str(), "Weight" | "SnellsLaw") {
+        ""
     } else {
-        format!("{} mm", number(value))
-    }
+        "mm"
+    };
+    state["units"]["defaults"][unit]["default_unit"]
+        .as_str()
+        .unwrap_or("")
 }
 
-fn dimension_input(kind: &str, value: f64) -> String {
-    if matches!(kind, "Weight" | "SnellsLaw") {
-        return value.to_string();
-    }
-    if kind == "Angle" {
-        format!("{} deg", value.to_degrees())
-    } else {
-        format!("{value} mm")
-    }
-}
-
-fn dimension_datum(kind: &str, value: &str) -> String {
-    let value = value.trim();
-    if matches!(kind, "Weight" | "SnellsLaw") {
-        return value.into();
-    }
-    if value.parse::<f64>().is_ok_and(f64::is_finite) {
-        format!("{value} {}", if kind == "Angle" { "deg" } else { "mm" })
-    } else {
-        value.into()
+pub(super) fn dimension_context(edits: &mut [Value], default: &str) {
+    for edit in edits {
+        if matches!(edit["op"].as_str(), Some("datum" | "via_point")) && edit.get("value").is_some()
+        {
+            edit["input_default_unit"] = json!(default);
+        }
     }
 }
 
@@ -218,6 +243,23 @@ fn related_geometry(snapshot: &Value, constraint: &Value) -> Vec<SketchElement> 
 }
 
 impl Editor {
+    fn constraint_name_id(&self, index: usize) -> egui::Id {
+        egui::Id::new("native_constraint_name")
+            .with(self.state["document"].as_str().unwrap_or_default())
+            .with(self.sketch.as_deref().unwrap_or_default())
+            .with(self.sketch_ui.session.as_deref().unwrap_or_default())
+            .with(index)
+    }
+
+    pub(super) fn constraint_name_focused(&self, ctx: &egui::Context) -> bool {
+        let Some(index) = self.sketch_ui.selected_constraint else {
+            return false;
+        };
+        let id = self.constraint_name_id(index);
+        self.sketch_ui.session.is_some()
+            && ctx.memory(|m| m.has_focus(id) || m.had_focus_last_frame(id))
+    }
+
     fn constraint_editable(&self) -> bool {
         !self.busy
             && self.draft.is_none()
@@ -280,6 +322,89 @@ impl Editor {
         }
     }
 
+    fn pierce_edit(&self) -> Result<Value, String> {
+        if !self.constraint_editable() || self.sketch_ui.dimension.is_some() {
+            return Err("Finish the active sketch task first".into());
+        }
+        let snapshot = self.sketch_snapshot().ok_or("Choose an active sketch")?;
+        let document = self.state["document"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .ok_or("Document is unavailable")?;
+        let revision = self.state["revision"]
+            .as_u64()
+            .ok_or("Document revision is unavailable")?;
+        let session = self
+            .sketch_ui
+            .session
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .ok_or("Sketch session is unavailable")?;
+        if self.state["sketch_edit"]["object"] != snapshot["name"]
+            || self.state["sketch_edit"]["token"] != session
+        {
+            return Err("Sketch session changed".into());
+        }
+        let edge = self
+            .viewport
+            .pierce_edge
+            .as_ref()
+            .ok_or("Select one visible native edge")?;
+        if edge.revision != Some(revision) {
+            return Err("Source edge is stale; select it again".into());
+        }
+        let mapped = edge
+            .mapped_name
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .ok_or("Source edge has no native mapped name")?;
+        let sub = edge.selection.subelement.as_str();
+        if !sub.strip_prefix("Edge").is_some_and(|s| {
+            !s.is_empty() && !s.starts_with('0') && s.bytes().all(|b| b.is_ascii_digit())
+        }) {
+            return Err("Select one native edge".into());
+        }
+        let source = super::objects(&self.state)
+            .iter()
+            .find(|o| o["name"] == edge.selection.object)
+            .ok_or("Source edge owner is unavailable")?;
+        if source["name"] == snapshot["name"]
+            || source["valid"] != true
+            || source["effective_visibility"] != true
+            || source["body"] != snapshot["body"]
+        {
+            return Err("Choose a visible independent edge in the active sketch's Body".into());
+        }
+        let [point] = self.viewport.sketch_selection.as_slice() else {
+            return Err("Select one sketch point and one native edge".into());
+        };
+        if point.index < 0 || point.point != 1 {
+            return Err("Select a standalone sketch point".into());
+        }
+        let geo = geometry(&snapshot, point.index)
+            .filter(|g| g["kind"] == "point" && g["editable"] == true)
+            .ok_or("Select a standalone native sketch point")?;
+        let persistent_id = geo["persistent_id"]
+            .as_i64()
+            .ok_or("Sketch point identity is unavailable")?;
+        Ok(
+            json!({"op":"pierce", "object":snapshot["name"], "index":point.index, "point":point.point,
+            "geometry_id":persistent_id, "source":edge.selection.object, "subelement":sub, "mapped_name":mapped,
+            "document":document, "session":session}),
+        )
+    }
+
+    fn apply_pierce(&mut self) {
+        match self.pierce_edit() {
+            Ok(edit) => {
+                self.prepare_constraint_tool();
+                self.sketch_ui.selected_constraint = None;
+                self.transaction("Pierce", vec![edit]);
+            }
+            Err(error) => self.error = Some(error),
+        }
+    }
+
     fn apply_geometric_constraint(&mut self, kind: &str) {
         if !self.constraint_editable() {
             return;
@@ -319,9 +444,16 @@ impl Editor {
 
         let kind = if selection.len() == 1
             && selection[0].point == 0
+            && geometry_kind(selection[0]) == "circle"
+        {
+            "Diameter"
+        } else if selection.len() == 1
+            && selection[0].point == 0
             && ["circle", "arc"].contains(&geometry_kind(selection[0]))
         {
             "Radius"
+        } else if crate::sketch_commands::parallel_lines(&snapshot, &selection) {
+            "Distance"
         } else if selection.len() == 3
             || selection.len() == 2
                 && selection
@@ -340,6 +472,43 @@ impl Editor {
         self.begin_dimension(kind, selection);
     }
 
+    pub(super) fn place_dimension(&mut self, position: egui::Pos2) {
+        let selection = self.viewport.sketch_selection.clone();
+        if selection.len() == 2
+            && selection.iter().all(|element| element.point != 0)
+            && let (Some(a), Some(b), Some(cursor)) = (
+                self.viewport.geometry_point(selection[0]),
+                self.viewport.geometry_point(selection[1]),
+                self.viewport.sketch_point(position),
+            )
+        {
+            let inside_x = (a[0].min(b[0])..=a[0].max(b[0])).contains(&cursor[0]);
+            let inside_y = (a[1].min(b[1])..=a[1].max(b[1])).contains(&cursor[1]);
+            let kind = if a[0] == b[0] && a[1] != b[1] {
+                "DistanceY"
+            } else if a[1] == b[1] && a[0] != b[0] || inside_x && !inside_y {
+                "DistanceX"
+            } else if inside_y && !inside_x {
+                "DistanceY"
+            } else {
+                "Distance"
+            };
+            self.begin_dimension(kind, selection);
+            return;
+        }
+        if selection.len() == 2
+            && selection.iter().all(|element| element.point == 0)
+            && let Some(snapshot) = self.sketch_snapshot()
+            && !crate::sketch_commands::parallel_lines(&snapshot, &selection)
+            && let Some(cursor) = self.viewport.sketch_point(position)
+            && let Ok(rays) = angle_rays_at(&snapshot, &selection, cursor)
+        {
+            self.begin_dimension_with_rays("Angle", selection, Some(rays));
+            return;
+        }
+        self.smart_dimension();
+    }
+
     pub(super) fn new_dimension(&mut self, kind: &str) {
         if matches!(kind, "Radius" | "Diameter")
             && self.viewport.sketch_selection.len() == 1
@@ -351,13 +520,27 @@ impl Editor {
     }
 
     fn begin_dimension(&mut self, kind: &str, selection: Vec<SketchElement>) {
+        self.begin_dimension_with_rays(kind, selection, None);
+    }
+
+    fn begin_dimension_with_rays(
+        &mut self,
+        kind: &str,
+        selection: Vec<SketchElement>,
+        angle_rays: Option<[SketchElement; 2]>,
+    ) {
         if !self.constraint_editable() {
             return;
         }
         let Some(snapshot) = self.sketch_snapshot() else {
             return;
         };
-        match constrain(&snapshot, kind, &selection, None) {
+        let candidate = if let Some(rays) = angle_rays {
+            constrain_angle_rays(&snapshot, rays, None)
+        } else {
+            constrain(&snapshot, kind, &selection, None)
+        };
+        match candidate {
             Ok(edits) => {
                 if edits[0]["kind"] == "AngleViaPoint" {
                     let previous_constraint = self
@@ -380,7 +563,10 @@ impl Editor {
                         index: None,
                         kind: "Angle".into(),
                         selection,
+                        angle_rays: None,
                         value: String::new(),
+                    native_input: None,
+                    presentation_edited: false,
                         expression: false,
                         focus: true,
                         submitting: false,
@@ -421,7 +607,10 @@ impl Editor {
                     index: None,
                     kind: kind.into(),
                     selection,
-                    value: dimension_input(kind, value),
+                    angle_rays,
+                    value: String::new(),
+                    native_input: None,
+                    presentation_edited: false,
                     expression: false,
                     focus: true,
                     submitting: false,
@@ -429,6 +618,7 @@ impl Editor {
                     preview: None,
                 });
                 self.error = None;
+                self.send("quantities", json!({"items":[{"value":value,"unit":if kind=="Angle" {"rad"} else if matches!(kind,"Weight"|"SnellsLaw") {""} else {"mm"}}]}));
             }
             Err(error) => self.error = Some(error),
         }
@@ -456,20 +646,26 @@ impl Editor {
         let formula = expression(&snapshot, index);
         let value = formula
             .clone()
-            .unwrap_or_else(|| dimension_input(kind, constraint["value"].as_f64().unwrap_or(0.)));
+            .unwrap_or_else(|| quantity_text(constraint, "input"));
         self.prepare_constraint_tool();
         self.highlight_constraint(&snapshot, index);
         self.sketch_ui.dimension = Some(DimensionEdit {
             index: Some(index),
             kind: kind.into(),
             selection: vec![],
+            angle_rays: None,
             value,
+            native_input: None,
+            presentation_edited: false,
             expression: formula.is_some(),
             focus: true,
             submitting: false,
             constraint: Some(constraint.clone()),
             preview: None,
         });
+        if formula.is_none() {
+            self.sketch_ui.dimension.as_mut().unwrap().seed_quantity(&constraint["quantity"]);
+        }
         self.error = None;
     }
 
@@ -483,6 +679,11 @@ impl Editor {
         let Some(mut edit) = self.sketch_ui.dimension.take() else {
             return;
         };
+        if op == "transaction" && edit.submitting
+            || op.starts_with("preview") && edit.preview.is_some()
+        {
+            self.refresh_dimension_tool(success && matches!(op, "transaction" | "preview_commit"));
+        }
         if op == "transaction" && edit.submitting {
             if success {
                 return;
@@ -525,6 +726,16 @@ impl Editor {
             self.constraint_editable() && self.sketch_ui.dimension.is_none(),
             |ui| {
                 ui.menu_button("Constrain", |ui| {
+                    let pierce = self.pierce_edit();
+                    let response = ui.add_enabled(pierce.is_ok(), egui::Button::new("Pierce"));
+                    #[cfg(test)]
+                    record_pierce_widget(ui, "menu", &response);
+                    if response.clicked() {
+                        self.apply_pierce();
+                        ui.close();
+                    } else if let Err(error) = pierce {
+                        response.on_disabled_hover_text(error);
+                    }
                     for (label, kind) in [
                         ("Horizontal", "Horizontal"),
                         ("Vertical", "Vertical"),
@@ -552,7 +763,29 @@ impl Editor {
                         }
                     }
                 });
-                ui.menu_button("Dimension", |ui| {
+                let pierce = self.pierce_edit();
+                let response = ui.add_enabled(pierce.is_ok(), egui::Button::new("Pierce"));
+                #[cfg(test)]
+                record_pierce_widget(ui, "toolbar", &response);
+                if response.clicked() {
+                    self.apply_pierce();
+                } else if let Err(error) = pierce {
+                    response.on_disabled_hover_text(error);
+                }
+                if ui
+                    .selectable_label(self.sketch_ui.dimension_tool.is_some(), "Dimension (D)")
+                    .on_hover_text("Select entities and click to place their dimension")
+                    .clicked()
+                {
+                    if self.viewport.sketch_selection.is_empty()
+                        || self.sketch_ui.dimension_tool.is_some()
+                    {
+                        self.start_dimension_tool();
+                    } else {
+                        self.smart_dimension();
+                    }
+                }
+                ui.menu_button("Dimension types", |ui| {
                     if ui
                         .add_enabled(
                             !self.viewport.sketch_selection.is_empty(),
@@ -610,11 +843,53 @@ impl Editor {
             .cloned()
             .unwrap_or_default();
         let mut edits = Vec::new();
+        let mut name_submission_owner = None;
         egui::Window::new("Sketch")
             .id(egui::Id::new("native_sketch_controls"))
             .default_pos([175., 85.]).default_width(235.)
             .resizable(false).collapsible(true)
             .show(ctx, |ui| {
+                let name_id = egui::Id::new("native_sketch_name");
+                let accepted_name = snapshot["label"].as_str().unwrap_or_default();
+                let owner = json!({"document":self.state["document"],"revision":self.state["revision"],
+                    "sketch":snapshot["name"],"token":self.sketch_ui.session});
+                if !self.sketch_name_focused(ctx)
+                    && self.sketch_ui.name_owner.is_none()
+                    && self.sketch_ui.pending_name_finish.is_none()
+                {
+                    self.sketch_ui.name_text = accepted_name.into();
+                    self.sketch_ui.name_owner = None;
+                }
+                ui.horizontal(|ui| {
+                    ui.label("Sketch name");
+                    let response = ui.add_enabled(
+                        can_edit && !self.sketch_ui.name_input_blocked,
+                        egui::TextEdit::singleline(&mut self.sketch_ui.name_text)
+                            .id(name_id).desired_width(140.),
+                    );
+                    if response.gained_focus() {
+                        self.sketch_ui.name_owner = Some(owner.clone());
+                    }
+                    if response.lost_focus() {
+                        let enter = ui.input_mut(|input| input.consume_key(input.modifiers, egui::Key::Enter));
+                        let changed = self.sketch_ui.name_text != accepted_name;
+                        if changed && can_edit && !self.sketch_ui.name_input_blocked {
+                            if self.sketch_ui.name_owner.as_ref() != Some(&owner) {
+                                self.error = Some("The sketch changed; its name was not applied".into());
+                            } else if self.sketch_ui.name_text.trim().is_empty() {
+                                self.error = Some("Sketch name cannot be empty".into());
+                            } else {
+                                name_submission_owner = self.sketch_ui.name_owner.clone();
+                                edits.push(json!({"op":"set","object":snapshot["name"],
+                                    "property":"Label","value":self.sketch_ui.name_text.trim()}));
+                            }
+                        }
+                        self.sketch_ui.name_owner = None;
+                        if enter {
+                            response.surrender_focus();
+                        }
+                    }
+                });
                 let freedom = snapshot["sketch"]["degrees_of_freedom"].as_i64().unwrap_or(0);
                 ui.colored_label(if freedom == 0 { Color32::from_rgb(110, 182, 177) } else { ui.visuals().text_color() },
                     if freedom == 0 { "Fully constrained".into() } else { format!("{freedom} degrees of freedom") });
@@ -633,7 +908,7 @@ impl Editor {
                                 let name = constraint["name"].as_str().unwrap_or_default();
                                 let mut label = if name.is_empty() { format!("{}  {kind}", index + 1) } else { name.into() };
                                 if dimensional(kind) {
-                                    label.push_str(&format!("  {}", dimension_value(kind, constraint["value"].as_f64().unwrap_or(0.))));
+                                    label.push_str(&format!("  {}", quantity_text(constraint, "display")));
                                 }
                                 if constraint["driving"] == false && dimensional(kind) { label.push_str("  ref"); }
                                 if constraint["active"] == false { label.push_str("  off"); }
@@ -650,7 +925,8 @@ impl Editor {
                     ui.add_enabled_ui(can_edit, |ui| {
                         ui.horizontal(|ui| {
                             ui.label("Name");
-                            let response = ui.add(egui::TextEdit::singleline(&mut self.sketch_ui.constraint_name).desired_width(115.));
+                            let name_id = self.constraint_name_id(index);
+                            let response = ui.add(egui::TextEdit::singleline(&mut self.sketch_ui.constraint_name).id(name_id).desired_width(115.));
                             if ui.small_button("Rename").clicked() || response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
                                 edits.push(json!({"op":"constraint_state","object":snapshot["name"],"index":index,"name":self.sketch_ui.constraint_name.trim()}));
                             }
@@ -680,7 +956,18 @@ impl Editor {
                 }
             });
         if !edits.is_empty() {
-            self.transaction("Edit sketch constraint", edits);
+            let label = if edits
+                .iter()
+                .all(|edit| edit["op"] == "set" && edit["property"] == "Label")
+            {
+                "Rename sketch"
+            } else {
+                "Edit sketch constraint"
+            };
+            self.transaction(label, edits);
+            if !self.busy && name_submission_owner.is_some() {
+                self.sketch_ui.name_owner = name_submission_owner;
+            }
         }
         self.dimension_dialog(ctx, &snapshot);
     }
@@ -689,11 +976,12 @@ impl Editor {
         let Some(mut edit) = self.sketch_ui.dimension.take() else {
             return;
         };
-        let target_valid = edit.constraint.as_ref().is_none_or(|previous| {
-            edit.index
-                .and_then(|index| native_constraint(snapshot, index))
-                .is_some_and(|current| same_constraint(previous, current))
-        });
+        let target_valid = edit.index.is_none()
+            || edit.constraint.as_ref().is_none_or(|previous| {
+                edit.index
+                    .and_then(|index| native_constraint(snapshot, index))
+                    .is_some_and(|current| previous == current)
+            });
         if !target_valid && self.sketch_ui.selected_constraint == edit.index {
             self.sketch_ui.selected_constraint = None;
             self.sketch_ui.constraint_name.clear();
@@ -735,20 +1023,30 @@ impl Editor {
                         edit.focus = false;
                     }
                     let response = output.response;
+                    #[cfg(test)]
+                    {
+                        let frame = ui.ctx().cumulative_frame_nr();
+                        let clip = ui.clip_rect();
+                        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("convergence_dimension_response"),
+                            (response.clone(), clip, frame)));
+                    }
+                    edit.presentation_edited |= response.changed() || response.has_focus() && ui.ctx().input(|input|
+                        input.events.iter().any(|event| matches!(event,egui::Event::Text(_) | egui::Event::Paste(_) | egui::Event::Cut)));
                     if dimension_submitted(&response) {
                         apply = true;
                     }
                     if !reference && (edit.index.is_some() || edit.preview.is_some())
                         && ui.checkbox(&mut edit.expression, "Expression").changed()
-                        && !edit.expression
                     {
-                        let constraint = if let Some(index) = edit.index {
-                            native_constraint(snapshot,index)
-                        } else if edit.preview.as_ref().is_some_and(|p| !p.deferred) {
-                            snapshot["sketch"]["constraints"].as_array().and_then(|cs| cs.last())
-                        } else { None };
-                        edit.value = constraint.and_then(|c| c["value"].as_f64())
-                            .map(|value| dimension_input(&edit.kind,value)).unwrap_or_default();
+                        edit.presentation_edited = true;
+                        if !edit.expression {
+                            let constraint = if let Some(index) = edit.index {
+                                native_constraint(snapshot,index)
+                            } else if edit.preview.as_ref().is_some_and(|p| !p.deferred) {
+                                snapshot["sketch"]["constraints"].as_array().and_then(|cs| cs.last())
+                            } else { None };
+                            edit.seed_quantity(&constraint.map(|c| c["quantity"].clone()).unwrap_or(Value::Null));
+                        }
                     }
                     ui.weak(if reference {
                         "Native reference angle. Its value is measured from the solved curves."
@@ -761,7 +1059,7 @@ impl Editor {
                     } else if edit.preview.as_ref().is_some_and(|p| p.deferred) {
                         "Native preparation and measurement run on Apply while Redo is retained. Leave empty to use the measured angle."
                     } else {
-                        "mm or degrees by default. Other units are accepted."
+                        "Bare numbers use this field's native displayed unit. Explicit units are accepted."
                     });
                     ui.horizontal(|ui| {
                         apply |= ui
@@ -789,9 +1087,16 @@ impl Editor {
             return;
         }
         if apply && can_edit {
-            let value = edit.value.trim();
+            let default = edit
+                .constraint
+                .as_ref()
+                .and_then(|c| c["quantity"]["default_unit"].as_str())
+                .unwrap_or_else(|| dimension_unit(&self.state, &edit))
+                .to_owned();
+            let submitted = edit.submitted_text();
+            let value = submitted.as_str();
             if let Some(preview) = &mut edit.preview {
-                let datum = (!value.is_empty()).then(|| dimension_datum("Angle", value));
+                let datum = (!value.is_empty()).then(|| value.to_owned());
                 let edits = angle_via_point_edits(
                     &preview.baseline,
                     &edit.selection,
@@ -804,7 +1109,8 @@ impl Editor {
                     Some(!preview.reference),
                 );
                 match edits {
-                    Ok(edits) => {
+                    Ok(mut edits) => {
+                        dimension_context(&mut edits, &default);
                         preview.applying = true;
                         let token = preview.token.clone();
                         let deferred = preview.deferred;
@@ -839,20 +1145,18 @@ impl Editor {
                         &if edit.expression {
                             value.into()
                         } else {
-                            dimension_datum(&edit.kind, value)
+                            value.to_owned()
                         },
                         edit.expression,
                     )
+                } else if let Some(rays) = edit.angle_rays {
+                    constrain_angle_rays(snapshot, rays, Some(value))
                 } else {
-                    constrain(
-                        snapshot,
-                        &edit.kind,
-                        &edit.selection,
-                        Some(&dimension_datum(&edit.kind, value)),
-                    )
+                    constrain(snapshot, &edit.kind, &edit.selection, Some(value))
                 };
                 match edits {
-                    Ok(edits) => {
+                    Ok(mut edits) => {
+                        dimension_context(&mut edits, &default);
                         edit.submitting = true;
                         self.sketch_ui.dimension = Some(edit);
                         self.transaction("Set sketch dimension", edits);
@@ -885,7 +1189,10 @@ mod tests {
             index: None,
             kind: "Angle".into(),
             selection: vec![],
+            angle_rays: None,
             value: String::new(),
+            native_input: None,
+            presentation_edited: false,
             expression: false,
             focus: true,
             submitting: false,
@@ -906,7 +1213,7 @@ mod tests {
                 "preview",
                 true,
                 true,
-                Some(&json!({"value":std::f64::consts::FRAC_PI_4}))
+                Some(&json!({"value":std::f64::consts::FRAC_PI_4,"quantity":{"input":"45 deg"}}))
             ),
             None
         );
@@ -992,34 +1299,10 @@ mod tests {
     }
 
     #[test]
-    fn reads_native_expressions_and_formats_native_angles() {
-        let snapshot =
-            json!({"properties":{"ExpressionEngine":[["Constraints[2]","Constraints[1] * 2"]]}});
-        assert_eq!(
-            expression(&snapshot, 2).as_deref(),
-            Some("Constraints[1] * 2")
-        );
-        assert_eq!(expression(&snapshot, 1), None);
-        let named = json!({"properties":{"ExpressionEngine":[[".Constraints.Width","20 mm"]]},
-            "sketch":{"constraints":[{"index":2,"name":"Width"}]}});
-        assert_eq!(expression(&named, 2).as_deref(), Some("20 mm"));
-        assert_eq!(
-            dimension_value("Angle", std::f64::consts::FRAC_PI_4),
-            "45 deg"
-        );
-        assert_eq!(dimension_value("Distance", -2.5), "-2.5 mm");
-        assert_eq!(dimension_input("Distance", 12.345678901), "12.345678901 mm");
-        assert_eq!(dimension_datum("Distance", "12"), "12 mm");
-        assert_eq!(dimension_datum("Angle", "45"), "45 deg");
-        assert_eq!(dimension_datum("Distance", "0.5 in"), "0.5 in");
-        assert!(dimensional("SnellsLaw"));
-        assert_eq!(dimension_value("SnellsLaw", 1.5), "1.5");
-        assert_eq!(dimension_input("SnellsLaw", 1.23456789), "1.23456789");
-        assert_eq!(dimension_datum("SnellsLaw", " 1.25 "), "1.25");
-        assert!(dimensional("Weight"));
-        assert_eq!(dimension_value("Weight", 0.75), "0.75");
-        assert_eq!(dimension_input("Weight", 0.123456789), "0.123456789");
-        assert_eq!(dimension_datum("Weight", " 2.5 "), "2.5");
+    fn native_quantity_text_is_authoritative() {
+        let c = json!({"quantity":{"display":"1.00 in","input":"1 in"}});
+        assert_eq!(quantity_text(&c, "display"), "1.00 in");
+        assert_eq!(quantity_text(&c, "input"), "1 in");
     }
 
     #[test]

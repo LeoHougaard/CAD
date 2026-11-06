@@ -9,9 +9,102 @@ pub(super) struct DimensionHit {
     index: usize,
     label: Rect,
     segments: Vec<[Pos2; 2]>,
+    #[cfg(test)]
+    text: String,
 }
 
 impl Viewport {
+    fn construction_axes(&self, state: &Value, profile: &str) -> Vec<(Value, [Vec3; 2])> {
+        let objects = state["objects"].as_array().into_iter().flatten();
+        let body = objects
+            .clone()
+            .find(|o| o["name"] == profile)
+            .and_then(|o| o["body"].as_str());
+        let Some(body) = body else {
+            return Vec::new();
+        };
+        objects
+            .filter(|o| {
+                o["type"] == "Sketcher::SketchObject"
+                    && o["body"] == body
+                    && o["effective_visibility"] == true
+            })
+            .flat_map(|o| {
+                let (origin, rotation) = super::placement(&o["global_placement"]);
+                o["sketch"]["geometry"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(move |g| {
+                        if g["kind"] != "line" {
+                            return None;
+                        }
+                        let id = g["persistent_id"].as_i64()?;
+                        let owner = o["name"].as_str()?;
+                        let point = |v: &Value| -> Option<Vec3> {
+                            let xyz = [v[0].as_f64()?, v[1].as_f64()?, v[2].as_f64()?];
+                            if !xyz.iter().all(|x| x.is_finite()) {
+                                return None;
+                            }
+                            Some(
+                                origin
+                                    + rotation
+                                        * Vec3::new(xyz[0] as f32, xyz[1] as f32, xyz[2] as f32),
+                            )
+                        };
+                        Some((
+                            serde_json::json!({"master":owner,"master_id":o["native_id"],"geometry_id":id}),
+                            [point(&g["start"])?, point(&g["end"])?],
+                        ))
+                    })
+            })
+            .collect()
+    }
+
+    pub fn construction_axis_hit(
+        &self,
+        state: &Value,
+        profile: &str,
+        pos: Pos2,
+    ) -> Result<Option<Value>, String> {
+        let mut hits: Vec<_> = self
+            .construction_axes(state, profile)
+            .into_iter()
+            .filter_map(|(axis, line)| {
+                let a = self.project(line[0]).0;
+                let b = self.project(line[1]).0;
+                if a.distance_sq(b) < 1e-8 {
+                    return None;
+                }
+                let distance = segment_distance(pos, a, b).0;
+                (distance <= super::EDGE_PICK_RADIUS).then_some((distance, axis))
+            })
+            .collect();
+        hits.sort_by(|a, b| a.0.total_cmp(&b.0));
+        if hits.len() > 1 && hits[1].0 - hits[0].0 < 1. {
+            return Err("More than one visible construction line is under the pointer".into());
+        }
+        Ok(hits.into_iter().next().map(|(_, axis)| axis))
+    }
+
+    pub fn draw_construction_axes(&self, painter: &egui::Painter, state: &Value, profile: &str) {
+        let stroke = Stroke::new(1.5_f32, Color32::from_rgb(85, 175, 235));
+        for (_, line) in self.construction_axes(state, profile) {
+            let a = self.project(line[0]).0;
+            let b = self.project(line[1]).0;
+            let length = a.distance(b);
+            if length < 1e-4 {
+                continue;
+            }
+            let count = (length / 12.).ceil().clamp(1., 2000.) as usize;
+            for i in 0..count {
+                let start = i as f32 / count as f32;
+                let end = ((i as f32 + 0.55) / count as f32).min(1.);
+                painter.line_segment([a.lerp(b, start), a.lerp(b, end)], stroke);
+            }
+        }
+    }
+
     pub fn clear_sketch_selection(&mut self) {
         self.sketch_selection.clear();
         self.sketch_pick_positions.clear();
@@ -109,6 +202,20 @@ impl Viewport {
             .collect()
     }
 
+    /// Test the displayed native axes independently of endpoint/curve priority.
+    /// Axis-picking UI needs to report overlap even when normal sketch selection
+    /// correctly gives a nearby editable handle priority.
+    pub fn sketch_axis_hit(&self, pos: Pos2) -> Option<SketchElement> {
+        self.axis_segments()
+            .into_iter()
+            .filter_map(|(element, [a, b])| {
+                let distance = segment_distance(pos, a, b).0;
+                (distance <= super::EDGE_PICK_RADIUS).then_some((distance, element))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, element)| element)
+    }
+
     /// Only native handles explicitly verified for movement are drag targets.
     pub fn sketch_draggable(&self, element: SketchElement) -> bool {
         if element.index < 0 {
@@ -126,14 +233,14 @@ impl Viewport {
             .any(|handle| handle.id == element && handle.draggable)
     }
 
-    /// Native point identifiers have priority over whole edges within a seven-point handle radius.
+    /// Native point identifiers have priority over whole edges within the shared point-picking radius.
     pub fn sketch_hit(&self, pos: Pos2) -> Option<SketchElement> {
         self.sketch.as_ref()?;
         let mut best: Option<(f32, SketchElement)> = None;
         for curve in &self.curves {
             for (id, world) in &curve.handles {
                 let distance = self.project(*world).0.distance(pos);
-                if distance <= 7. && best.as_ref().is_none_or(|(d, _)| distance < *d) {
+                if distance <= super::POINT_PICK_RADIUS && best.as_ref().is_none_or(|(d, _)| distance < *d) {
                     best = Some((distance, *id));
                 }
             }
@@ -146,7 +253,7 @@ impl Viewport {
                     .is_some_and(|point| point.iter().all(|value| value.abs() < 1e-9))
             });
         if origin_ring
-            || (origin_distance <= 7. && best.as_ref().is_none_or(|(d, _)| origin_distance < *d))
+            || (origin_distance <= super::POINT_PICK_RADIUS && best.as_ref().is_none_or(|(d, _)| origin_distance < *d))
         {
             best = Some((
                 origin_distance,
@@ -169,7 +276,7 @@ impl Viewport {
                         segment_distance(pos, self.project(line[0]).0, self.project(line[1]).0).0
                     })
                     .min_by(f32::total_cmp)?;
-                (distance <= 6.).then_some((
+                (distance <= super::EDGE_PICK_RADIUS).then_some((
                     distance,
                     SketchElement {
                         index: curve.native.index,
@@ -184,7 +291,7 @@ impl Viewport {
                     .into_iter()
                     .filter_map(|(element, [a, b])| {
                         let distance = segment_distance(pos, a, b).0;
-                        (distance <= 5.).then_some((distance, element))
+                        (distance <= super::EDGE_PICK_RADIUS).then_some((distance, element))
                     })
                     .min_by(|a, b| a.0.total_cmp(&b.0))
                     .map(|(_, element)| element)
@@ -225,6 +332,16 @@ impl Viewport {
             .collect()
     }
 
+    #[cfg(test)]
+    pub fn test_dimension_label(&self, index: usize) -> Option<(Rect, String)> {
+        let mut labels = self.dimension_hits.iter().filter(|hit| hit.index == index);
+        let hit = labels.next()?;
+        if labels.next().is_some() {
+            return None;
+        }
+        Some((hit.label, hit.text.clone()))
+    }
+
     pub fn dimension_hit(&self, pos: Pos2) -> Option<usize> {
         self.dimension_hits
             .iter()
@@ -245,7 +362,7 @@ impl Viewport {
                             .iter()
                             .map(|[a, b]| segment_distance(pos, *a, *b).0)
                             .min_by(f32::total_cmp)?;
-                        (distance <= 5.).then_some((distance, hit.index))
+                        (distance <= super::EDGE_PICK_RADIUS).then_some((distance, hit.index))
                     })
                     .min_by(|a, b| a.0.total_cmp(&b.0))
                     .map(|(_, index)| index)
@@ -327,10 +444,31 @@ impl Viewport {
             .retain(|element, _| self.sketch_selection.contains(element));
     }
 
+    /// Projected editing-guide corners in the actual native sketch frame.
+    /// This display has no selectable subelements or native plane-size claim.
+    pub fn sketch_plane_corners(&self) -> Option<[Pos2; 4]> {
+        self.sketch.as_ref()?;
+        if !self.sketch_editing || !self.planes_visible { return None; }
+        let size = self.sketch_frame_size?;
+        let half = size * 0.5;
+        let corners = [Vec3::new(-half.x, -half.y, 0.), Vec3::new(half.x, -half.y, 0.),
+                       Vec3::new(half.x, half.y, 0.), Vec3::new(-half.x, half.y, 0.)]
+            .map(|p| self.project(self.sketch_origin + self.sketch_rotation * p).0);
+        corners.iter().all(|p| p.is_finite()).then_some(corners)
+    }
+
+    fn draw_sketch_plane(&self, painter: &egui::Painter) {
+        let Some(corners) = self.sketch_plane_corners() else { return; };
+        let mut outline = corners.to_vec();
+        outline.push(corners[0]);
+        painter.add(Shape::line(outline, Stroke::new(1_f32, Color32::from_rgb(75, 103, 121))));
+    }
+
     pub(super) fn draw_sketch(&self, painter: &egui::Painter) {
         let Some(sketch) = &self.sketch else {
             return;
         };
+        self.draw_sketch_plane(painter);
         let constrained = sketch["sketch"]["degrees_of_freedom"].as_i64() == Some(0);
         let selected_color = Color32::from_rgb(236, 204, 96);
         for (element, segment) in self.axis_segments() {
@@ -570,9 +708,13 @@ impl Viewport {
                     position,
                     (position - origin).normalized(),
                     if kind == "Angle" {
-                        format!("{:.1}\u{00b0}", value.to_degrees())
+                        crate::document_units::dimension_display(&constraint["quantity"])
+                            .unwrap_or("Angle")
+                            .to_owned()
                     } else {
-                        format!("?{value:.2} mm")
+                        crate::document_units::dimension_display(&constraint["quantity"])
+                            .unwrap_or("Distance")
+                            .to_owned()
                     },
                 ));
             } else if matches!(kind, "Distance" | "DistanceX" | "DistanceY") {
@@ -678,7 +820,9 @@ impl Viewport {
                         label = Some((
                             dimension_a.lerp(dimension_b, 0.5),
                             normal,
-                            format!("{value:.2} mm"),
+                            crate::document_units::dimension_display(&constraint["quantity"])
+                                .unwrap_or("Distance")
+                                .to_owned(),
                         ));
                     }
                 }
@@ -711,8 +855,10 @@ impl Viewport {
                             leader + direction * 28.,
                             direction,
                             format!(
-                                "{}{value:.2} mm",
-                                if kind == "Diameter" { "\u{2300}" } else { "R" }
+                                "{}{}",
+                                if kind == "Diameter" { "\u{2300}" } else { "R" },
+                                crate::document_units::dimension_display(&constraint["quantity"])
+                                    .unwrap_or("Radius")
                             ),
                         ));
                     }
@@ -777,7 +923,8 @@ impl Viewport {
                             } else {
                                 a
                             };
-                            (vertex, u.y.atan2(u.x))
+                            let ray = if first_point == 2 { -u } else { u };
+                            (vertex, ray.y.atan2(ray.x))
                         } else {
                             (inverse * (a - self.sketch_origin), 0.)
                         }
@@ -829,7 +976,9 @@ impl Viewport {
                         label = Some((
                             position,
                             (position - center).normalized(),
-                            format!("{:.1}\u{00b0}", value.to_degrees()),
+                            crate::document_units::dimension_display(&constraint["quantity"])
+                                .unwrap_or("Angle")
+                                .to_owned(),
                         ));
                     }
                 }
@@ -841,6 +990,8 @@ impl Viewport {
                 for segment in &segments {
                     painter.line_segment(*segment, stroke);
                 }
+                #[cfg(test)]
+                let rendered_text = text.clone();
                 let label = dimension_label(painter, position, normal, text, color, &mut occupied);
                 if label.center().distance(position) > 2. {
                     segments.push([position, label.center()]);
@@ -849,6 +1000,8 @@ impl Viewport {
                     index,
                     label,
                     segments,
+                    #[cfg(test)]
+                    text: rendered_text,
                 });
             }
         }
@@ -918,6 +1071,100 @@ fn dimension_label(
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn active_sketch_frame_uses_native_placement_and_declared_display_size() {
+        let mut viewport = Viewport::default();
+        let state = json!({"revision":1,"units":{"sketch_frame":{"size_mm":[152.4,152.4],"purpose":"editing-guide"}},"objects":[]});
+        let before = state.clone();
+        viewport.set_references(&state);
+        viewport.set_sketch(Some(json!({"name":"Sketch",
+            "global_placement":{"position":[12,23,34],"rotation":[0,0,0,1]},
+            "sketch":{"geometry":[],"axes":[]}})));
+        viewport.set_sketch_editing(true);
+        let corners = viewport.sketch_plane_corners().unwrap();
+        for (actual, local) in corners.into_iter().zip([
+            [-76.2, -76.2, 0.], [76.2, -76.2, 0.],
+            [76.2, 76.2, 0.], [-76.2, 76.2, 0.],
+        ]) {
+            assert!(actual.distance(viewport.sketch_screen_point(local)) < 0.001);
+        }
+        assert_eq!(viewport.sketch_origin, Vec3::new(12.,23.,34.));
+        assert!(viewport.references.is_empty());
+        assert_eq!(state, before);
+    }
+
+    #[test]
+    fn active_sketch_frame_obeys_plane_toggle_and_drops_missing_metadata() {
+        let mut viewport = Viewport::default();
+        let state = json!({"revision":1,"units":{"sketch_frame":{"size_mm":[100,100],"purpose":"editing-guide"}},"objects":[]});
+        viewport.set_references(&state);
+        assert!(viewport.sketch_plane_corners().is_none());
+        viewport.set_sketch(Some(json!({"name":"Sketch","sketch":{"geometry":[]}})));
+        viewport.set_sketch_editing(true);
+        assert!(viewport.sketch_plane_corners().is_some());
+        viewport.toggle_planes(&state);
+        assert!(viewport.sketch_plane_corners().is_none());
+        viewport.toggle_planes(&state);
+        assert!(viewport.sketch_plane_corners().is_some());
+        viewport.set_references(&json!({"revision":2,"objects":[]}));
+        assert!(viewport.sketch_plane_corners().is_none());
+    }
+
+    #[test]
+    fn active_sketch_frame_paints_outline_without_adding_native_pick_targets() {
+        let mut viewport = Viewport { scale:1., ..Viewport::default() };
+        viewport.set_references(&json!({"revision":1,"units":{"sketch_frame":{"size_mm":[100,100],"purpose":"editing-guide"}},"objects":[]}));
+        viewport.set_sketch(Some(json!({"name":"Sketch","sketch":{"geometry":[],"axes":[]}})));
+        viewport.set_sketch_editing(true);
+        let corners = viewport.sketch_plane_corners().unwrap();
+        let ctx = egui::Context::default();
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            viewport.draw_sketch(&ctx.layer_painter(egui::LayerId::background()));
+        });
+        assert!(output.shapes.iter().any(|s| match &s.shape {
+            Shape::Path(path) => path.points.len()==5 && path.points[0]==corners[0]
+                && path.points[4]==corners[0],
+            _=>false,
+        }));
+        assert!(viewport.references.is_empty() && viewport.curves.is_empty());
+        viewport.set_sketch(None);
+        assert!(viewport.sketch_plane_corners().is_none());
+    }
+
+    #[test]
+    fn construction_axis_pick_uses_visible_same_body_sketch_and_world_placement() {
+        let v = Viewport {
+            rect: Rect::from_min_size(Pos2::ZERO, egui::vec2(400., 400.)),
+            ..Viewport::default()
+        };
+        let state = json!({"objects":[
+            {"name":"Profile","type":"Sketcher::SketchObject","body":"Body"},
+            {"name":"Master","type":"Sketcher::SketchObject","body":"Body","effective_visibility":true,
+             "global_placement":{"position":[20,0,0],"rotation":[0,0,0,1]},
+             "sketch":{"geometry":[{"index":7,"persistent_id":83,"kind":"line","construction":true,
+                 "start":[0,0,0],"end":[0,10,0]}]}},
+            {"name":"Hidden","type":"Sketcher::SketchObject","body":"Body","effective_visibility":false,
+             "sketch":{"geometry":[{"persistent_id":1,"kind":"line","construction":true,"start":[0,0,0],"end":[0,10,0]}]}},
+            {"name":"OtherBody","type":"Sketcher::SketchObject","body":"Elsewhere","effective_visibility":true,
+             "sketch":{"geometry":[{"persistent_id":2,"kind":"line","construction":true,"start":[0,0,0],"end":[0,10,0]}]}}
+        ]});
+        let hit = v
+            .construction_axis_hit(&state, "Profile", v.project(Vec3::new(20., 5., 0.)).0)
+            .unwrap();
+        assert_eq!(hit, Some(json!({"master":"Master","master_id":null,"geometry_id":83})));
+        assert_eq!(v.construction_axes(&state, "Profile").len(), 1);
+        let mut overlapping = state.clone();
+        let mut duplicate = overlapping["objects"][1].clone();
+        duplicate["name"] = json!("Duplicate");
+        overlapping["objects"]
+            .as_array_mut()
+            .unwrap()
+            .push(duplicate);
+        assert!(
+            v.construction_axis_hit(&overlapping, "Profile", v.project(Vec3::new(20., 5., 0.)).0)
+                .is_err()
+        );
+    }
     fn snapshot() -> Value {
         json!({"name":"Sketch","sketch":{"degrees_of_freedom":4,"geometry":[
             {"index":0,"kind":"line","start":[10,10,0],"end":[30,10,0]},
@@ -929,6 +1176,48 @@ mod tests {
         viewport.align_sketch();
         viewport
     }
+    #[test]
+    fn native_angle_annotation_starts_on_persisted_endpoint_ray() {
+        for (first_pos, right) in [(1, false), (2, true)] {
+            let mut viewport = viewport();
+            let sketch = json!({"name":"Sketch","sketch":{"geometry":[
+                {"index":0,"kind":"line","start":[0,0,0],"end":[-10,0,0]},
+                {"index":1,"kind":"line","start":[0,0,0],"end":[10,10,0]}],
+                "constraints":[{"index":0,"type":"Angle","first":0,"first_pos":first_pos,"second":1,"second_pos":1,"value":std::f64::consts::FRAC_PI_4,"quantity":{"display":"45 deg"}}]}});
+            viewport.set_sketch(Some(sketch));
+            viewport.align_sketch();
+            let ctx = egui::Context::default();
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default()
+                    .show(ctx, |ui| viewport.draw_dimensions(ui.painter()));
+            });
+            let hit = &viewport.dimension_hits[0];
+            let center = viewport.sketch_screen_point([0., 0., 0.]);
+            assert_eq!(hit.segments[0][0].x > center.x, right);
+            assert_eq!(viewport.dimension_hit(hit.label.center()), Some(0));
+        }
+    }
+
+    #[test]
+    fn native_axis_overlap_is_detected_under_origin_endpoints_and_curves() {
+        let mut viewport = viewport();
+        let sketch = json!({"name":"Profile","sketch":{
+            "geometry":[{"index":0,"kind":"line","start":[0,0,0],"end":[0,40,0]}],
+            "axes":[{"index":-1,"kind":"line","start":[0,0,0],"end":[1,0,0]},
+                    {"index":-2,"kind":"line","start":[0,0,0],"end":[0,1,0]}],
+            "constraints":[]}});
+        viewport.set_sketch(Some(sketch));
+        viewport.align_sketch();
+        for point in [[0., 0., 0.], [0., 40., 0.], [0., 20., 0.]] {
+            let pos = viewport.sketch_screen_point(point);
+            let ordinary = viewport.sketch_hit(pos).unwrap();
+            assert!(ordinary.point != 0 || ordinary.index >= 0);
+            let axis = viewport.sketch_axis_hit(pos).unwrap();
+            assert_eq!(axis.point, 0);
+            assert!(matches!(axis.index, -1 | -2));
+        }
+    }
+
     #[test]
     fn native_axes_are_whole_curve_fallback_picks_without_endpoint_handles() {
         let mut viewport = viewport();
@@ -1262,6 +1551,47 @@ mod tests {
         assert_eq!(viewport.sketch_selection, vec![point]);
         let label = viewport.dimension_hits[0].label.center();
         assert_eq!(viewport.dimension_hit(label), Some(7));
+    }
+    #[test]
+    fn rendered_native_diameter_label_tracks_text_and_constraint_identity() {
+        for (display, value, driving) in [("13.50 mm", 13.5, true), ("7.25 mm", 7.25, false)] {
+            let mut viewport = viewport();
+            let sketch = json!({"name":"Sketch","sketch":{
+                "geometry":[{"index":0,"kind":"circle","center":[0,0,0],"radius":value/2.}],
+                "constraints":[{"index":12,"type":"Diameter","first":0,"first_pos":0,
+                    "value":value,"driving":driving,"quantity":{"display":display}}]}});
+            viewport.set_sketch(Some(sketch));
+            let ctx = egui::Context::default();
+            let frame = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default()
+                    .show(ctx, |ui| viewport.draw_dimensions(ui.painter()));
+            });
+            let (label, text) = viewport.test_dimension_label(12).expect("one native label");
+            let expected = format!("\u{2300}{display}{}", if driving { "" } else { " ref" });
+            assert_eq!(text, expected);
+            assert_eq!(viewport.dimension_hit(label.center()), Some(12));
+            assert!(viewport.test_dimension_label(13).is_none());
+            let found: Vec<_> = frame
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::epaint::Shape::Text(text) => {
+                        let rect = text.galley.rect.translate(text.pos.to_vec2());
+                        (text.galley.text() == expected
+                            && label.contains(rect.min)
+                            && label.contains(rect.max)
+                            && shape.clip_rect.contains(rect.center()))
+                        .then_some(rect)
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                found.len(),
+                1,
+                "actual rendered text and native label must agree"
+            );
+        }
     }
     #[test]
     fn drawn_dimension_label_and_line_return_native_constraint_index() {

@@ -1,0 +1,122 @@
+{
+  "fixed_source_ui_cases": [
+    "editor::sketch::lifecycle_tests::receiver_input_tests::receiver_document_menu_can_reopen_above_workspace_units",
+    "editor::sketch::lifecycle_tests::receiver_input_tests::receiver_s_opens_sketch_shortcut_menu_from_empty_studio"
+  ],
+  "observations": [
+    {
+      "version": 2,
+      "passed": 0,
+      "denominator": 2
+    },
+    {
+      "version": 3,
+      "passed": 1,
+      "denominator": 2
+    },
+    {
+      "version": 8,
+      "passed": 2,
+      "denominator": 2
+    },
+    {
+      "version": 10,
+      "passed": 2,
+      "denominator": 2
+    },
+    {
+      "version": 14,
+      "passed": 2,
+      "denominator": 2
+    }
+  ],
+  "full_tutorial_credit": 0,
+  "requested_tutorial_target": 100,
+  "qualified_100_tutorial_execution_cohort": false,
+  "completion_limit_extrapolation": null,
+  "source_file_hashes": {
+    "native2/result.json": "4fbb0ae4a1d8b3a1505b40fb6fd8952054b3d0122bf6cc3a281a27573d055b91",
+    "native3/result.json": "f9614097f6be290bc0f01f242d7ec88891a4eb8b2abd00c86431086f6b650195",
+    "controls8b/native1/result.json": "3ed026a50c345db2574c99ad39dc4fc4c2091b5b7b4c7a063bbf36ad84c07f63",
+    "controls10/native1/result.json": "980088ba4c8720d9051a98a88f682a76b146de1e11165871bcc558185d2d111e",
+    "receiver-progress.html": "6f305a153c2f5451c091e709d91f54b710e21a24229060fa3eb482490484e77e",
+    "controls14/native1/result.json": "c90e2cca9664b46bf4d3c93d319a938d24a39628f1bc032381940610b7e9d2ad",
+    "receiver-progress-v2.html": "3bd8b14a6a4047b2b369b4c3205b3739f45e5261885ffe8a1118d821f1fe596e"
+  },
+  "current_combined_regressions": {
+    "tree": "source14",
+    "passed": 25,
+    "failed": 0,
+    "tutorial_credit": 0,
+    "not_combined_with_fixed_two_case_percentage": true
+  },
+  "provenance_scope": "source_file_hashes name retained private evidence packet artifacts, not paths relative to this published JSON",
+  "published_rendered_html_sha256": "3bd8b14a6a4047b2b369b4c3205b3739f45e5261885ffe8a1118d821f1fe596e",
+  "receiver_168_record_cohort": {
+    "cohort": "Same 168-record source continuation through Up-to-vertex Apply",
+    "observations": [
+      {
+        "label": "Face support",
+        "records_reached": 163,
+        "records": 168,
+        "overall_passed": false,
+        "exit_code": 101,
+        "result": ".tools\\cad-receiver-plane-slot-compose-20261030-r1\\continuation\\native-batch11\\continuous\\result.json",
+        "result_sha256": "07fc12ff37908c7f503a02a9a1ed76952d25d5300609079ac82d62d013ac6afb"
+      },
+      {
+        "label": "Vertex eligibility",
+        "records_reached": 166,
+        "records": 168,
+        "overall_passed": false,
+        "exit_code": 101,
+        "result": ".tools\\cad-receiver-plane-slot-compose-20261030-r1\\continuation\\native-batch12\\continuous\\result.json",
+        "result_sha256": "08528a240601232ea041ee05c9912278863225be5fa5d14d71a4d5bcc5834352"
+      },
+      {
+        "label": "Pre-click guard",
+        "records_reached": 166,
+        "records": 168,
+        "overall_passed": false,
+        "exit_code": 101,
+        "result": ".tools\\cad-receiver-plane-slot-compose-20261030-r1\\continuation\\native-replay15\\continuous\\result.json",
+        "result_sha256": "03fc74a36253885018ae128973e8536565dae1e13be834d04f0ba0bf3bfb6da3"
+      },
+      {
+        "label": "Matched guard",
+        "records_reached": 168,
+        "records": 168,
+        "overall_passed": true,
+        "exit_code": 0,
+        "result": ".tools\\cad-receiver-plane-slot-compose-20261030-r1\\continuation\\native-replay16\\continuous\\result.json",
+        "result_sha256": "78e917b77bf6f58f84fea8420d4f036a1fe9c61387b938905223a057d7385501"
+      },
+      {
+        "label": "CI composition",
+        "records_reached": 168,
+        "records": 168,
+        "overall_passed": true,
+        "exit_code": 0,
+        "result_sha256": "2399cdaa0cca06b12d4fb7ef3fdc71f55f0141b24ca5a356c343e274846cd8d8"
+      }
+    ],
+    "complete_tutorials_verified": 0,
+    "complete_tutorial_goal": 100,
+    "inferred_navigation": true,
+    "extrapolated_limit": null,
+    "why_no_extrapolation": "One partial tutorial cannot estimate the limit over100 distinct tutorials.",
+    "source_seconds": 841.367,
+    "expected_shape_native_authority": {
+      "status": "bounded passed",
+      "scope": "actual identity-root model, preview/commit",
+      "seal_sha256": "205f88bd16cc2465509649467c09e5a9a7646f05b03906346dcec7ec9aad03b9",
+      "raw_float_identity_claim": false
+    }
+  },
+  "ci_repair_parent": {
+    "commit": "61cce34e4c3e984a5883d5746a9aa73845d609c6",
+    "ordinary": "Windows/Linux passed",
+    "native": "Windows/Linux passed",
+    "new_checkpoint_remote_ci": "pending"
+  }
+}

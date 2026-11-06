@@ -1,7 +1,9 @@
 //! Interaction state only: every accepted geometry change is solved natively.
+mod inline_line;
 use super::{Editor, constraints::DimensionEdit};
-use crate::sketch_commands::{SketchElement, Tool, draw_snapped_edits};
+use crate::sketch_commands::{SketchElement, Tool, draw_snapped_edits, native_point_on_axis};
 use eframe::egui::{self, Color32, Key};
+use inline_line::InlineLine;
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 
@@ -9,10 +11,17 @@ pub(super) struct SketchUi {
     pub(super) tool: Tool,
     points: Vec<[f64; 3]>,
     snaps: Vec<Option<SketchElement>>,
+    scene_snaps: Vec<Option<SceneSnap>>,
     pub(super) construction: bool,
     pub(super) dimension: Option<DimensionEdit>,
+    mirror_selection_owner: Option<Value>,
+    pub(super) dimension_tool: Option<DimensionTool>,
     pub(super) selected_constraint: Option<usize>,
     pub(super) constraint_name: String,
+    pub(super) name_text: String,
+    pub(super) name_owner: Option<Value>,
+    pub(super) pending_name_finish: Option<Value>,
+    pub(super) name_input_blocked: bool,
     pub(super) session: Option<String>,
     pub(super) drag: Option<Drag>,
     pub(super) trim: bool,
@@ -27,6 +36,10 @@ pub(super) struct SketchUi {
     cleanup: bool,
     after_finish: Option<String>,
     continuation: Option<usize>,
+    inline_line: Option<InlineLine>,
+    rectangle_feedback: Option<RectangleFeedback>,
+    polygon_owner: Option<Value>,
+    polygon_count_pointer: Option<(f32, u32)>,
     box_start: Option<egui::Pos2>,
     pub(super) branch_pending: bool,
 }
@@ -36,10 +49,17 @@ impl Default for SketchUi {
             tool: Tool::Select,
             points: vec![],
             snaps: vec![],
+            scene_snaps: vec![],
             construction: false,
             dimension: None,
+            mirror_selection_owner: None,
+            dimension_tool: None,
             selected_constraint: None,
             constraint_name: String::new(),
+            name_text: String::new(),
+            name_owner: None,
+            pending_name_finish: None,
+            name_input_blocked: false,
             session: None,
             drag: None,
             trim: false,
@@ -54,6 +74,10 @@ impl Default for SketchUi {
             cleanup: false,
             after_finish: None,
             continuation: None,
+            inline_line: None,
+            rectangle_feedback: None,
+            polygon_owner: None,
+            polygon_count_pointer: None,
             box_start: None,
             branch_pending: false,
         }
@@ -61,6 +85,9 @@ impl Default for SketchUi {
 }
 impl SketchUi {
     pub(super) fn hint(&self) -> Option<&'static str> {
+        if self.dimension_tool.is_some() {
+            return Some("Select entities, then click to place the dimension; Esc ends Dimension");
+        }
         if self.split {
             return Some("Pick a curve to split; Esc ends splitting");
         }
@@ -68,6 +95,16 @@ impl SketchUi {
             return Some("Select an edge or vertex to project; Esc ends projection");
         }
         Some(match self.tool {
+            Tool::RegularPolygon { .. } => if self.points.is_empty() {
+                "Polygon center; P selects polygon"
+            } else if self.points.len() == 1 {
+                "Click radius and orientation; +/- changes sides"
+            } else { "Move inward/outward to change sides; click to finish; +/- or Curves for count" },
+            Tool::Arc => [
+                "Arc start endpoint",
+                "Arc end endpoint",
+                "Arc through point",
+            ][self.points.len().min(2)],
             Tool::Ellipse => [
                 "Ellipse center",
                 "Major axis endpoint",
@@ -90,10 +127,37 @@ impl SketchUi {
         })
     }
     pub(super) fn clear_points(&mut self) {
+        self.rectangle_feedback = None;
+        self.polygon_owner = None;
+        self.polygon_count_pointer = None;
+        self.dimension_tool = None;
         self.points.clear();
         self.snaps.clear();
+        self.scene_snaps.clear();
         self.continuation = None;
+        self.inline_line = None;
     }
+}
+struct RectangleFeedback {
+    tool: Tool,
+    points: [[f64; 3]; 2],
+    pending: bool,
+}
+#[derive(Clone)]
+struct SceneSnap {
+    document: Value,
+    revision: Value,
+    sketch: String,
+    session: String,
+    source: String,
+    subelement: String,
+    mapped_name: String,
+    point: [f64; 3],
+}
+pub(super) struct DimensionTool {
+    document: Value,
+    revision: Value,
+    sketch: String,
 }
 pub(super) struct Drag {
     element: SketchElement,
@@ -140,6 +204,107 @@ fn external_indices(snapshot: &Value, selection: &[SketchElement], deleting: boo
 }
 
 impl Editor {
+    fn mirror_selection_binding(&self) -> Option<Value> {
+        let snapshot = self.sketch_snapshot()?;
+        let doc = self.state["document"].as_str()?;
+        let revision = self.state["revision"].as_u64()?;
+        let session = self.sketch_ui.session.as_deref()?;
+        let selection = &self.viewport.sketch_selection;
+        if selection.is_empty() {
+            return None;
+        }
+        let geometry = snapshot["sketch"]["geometry"].as_array()?;
+        let ids: Option<Vec<Value>> = selection
+            .iter()
+            .map(|e| {
+                if e.index < 0 {
+                    return None;
+                }
+                let g = geometry
+                    .iter()
+                    .find(|g| g["index"].as_i64() == Some(e.index as i64))?;
+                if e.point != 0 && !(e.point == 1 && g["kind"] == "point") {
+                    return None;
+                }
+                let id = g.get("persistent_id")?;
+                (!id.is_null()).then(|| id.clone())
+            })
+            .collect();
+        Some(json!({"document":doc,"revision":revision,"session":session,
+            "sketch":snapshot["name"],"selection":selection,"geometry_ids":ids?}))
+    }
+    pub(super) fn bind_mirror_selection(&mut self) {
+        self.sketch_ui.mirror_selection_owner = self.mirror_selection_binding();
+    }
+    pub(super) fn mirror_selection_owned(&self) -> bool {
+        self.sketch_ui
+            .mirror_selection_owner
+            .as_ref()
+            .is_some_and(|owner| self.mirror_selection_binding().as_ref() == Some(owner))
+    }
+    pub(super) fn sketch_name_focused(&self, ctx: &egui::Context) -> bool {
+        ctx.memory(|memory| memory.has_focus(egui::Id::new("native_sketch_name")))
+    }
+
+    pub(super) fn cancel_sketch_name(&mut self, ctx: &egui::Context) -> bool {
+        let id = egui::Id::new("native_sketch_name");
+        let owned_focus =
+            ctx.memory(|memory| memory.has_focus(id) || memory.had_focus_last_frame(id));
+        if self.sketch_ui.session.is_none() || self.sketch_ui.name_owner.is_none() || !owned_focus {
+            return false;
+        }
+        self.sketch_ui.name_text = self
+            .sketch_snapshot()
+            .and_then(|snapshot| snapshot["label"].as_str().map(str::to_owned))
+            .unwrap_or_default();
+        self.sketch_ui.name_owner = None;
+        ctx.memory_mut(|memory| memory.surrender_focus(egui::Id::new("native_sketch_name")));
+        true
+    }
+
+    pub(super) fn start_dimension_tool(&mut self) {
+        if self.busy
+            || self.sketch_ui.session.is_none()
+            || self.sketch_ui.drag.is_some()
+            || self.sketch_ui.task.is_some()
+            || self.sketch_ui.dimension.is_some()
+            || self.draft.is_some()
+        {
+            return;
+        }
+        let was_active = self.sketch_ui.dimension_tool.is_some();
+        self.sketch_ui.clear_points();
+        self.sketch_ui.tool = Tool::Select;
+        self.sketch_ui.trim = false;
+        self.sketch_ui.external = false;
+        self.sketch_ui.split = false;
+        self.sketch_ui.selected_constraint = None;
+        self.viewport.clear_sketch_selection();
+        if !was_active && let Some(sketch) = self.sketch.clone() {
+            self.sketch_ui.dimension_tool = Some(DimensionTool {
+                document: self.state["document"].clone(),
+                revision: self.state["revision"].clone(),
+                sketch,
+            });
+        }
+        self.error = None;
+    }
+
+    pub(super) fn refresh_dimension_tool(&mut self, clear_selection: bool) {
+        if let Some(owner) = &mut self.sketch_ui.dimension_tool {
+            if owner.document == self.state["document"]
+                && self.sketch.as_deref() == Some(owner.sketch.as_str())
+            {
+                owner.revision = self.state["revision"].clone();
+            } else {
+                self.sketch_ui.dimension_tool = None;
+            }
+            if clear_selection {
+                self.viewport.clear_sketch_selection();
+            }
+        }
+    }
+
     pub(super) fn prepare_new_sketch(&mut self) {
         self.sketch_ui = SketchUi {
             pending_begin: true,
@@ -176,6 +341,15 @@ impl Editor {
         self.begin_sketch();
     }
     pub(super) fn sketch_reply(&mut self, op: &str, success: bool) {
+        if matches!(op, "transaction" | "undo" | "redo") {
+            match &mut self.sketch_ui.rectangle_feedback {
+                Some(feedback) if op == "transaction" && success && feedback.pending => {
+                    feedback.pending = false;
+                }
+                _ => self.sketch_ui.rectangle_feedback = None,
+            }
+        }
+        self.inline_line_reply(op, success);
         self.dimension_reply(op, success);
         if op == "preview_commit" && success && self.sketch_ui.task.is_some() {
             self.sketch_ui.branch_pending = false;
@@ -193,7 +367,7 @@ impl Editor {
         if op == "sketch_begin" {
             if success {
                 self.viewport.align_sketch();
-                self.viewport.fit();
+                self.viewport.fit_sketch();
             } else {
                 self.sketch_ui.session = None;
                 self.sketch = None;
@@ -210,6 +384,8 @@ impl Editor {
                 if let Some(point) = self.viewport.geometry_point(element) {
                     self.sketch_ui.points = vec![point];
                     self.sketch_ui.snaps = vec![Some(element)];
+                    self.sketch_ui.scene_snaps = vec![None];
+                    self.inline_line_begin(index);
                 }
             }
         }
@@ -235,16 +411,41 @@ impl Editor {
         if op == "transaction" && self.sketch_ui.drag.as_ref().is_some_and(|d| d.released) {
             self.sketch_ui.drag = None;
         }
+        if op == "transaction"
+            && let Some(owner) = self.sketch_ui.pending_name_finish.take()
+        {
+            let same_owner = owner["document"] == self.state["document"]
+                && owner["sketch"].as_str() == self.sketch.as_deref()
+                && owner["token"].as_str() == self.sketch_ui.session.as_deref();
+            let applied = self
+                .sketch_snapshot()
+                .is_some_and(|s| s["label"] == owner["label"]);
+            if success && same_owner && applied {
+                self.finish_sketch(true);
+            } else {
+                self.sketch_ui.after_finish = None;
+                if !success && same_owner {
+                    self.sketch_ui.name_text = owner["label"].as_str().unwrap_or_default().into();
+                    self.sketch_ui.name_owner = Some(json!({"document":self.state["document"],
+                        "revision":self.state["revision"],"sketch":self.sketch,"token":self.sketch_ui.session}));
+                } else if success {
+                    self.error = Some("The sketch changed; it was not finished".into());
+                }
+            }
+        }
         if success && matches!(op, "sketch_finish" | "sketch_cancel") {
             let cancel = op == "sketch_cancel";
+            let finished_profile = self.sketch.clone();
             self.sketch_ui.session = None;
             self.sketch_ui.drag = None;
             self.sketch_ui.clear_points();
             self.sketch_ui.dimension = None;
             self.sketch = None;
             self.viewport.set_sketch(None);
-            self.viewport.iso();
-            self.viewport.fit();
+            if cancel || self.sketch_ui.after_finish.is_none() {
+                self.viewport.iso();
+                self.viewport.fit();
+            }
             if cancel {
                 if self.sketch_ui.new_sketch {
                     self.sketch_ui.cleanup = true;
@@ -255,7 +456,20 @@ impl Editor {
             } else {
                 self.dirty = true;
                 if let Some(feature) = self.sketch_ui.after_finish.take() {
-                    self.start_feature(&feature);
+                    if feature == "feature.pad"
+                        && finished_profile
+                            .as_deref()
+                            .is_some_and(|profile| self.start_slot_extrusion(profile))
+                    {
+                        return;
+                    }
+                    let kind = match feature.as_str() {
+                        "feature.pad" => "PartDesign::Pad",
+                        "feature.pocket" => "PartDesign::Pocket",
+                        "feature.revolution" => "PartDesign::Revolution",
+                        other => other,
+                    };
+                    self.start_native_feature_for_profile(kind, finished_profile.as_deref());
                 }
             }
         }
@@ -270,7 +484,8 @@ impl Editor {
         }
     }
     pub(super) fn feature_from_sketch(&mut self, id: &str) {
-        if self.sketch_ui.dimension.is_some()
+        if self.busy
+            || self.sketch_ui.dimension.is_some()
             || self.sketch_ui.drag.is_some()
             || self.sketch_ui.task.is_some()
         {
@@ -279,9 +494,23 @@ impl Editor {
         if self.sketch_ui.session.is_some() {
             self.sketch_ui.after_finish = Some(id.into());
             self.finish_sketch(true);
+            if !self.busy {
+                self.sketch_ui.after_finish = None;
+            }
         } else {
             self.start_feature(id);
         }
+    }
+    #[cfg(test)]
+    pub(super) fn diagnostic_cancel_sketch_for_close(&mut self) {
+        assert!(!self.busy);
+        let token=self.state["sketch_edit"]["token"].as_str().expect("actual owned sketch token").to_owned();
+        assert_eq!(self.sketch_ui.session.as_deref(),Some(token.as_str()));
+        // This failed diagnostic will Close the entire owned document. Native
+        // Cancel restores the checkpoint; creation Undo is ordinary UI behavior
+        // and must not be queued during cleanup-only admission.
+        self.sketch_ui.new_sketch=false;
+        self.send("sketch_cancel",json!({"token":token}));
     }
     fn finish_sketch(&mut self, commit: bool) {
         if self.busy
@@ -290,6 +519,37 @@ impl Editor {
             || self.sketch_ui.task.is_some()
         {
             return;
+        }
+        if commit
+            && let Some(owner) = self.sketch_ui.name_owner.as_ref()
+            && let Some(snapshot) = self.sketch_snapshot()
+        {
+            let label = self.sketch_ui.name_text.trim();
+            if label != snapshot["label"].as_str().unwrap_or_default() {
+                let current = json!({"document":self.state["document"],"revision":self.state["revision"],
+                    "sketch":snapshot["name"],"token":self.sketch_ui.session});
+                if owner != &current {
+                    self.error = Some("The sketch changed; its name was not applied".into());
+                    return;
+                }
+                if label.is_empty() {
+                    self.error = Some("Sketch name cannot be empty".into());
+                    return;
+                }
+                self.sketch_ui.pending_name_finish =
+                    Some(json!({"document":self.state["document"],
+                    "sketch":snapshot["name"],"token":self.sketch_ui.session,"label":label}));
+                let edit =
+                    json!({"op":"set","object":snapshot["name"],"property":"Label","value":label});
+                let name_owner = self.sketch_ui.name_owner.take();
+                self.transaction("Rename sketch", vec![edit]);
+                if !self.busy {
+                    self.sketch_ui.name_owner = name_owner;
+                    self.sketch_ui.pending_name_finish = None;
+                    self.sketch_ui.after_finish = None;
+                }
+                return;
+            }
         }
         if let Some(token) = self.sketch_ui.session.clone() {
             self.send(
@@ -302,7 +562,22 @@ impl Editor {
             );
         }
     }
-    pub(super) fn sketch_toolbar(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn activate_sketch_drawing_tool(&mut self, tool: Tool) {
+        if tool != Tool::Select {
+            self.viewport.clear_sketch_selection();
+            self.sketch_ui.selected_constraint = None;
+        }
+        self.sketch_ui.external = false;
+        self.sketch_ui.split = false;
+        self.sketch_ui.tool = if tool == Tool::Line && self.sketch_ui.tool == tool {
+            Tool::Select
+        } else {
+            tool
+        };
+        self.sketch_ui.trim = false;
+        self.sketch_ui.clear_points();
+    }
+    pub(super) fn sketch_toolbar(&mut self, ui: &mut egui::Ui, was_busy: bool) {
         let ready = self.sketch_ui.session.is_some()
             && self.sketch_ui.drag.is_none()
             && self.sketch_ui.dimension.is_none()
@@ -313,32 +588,27 @@ impl Editor {
                 ("Point", Tool::Point),
                 ("Line", Tool::Line),
                 ("Polyline", Tool::Polyline),
-                ("Rectangle", Tool::Rectangle),
+                ("Corner rectangle (G)", Tool::Rectangle),
+                ("Center rectangle (R)", Tool::CenterRectangle),
                 ("Circle", Tool::Circle),
                 ("Arc", Tool::Arc),
             ] {
                 if ui
                     .selectable_label(
                         self.sketch_ui.tool == tool
+                            && self.sketch_ui.dimension_tool.is_none()
                             && !self.sketch_ui.trim
                             && !self.sketch_ui.external,
                         label,
                     )
                     .clicked()
                 {
-                    if tool != Tool::Select {
-                        self.viewport.clear_sketch_selection();
-                        self.sketch_ui.selected_constraint = None;
-                    }
-                    self.sketch_ui.external = false;
-                    self.sketch_ui.split = false;
-                    self.sketch_ui.tool = tool;
-                    self.sketch_ui.trim = false;
-                    self.sketch_ui.clear_points();
+                    self.activate_sketch_drawing_tool(tool);
                 }
             }
             ui.menu_button("Curves", |ui| {
                 for (label, tool) in [
+                    ("Regular polygon (P)", Tool::RegularPolygon { sides: 6, circumscribed: false }),
                     ("Ellipse", Tool::Ellipse),
                     ("Elliptic arc", Tool::EllipseArc),
                     ("B-spline", Tool::BSpline),
@@ -359,6 +629,16 @@ impl Editor {
                         self.sketch_ui.clear_points();
                         ui.close();
                     }
+                }
+                if let Tool::RegularPolygon { mut sides, mut circumscribed } = self.sketch_ui.tool {
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        ui.label("Sides");
+                        ui.add(egui::DragValue::new(&mut sides).range(3..=64).speed(0.1));
+                    });
+                    ui.radio_value(&mut circumscribed, false, "Inscribed");
+                    ui.radio_value(&mut circumscribed, true, "Circumscribed");
+                    self.sketch_ui.tool = Tool::RegularPolygon { sides, circumscribed };
                 }
                 ui.separator();
                 if ui
@@ -384,7 +664,7 @@ impl Editor {
             }
             ui.menu_button(
                 if self.sketch_ui.external {
-                    "External â€¢"
+                    "External ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢"
                 } else {
                     "External"
                 },
@@ -429,7 +709,7 @@ impl Editor {
             {
                 self.toggle_construction();
             }
-            self.sketch_task_toolbar(ui);
+            self.sketch_task_toolbar(ui, was_busy);
             self.constraint_toolbar(ui);
             if ui.button("Finish").clicked() {
                 self.finish_sketch(true);
@@ -532,11 +812,37 @@ impl Editor {
     }
     fn snap(&self, pos: egui::Pos2, disabled: bool) -> Option<([f64; 3], Option<SketchElement>)> {
         let mut point = self.viewport.sketch_point(pos)?;
-        if !disabled && let Some(hit) = self.viewport.sketch_hit(pos) {
+        if !disabled && let Some(hit) = self.viewport.sketch_hit(pos).filter(|hit| {
+            // A center can snap to a point, but whole-edge center constraints are
+            // unsupported. Keep that first click freehand in preview and commit.
+            !(self.sketch_ui.tool == Tool::CenterRectangle
+                && self.sketch_ui.points.is_empty() && hit.point == 0)
+        }) {
             if hit.point != 0
                 && let Some(exact) = self.viewport.geometry_point(hit)
             {
                 point = exact;
+            } else if hit.point == 0
+                && matches!(self.sketch_ui.tool, Tool::Line | Tool::Polyline)
+                && let Some(first) = self.sketch_ui.points.first()
+            {
+                let screen = self.viewport.sketch_screen_point(*first);
+                let first_on_axis =
+                    self.sketch_ui
+                        .snaps
+                        .first()
+                        .copied()
+                        .flatten()
+                        .is_some_and(|start| {
+                            self.sketch_snapshot().is_some_and(|snapshot| {
+                                native_point_on_axis(&snapshot, start, hit.index)
+                            })
+                        });
+                if !first_on_axis && hit.index == -2 && (screen.y - pos.y).abs() <= crate::viewport::EDGE_PICK_RADIUS {
+                    point[1] = first[1];
+                } else if !first_on_axis && hit.index == -1 && (screen.x - pos.x).abs() <= crate::viewport::EDGE_PICK_RADIUS {
+                    point[0] = first[0];
+                }
             }
             return Some((point, Some(hit)));
         }
@@ -545,22 +851,138 @@ impl Editor {
             && let Some(first) = self.sketch_ui.points.first()
         {
             let screen = self.viewport.sketch_screen_point(*first);
-            if (screen.x - pos.x).abs() < 6. {
+            if (screen.x - pos.x).abs() <= crate::viewport::EDGE_PICK_RADIUS {
                 point[0] = first[0];
             }
-            if (screen.y - pos.y).abs() < 6. {
+            if (screen.y - pos.y).abs() <= crate::viewport::EDGE_PICK_RADIUS {
                 point[1] = first[1];
             }
         }
         Some((point, None))
     }
-    fn draw_point(&mut self, point: [f64; 3], snap: Option<SketchElement>, infer: bool) {
+    fn scene_snap(&self, pos: egui::Pos2) -> Result<Option<SceneSnap>, String> {
+        let hits: Vec<_> = self
+            .viewport
+            .scene_vertices_at(pos)
+            .into_iter()
+            .filter(|hit| {
+                // This path projects sketch references. Ordinary drawing near a
+                // solid vertex must not become an unsupported-reference error.
+                // An unknown owner is retained so stale scene data fails closed.
+                super::objects(&self.state)
+                    .iter()
+                    .find(|o| o["name"] == hit.object)
+                    .is_none_or(|o| o["type"] == "Sketcher::SketchObject")
+            })
+            .collect();
+        if hits.is_empty() {
+            return Ok(None);
+        }
+        if hits.len() != 1 {
+            return Err("More than one visible native vertex is under the pointer".into());
+        }
+        let hit = &hits[0];
+        let source = super::objects(&self.state)
+            .iter()
+            .find(|o| o["name"] == hit.object)
+            .ok_or("Scene vertex owner is unavailable")?;
+        let revision = self.state["revision"]
+            .as_u64()
+            .ok_or("Document revision is unavailable")?;
+        if self.state["document"].as_str().is_none_or(str::is_empty) {
+            return Err("Document owner is unavailable".into());
+        }
+        if source["type"] != "Sketcher::SketchObject"
+            || source["effective_visibility"] != true
+            || self.sketch.as_deref() == Some(hit.object.as_str())
+            || hit.revision != Some(revision)
+            || hit.point[2].abs() > 1e-4
+        {
+            return Err("Choose a visible, current vertex of another coplanar sketch".into());
+        }
+        let mapped_name = hit
+            .mapped_name
+            .clone()
+            .filter(|s| !s.is_empty())
+            .ok_or("Native vertex has no persistent mapped name")?;
+        if !hit.subelement.strip_prefix("Vertex").is_some_and(|s| {
+            !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit()) && !s.starts_with('0')
+        }) {
+            return Err("Native vertex name is invalid".into());
+        }
+        let sketch = self.sketch.clone().ok_or("Active sketch is unavailable")?;
+        let session = self
+            .sketch_ui
+            .session
+            .clone()
+            .filter(|s| !s.is_empty())
+            .ok_or("Sketch session is unavailable")?;
+        Ok(Some(SceneSnap {
+            document: self.state["document"].clone(),
+            revision: self.state["revision"].clone(),
+            sketch,
+            session,
+            source: hit.object.clone(),
+            subelement: hit.subelement.clone(),
+            mapped_name,
+            point: [hit.point[0], hit.point[1], 0.],
+        }))
+    }
+    fn scene_snap_current(&self, pick: &SceneSnap) -> bool {
+        self.state["document"] == pick.document
+            && self.state["revision"] == pick.revision
+            && self.sketch.as_deref() == Some(pick.sketch.as_str())
+            && self.sketch_ui.session.as_deref() == Some(pick.session.as_str())
+    }
+    fn draw_point(
+        &mut self,
+        point: [f64; 3],
+        snap: Option<SketchElement>,
+        scene_snap: Option<SceneSnap>,
+        infer: bool,
+    ) {
+        if self.sketch_ui.points.is_empty() {
+            self.sketch_ui.rectangle_feedback = None;
+        }
+        if self.sketch_ui.points.is_empty() && matches!(self.sketch_ui.tool, Tool::RegularPolygon { .. }) {
+            self.sketch_ui.polygon_owner = Some(self.polygon_owner());
+        }
+        if let Tool::RegularPolygon { sides, circumscribed } = self.sketch_ui.tool {
+            if !self.sketch_ui.points.is_empty()
+                && self.sketch_ui.polygon_owner.as_ref() != Some(&self.polygon_owner())
+            {
+                self.sketch_ui.clear_points();
+                self.error = Some("Sketch changed before the polygon was committed; pick its center again".into());
+                return;
+            }
+            if self.sketch_ui.points.len() == 2 {
+                // The final pick confirms count only, never replaces the chosen rim.
+                self.commit_curve(infer);
+                return;
+            }
+            if let Some(&center) = self.sketch_ui.points.first()
+                && let Err(error) = crate::sketch_commands::regular_polygon(center, point, sides, circumscribed)
+            {
+                self.error = Some(error);
+                return;
+            }
+        }
         self.sketch_ui.points.push(point);
         self.sketch_ui.snaps.push(snap);
+        self.sketch_ui.scene_snaps.push(scene_snap);
         if matches!(self.sketch_ui.tool, Tool::BSpline | Tool::PeriodicBSpline) {
             return;
         }
+        if matches!(self.sketch_ui.tool, Tool::RegularPolygon { .. }) {
+            // Center, then a frozen radius/orientation, then count confirmation.
+            return;
+        }
         self.commit_curve(infer);
+    }
+    fn polygon_owner(&self) -> Value {
+        json!({"document":self.state["document"],"document_uid":self.state["document_uid"],
+            "revision":self.state["revision"],"sketch":self.sketch,"session":self.sketch_ui.session,
+            "native_id":self.sketch_snapshot().map(|s|s["native_id"].clone())})
     }
     fn commit_curve(&mut self, infer: bool) {
         let Some(object) = self.sketch.clone() else {
@@ -570,30 +992,71 @@ impl Editor {
         if self.sketch_ui.points.len() < tool.required_points() {
             return;
         }
+        if matches!(tool, Tool::RegularPolygon { .. })
+            && self.sketch_ui.polygon_owner.as_ref() != Some(&self.polygon_owner())
+        {
+            self.sketch_ui.clear_points();
+            self.error = Some("Sketch changed before the polygon was committed; pick its center again".into());
+            return;
+        }
+        if self
+            .sketch_ui
+            .scene_snaps
+            .iter()
+            .flatten()
+            .any(|pick| !self.scene_snap_current(pick))
+        {
+            self.sketch_ui.clear_points();
+            self.error = Some("Sketch or source changed before the line was committed".into());
+            return;
+        }
+        if matches!(tool, Tool::RegularPolygon { .. }) && self.sketch_snapshot()
+            .and_then(|s| s["sketch"]["geometry_count"].as_u64())
+            .and_then(|count| usize::try_from(count).ok()).is_none()
+        {
+            self.sketch_ui.clear_points();
+            self.error = Some("Native sketch geometry count is unavailable; refresh the sketch".into());
+            return;
+        }
         let count = self
             .sketch_snapshot()
             .and_then(|s| s["sketch"]["geometry_count"].as_u64())
             .unwrap_or(0) as usize;
+        // The UI picks arc endpoints first. The stable native command API
+        // continues to accept start, through point, end.
+        let mut points = self.sketch_ui.points.clone();
+        let mut snaps = self.sketch_ui.snaps.clone();
+        if tool == Tool::Arc {
+            points.swap(1, 2);
+            snaps.swap(1, 2);
+        }
         let mut edits = match draw_snapped_edits(
             &object,
             tool,
-            &self.sketch_ui.points,
+            &points,
             count,
             self.sketch_ui.construction,
-            &self.sketch_ui.snaps,
+            &snaps,
         ) {
             Ok(e) => e,
             Err(e) => {
                 self.error = Some(e);
                 self.sketch_ui.points.pop();
                 self.sketch_ui.snaps.pop();
+                self.sketch_ui.scene_snaps.pop();
                 return;
             }
         };
-        if infer
-            && matches!(tool, Tool::Line | Tool::Polyline)
-            && self.sketch_ui.snaps.iter().filter(|s| s.is_some()).count() < 2
-        {
+        if tool == Tool::Line {
+            for (point, pick) in self.sketch_ui.scene_snaps.iter().enumerate() {
+                if let Some(pick) = pick {
+                    edits.push(json!({"op":"auto_external_coincident","object":object,
+                        "index":count,"point":point + 1,"source":pick.source,
+                        "subelement":pick.subelement,"mapped_name":pick.mapped_name}));
+                }
+            }
+        }
+        if infer && matches!(tool, Tool::Line | Tool::Polyline) {
             let p = &self.sketch_ui.points;
             let kind = if (p[0][0] - p[1][0]).abs() < 1e-9 {
                 Some("Vertical")
@@ -602,18 +1065,57 @@ impl Editor {
             } else {
                 None
             };
-            if let Some(kind) = kind {
+            let axis_snap = match self.sketch_ui.snaps.as_slice() {
+                [Some(first), Some(axis)]
+                    if first.index >= 0 && matches!(first.point, 1 | 2) && axis.point == 0 =>
+                {
+                    matches!(
+                        (kind, axis.index),
+                        (Some("Horizontal"), -2) | (Some("Vertical"), -1)
+                    ) && self.sketch_snapshot().is_some_and(|snapshot| {
+                        !native_point_on_axis(&snapshot, *first, axis.index)
+                    })
+                }
+                _ => false,
+            };
+            if let Some(kind) = kind
+                && (self.sketch_ui.snaps.iter().filter(|s| s.is_some()).count()
+                    + self
+                        .sketch_ui
+                        .scene_snaps
+                        .iter()
+                        .filter(|s| s.is_some())
+                        .count()
+                    < 2
+                    || axis_snap)
+            {
                 edits.push(json!({"op":"constraint","object":object,"kind":kind,"args":[count]}));
             }
         }
+        let feedback = matches!(tool, Tool::Rectangle | Tool::CenterRectangle).then(|| RectangleFeedback {
+            tool, points: [self.sketch_ui.points[0], self.sketch_ui.points[1]], pending: true,
+        });
         self.sketch_ui.clear_points();
-        if tool == Tool::Polyline {
+        self.sketch_ui.rectangle_feedback = feedback;
+        if matches!(tool, Tool::Line | Tool::Polyline) {
             self.sketch_ui.continuation = Some(count);
         }
         self.transaction("Draw sketch geometry", edits);
+        if !self.busy {
+            self.sketch_ui.rectangle_feedback = None;
+        }
     }
-    pub(super) fn sketch_canvas(&mut self, ui: &mut egui::Ui) {
-        if !ui.is_enabled() || self.sketch_ui.session.is_none() || self.draft.is_some() {
+    pub(super) fn sketch_canvas(
+        &mut self,
+        ui: &mut egui::Ui,
+        native_pick: bool,
+        input_blocked: bool,
+    ) {
+        if !ui.is_enabled()
+            || self.sketch_ui.session.is_none()
+            || self.draft.is_some()
+            || self.sketch_name_focused(ui.ctx())
+        {
             return;
         }
         let Some(response) = self.viewport.response.clone() else {
@@ -622,6 +1124,44 @@ impl Editor {
         let pos = ui.input(|i| i.pointer.interact_pos());
         let alt = ui.input(|i| i.modifiers.alt);
         if self.sketch_ui.task.is_some() {
+            return;
+        }
+        if let Some(owner) = &self.sketch_ui.dimension_tool {
+            if owner.document != self.state["document"]
+                || owner.revision != self.state["revision"]
+                || self.sketch.as_deref() != Some(owner.sketch.as_str())
+            {
+                self.sketch_ui.dimension_tool = None;
+                self.viewport.clear_sketch_selection();
+                return;
+            }
+            if self.sketch_ui.dimension.is_some()
+                || input_blocked
+                || self.busy
+                || egui::Popup::is_any_open(ui.ctx())
+                || ui.ctx().wants_keyboard_input()
+                || self.units_ui.active()
+                || self.measurement_is_open()
+                || self.pending_file.is_some()
+                || self.file_dialog.is_some()
+                || self.file_browser.active()
+                || self.exchange_ui.active()
+                || self.overwrite
+            {
+                return;
+            }
+            if response.clicked()
+                && let Some(pos) = pos
+            {
+                if self.viewport.sketch_hit(pos).is_some() {
+                    self.viewport.select_sketch_at(pos, true);
+                    self.sketch_ui.selected_constraint = None;
+                } else if !self.viewport.sketch_selection.is_empty() {
+                    let owner = self.sketch_ui.dimension_tool.take();
+                    self.place_dimension(pos);
+                    self.sketch_ui.dimension_tool = owner;
+                }
+            }
             return;
         }
         if self.sketch_ui.split {
@@ -636,7 +1176,7 @@ impl Editor {
             return;
         }
         if self.sketch_ui.external {
-            if response.clicked() && !self.busy {
+            if (response.clicked() || native_pick) && !self.busy {
                 self.project_external_selection();
             }
             return;
@@ -645,21 +1185,73 @@ impl Editor {
             && response.hovered()
             && self.sketch_ui.tool != Tool::Select
         {
-            let cursor = self.snap(pos, alt);
+            if !input_blocked && !self.busy && !egui::Popup::is_any_open(ui.ctx())
+                && let Tool::RegularPolygon { mut sides, circumscribed } = self.sketch_ui.tool
+                && self.sketch_ui.points.len() == 2
+            {
+                let center = self.viewport.sketch_screen_point(self.sketch_ui.points[0]);
+                let radius = pos.distance(center);
+                let initial = self.viewport.sketch_screen_point(self.sketch_ui.points[1]).distance(center);
+                let (anchor, previous) = self.sketch_ui.polygon_count_pointer.get_or_insert((initial, sides));
+                // Explicit count controls rebase at the current cursor. Ten pixels
+                // starts a step; fourteen pixels per side gives six pixels of
+                // hysteresis on reversal. Zoom and model units do not set sensitivity.
+                if *previous != sides { *anchor = radius; }
+                while radius - *anchor > 10. && sides < 64 { sides += 1; *anchor += 14.; }
+                while radius - *anchor < -10. && sides > 3 { sides -= 1; *anchor -= 14.; }
+                if (sides == 64 && radius > *anchor) || (sides == 3 && radius < *anchor) {
+                    *anchor = radius;
+                }
+                *previous = sides;
+                self.sketch_ui.tool = Tool::RegularPolygon { sides, circumscribed };
+            }
+            let mut cursor = self.snap(pos, alt);
+            let scene_cursor = !alt
+                && !input_blocked
+                && self.sketch_ui.tool == Tool::Line
+                && !cursor.is_some_and(|(_, snap)| snap.is_some_and(|hit| hit.point != 0))
+                && self.scene_snap(pos).is_ok_and(|pick| {
+                    if let Some(pick) = pick {
+                        cursor = Some((pick.point, None));
+                        true
+                    } else {
+                        false
+                    }
+                });
+            #[cfg(test)]
+            if self.sketch_ui.tool == Tool::CenterRectangle
+                && let Some((point, _)) = cursor
+                && let Some(center_point) = self.sketch_ui.points.first()
+            {
+                ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("convergence_feedback_projection"), json!({
+                    "document_uid":self.state["document_uid"],"revision":self.state["revision"],
+                    "sketch":self.sketch,"live":[pos.x,pos.y],"point":point,"center_point":center_point
+                })));
+            }
             super::drawing::preview(
                 ui.painter(),
                 &self.viewport,
                 self.sketch_ui.tool,
                 &self.sketch_ui.points,
                 cursor.map(|p| p.0),
+                &self.state,
             );
-            if cursor.is_some_and(|p| p.1.is_some()) {
+            if scene_cursor || cursor.is_some_and(|p| p.1.is_some()) {
                 ui.painter().circle_stroke(
                     pos,
                     6.,
                     egui::Stroke::new(1_f32, Color32::from_rgb(110, 182, 177)),
                 );
             }
+        }
+        if self.sketch_ui.points.is_empty()
+            && let Some(feedback) = &self.sketch_ui.rectangle_feedback
+            && !feedback.pending
+            && feedback.tool == self.sketch_ui.tool
+        {
+            super::drawing::rectangle_measurements(
+                ui.painter(), &self.viewport, feedback.tool, feedback.points, &self.state,
+            );
         }
         if self.sketch_ui.dimension.is_some() {
             return;
@@ -749,9 +1341,18 @@ impl Editor {
                 self.sketch_ui.box_start = Some(start);
             }
         }
+        if self
+            .sketch_ui
+            .inline_line
+            .as_ref()
+            .is_some_and(|p| p.editing)
+        {
+            return;
+        }
         if response.clicked()
             && let Some(pos) = pos
         {
+            self.sketch_ui.inline_line = None;
             if self.sketch_ui.trim {
                 if let Some(hit) = self.viewport.sketch_hit(pos).filter(|h| h.index >= 0)
                     && let Some(position) = self.viewport.sketch_point(pos)
@@ -763,9 +1364,48 @@ impl Editor {
                 return;
             }
             if self.sketch_ui.tool != Tool::Select
-                && let Some((point, snap)) = self.snap(pos, alt)
+                && let Some((mut point, mut snap)) = self.snap(pos, alt)
             {
-                self.draw_point(point, snap, !alt);
+                if input_blocked {
+                    return;
+                }
+                let mut external = None;
+                if !alt
+                    && !input_blocked
+                    && self.sketch_ui.tool == Tool::Line
+                    && !snap.is_some_and(|hit| hit.point != 0)
+                {
+                    match self.scene_snap(pos) {
+                        Ok(Some(pick)) => {
+                            point = pick.point;
+                            snap = None;
+                            external = Some(pick);
+                        }
+                        Ok(None) => (),
+                        Err(error) => {
+                            self.error = Some(error);
+                            return;
+                        }
+                    }
+                }
+                #[cfg(test)]
+                if self.sketch_ui.tool == Tool::CenterRectangle {
+                    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("convergence_input_projection"), json!({
+                        "document_uid":self.state["document_uid"],"revision":self.state["revision"],
+                        "sketch":self.sketch,"live":[pos.x,pos.y],"point":point
+                    })));
+                }
+                let choosing_polygon_size = matches!(self.sketch_ui.tool, Tool::RegularPolygon { .. })
+                    && self.sketch_ui.points.len() == 1;
+                self.draw_point(point, snap, external, !alt);
+                if choosing_polygon_size && self.sketch_ui.points.len() == 2
+                    && let Tool::RegularPolygon { sides, .. } = self.sketch_ui.tool
+                {
+                    // Anchor to the released pointer, not the snapped rim: a snap
+                    // offset must not become an unintended count adjustment.
+                    let center = self.viewport.sketch_screen_point(self.sketch_ui.points[0]);
+                    self.sketch_ui.polygon_count_pointer = Some((pos.distance(center), sides));
+                }
             } else {
                 self.sketch_ui.selected_constraint = None;
             }
@@ -807,6 +1447,12 @@ impl Editor {
             drag.cancel = true;
             return;
         }
+        if self.sketch_ui.dimension_tool.is_some() {
+            // Picks collected by Dimension are transient tool input, not a
+            // selection for the next smart-dimension shortcut.
+            self.viewport.clear_sketch_selection();
+            self.sketch_ui.selected_constraint = None;
+        }
         self.sketch_ui.clear_points();
         self.sketch_ui.tool = Tool::Select;
         self.sketch_ui.external = false;
@@ -814,7 +1460,7 @@ impl Editor {
         self.sketch_ui.trim = false;
         self.sketch_ui.box_start = None;
     }
-    pub(super) fn sketch_pump(&mut self, ctx: &egui::Context) {
+    pub(super) fn sketch_pump(&mut self, ctx: &egui::Context, shortcut_blocked: bool) {
         self.sketch_task_pump(ctx);
         if self.sketch_ui.task.is_some() {
             return;
@@ -879,6 +1525,8 @@ impl Editor {
             && self.sketch_ui.session.is_some()
             && self.sketch_ui.drag.is_none()
             && self.sketch_ui.dimension.is_none()
+            && self.sketch_ui.task.is_none()
+            && !shortcut_blocked
             && !ctx.wants_keyboard_input()
         {
             if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Delete)) {
@@ -893,36 +1541,61 @@ impl Editor {
                 }
                 return;
             }
+            if let Tool::RegularPolygon { sides, circumscribed } = self.sketch_ui.tool {
+                let more = super::consume_exact_key(ctx, egui::Modifiers::NONE, Key::Plus)
+                    || super::consume_exact_key(ctx, egui::Modifiers::NONE, Key::Equals)
+                    || super::consume_exact_key(ctx, egui::Modifiers::SHIFT, Key::Plus)
+                    || super::consume_exact_key(ctx, egui::Modifiers::SHIFT, Key::Equals);
+                let less = super::consume_exact_key(ctx, egui::Modifiers::NONE, Key::Minus);
+                if more || less {
+                    self.sketch_ui.tool = Tool::RegularPolygon {
+                        sides: (sides as i32 + i32::from(more) - i32::from(less)).clamp(3,64) as u32,
+                        circumscribed,
+                    };
+                    return;
+                }
+            }
             if matches!(self.sketch_ui.tool, Tool::BSpline | Tool::PeriodicBSpline)
                 && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Enter))
             {
                 self.commit_curve(false);
                 return;
             }
-            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::D)) {
-                self.smart_dimension();
+            if super::consume_exact_key(ctx, egui::Modifiers::NONE, Key::D) {
+                if self.sketch_ui.dimension_tool.is_some()
+                    || self.viewport.sketch_selection.is_empty()
+                {
+                    self.start_dimension_tool();
+                } else {
+                    self.smart_dimension();
+                }
                 return;
             }
             for (key, tool) in [
+                (Key::P, Tool::RegularPolygon { sides: 6, circumscribed: false }),
                 (Key::L, Tool::Line),
-                (Key::P, Tool::Polyline),
-                (Key::R, Tool::Rectangle),
+                (Key::G, Tool::Rectangle),
+                (Key::R, Tool::CenterRectangle),
                 (Key::C, Tool::Circle),
                 (Key::A, Tool::Arc),
             ] {
-                if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, key)) {
+                if super::consume_exact_key(ctx, egui::Modifiers::NONE, key) {
+                    let was_active = (self.sketch_ui.tool == tool
+                        || matches!((self.sketch_ui.tool, tool), (Tool::RegularPolygon { .. }, Tool::RegularPolygon { .. })))
+                        && !self.sketch_ui.trim
+                        && !self.sketch_ui.external
+                        && !self.sketch_ui.split;
                     self.sketch_ui.clear_points();
-                    if tool != Tool::Select {
-                        self.viewport.clear_sketch_selection();
-                        self.sketch_ui.selected_constraint = None;
-                    }
+                    self.viewport.clear_sketch_selection();
+                    self.sketch_ui.selected_constraint = None;
                     self.sketch_ui.external = false;
                     self.sketch_ui.split = false;
-                    self.sketch_ui.tool = tool;
+                    self.sketch_ui.tool = if was_active { Tool::Select } else { tool };
                     self.sketch_ui.trim = false;
+                    return;
                 }
             }
-            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::G)) {
+            if super::consume_exact_key(ctx, egui::Modifiers::NONE, Key::Q) {
                 self.sketch_ui.construction = !self.sketch_ui.construction;
                 self.toggle_construction();
             }
@@ -965,3 +1638,9 @@ mod tests {
 
 #[cfg(test)]
 mod lifecycle_tests;
+#[cfg(test)]
+mod pointer_forgiveness_tests;
+
+#[cfg(test)]
+#[path = "sketch/polygon_input_tests.rs"]
+mod polygon_input_tests;

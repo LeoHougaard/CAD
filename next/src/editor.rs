@@ -4,19 +4,34 @@ mod assembly;
 mod bodies;
 mod constraints;
 mod drawing;
+mod drawing_tasks;
 mod exchange;
 mod file_browser;
 mod history;
 mod measurements;
 mod profile_references;
 mod properties;
+mod new_loft;
+mod part_mirror;
 mod recovery;
+mod extrude_depth;
+mod plane_offset;
+#[cfg(test)]
+mod standalone_helix_tests;
+mod rectangular_extrude;
+#[cfg(test)]
+mod rectangular_extrude_tests;
+#[cfg(test)]
+mod drawing_full_update_tests;
+mod rename;
+mod shortcut_menu;
 mod sketch;
 mod sketch_creation;
 mod sketch_tools;
 #[cfg(test)]
 mod tests;
 mod transforms;
+mod units;
 mod view;
 mod workflow_guide;
 
@@ -37,6 +52,17 @@ use std::{
     sync::mpsc::{self, Receiver, Sender, SyncSender},
     time::{Duration, Instant},
 };
+
+fn consume_exact_key(ctx: &egui::Context, modifiers: egui::Modifiers, key: Key) -> bool {
+    ctx.input_mut(|input| {
+        let exact = input.events.iter().any(|event| {
+            matches!(event,
+            egui::Event::Key { key: actual, pressed: true, modifiers: actual_modifiers, .. }
+                if *actual == key && actual_modifiers.matches_exact(modifiers))
+        });
+        exact && input.consume_key(modifiers, key)
+    })
+}
 
 struct Job {
     op: String,
@@ -82,14 +108,78 @@ fn model_thread(
             return;
         }
     };
+    // Test-only notification: WorkerSession::spawn has completed the actual
+    // capability exchange. It does not send or synthesize a modeling reply.
+    #[cfg(test)]
+    if let Some(ready) = ctx.data_mut(|data| {
+        let id = egui::Id::new("convergence-model-startup-ready");
+        let ready = data.get_temp::<Sender<()>>(id);
+        data.remove::<Sender<()>>(id);
+        ready
+    }) {
+        let _ = ready.send(());
+    }
     let mut current = Value::Null;
-    while let Ok(job) = input.recv() {
+    while let Ok(mut job) = input.recv() {
+        // Creation commits a native transaction before Begin. Reject a known
+        // unavailable checkpoint runtime before that transaction can erase Redo
+        // or leave a newly created Body/Sketch behind. This does not claim full
+        // atomicity for other native failures after creation.
+        let creating_sketch = job.op == "create_sketch";
+        if creating_sketch {
+            job.op = "transaction".into();
+        }
         let start = Instant::now();
         let previous = current.clone();
         // Preserve the old document until a replacement loads successfully.
         // Opening the same path twice returns the worker's already_open error.
-        let result = call(&mut worker, &job.op, job.parameters);
-        if matches!(job.op.as_str(), "feature_schema" | "measure") {
+        let recovery_action = matches!(
+            job.op.as_str(),
+            "close_dependent" | "remove_dependent_references"
+        );
+        let result = if creating_sketch
+            && worker.capabilities()["sketch_checkpoints"]["available"] != true
+        {
+            let reason = worker.capabilities()["sketch_checkpoints"]["reason"]
+                .as_str()
+                .unwrap_or("No verified native checkpoint capability was reported");
+            Err(format!(
+                "Native sketch editing is unavailable. No sketch was created: {reason}"
+            ))
+        } else if recovery_action {
+            // The UI action is bound to the inspected unavailable owner and an
+            // exact dependent revision. The worker still receives ordinary Close.
+            let listed = current["close_dependents"]
+                .as_array()
+                .is_some_and(|owners| {
+                    owners.iter().any(|owner| {
+                        owner["document"] == job.parameters["document"]
+                            && owner["revision"] == job.parameters["expected_revision"]
+                            && (job.op == "close_dependent"
+                                || owner["reference_removals"].is_array()
+                                    && owner["reference_removals"] == job.parameters["edits"])
+                    })
+                });
+            if current["available"] == false && listed {
+                call(
+                    &mut worker,
+                    if job.op == "close_dependent" {
+                        "close"
+                    } else {
+                        "transaction"
+                    },
+                    job.parameters,
+                )
+            } else {
+                Err("Recovery dependent changed; inspect the unavailable document again".into())
+            }
+        } else {
+            call(&mut worker, &job.op, job.parameters)
+        };
+        if matches!(
+            job.op.as_str(),
+            "feature_schema" | "measure" | "quantities" | "assembly_sources"
+        ) || cfg!(test) && job.op == "test_read" {
             let (accepted, data, error) = match result {
                 Ok(data) => (true, data, None),
                 Err(error) => (false, Value::Null, Some(error)),
@@ -115,14 +205,30 @@ fn model_thread(
         let mut error = None;
         match result {
             Ok(result) => {
-                if job.op == "close" {
-                    current = Value::Null;
+                if let Some(message) = result["cleanup_error"].as_str() {
+                    error = Some(message.to_owned());
+                }
+                if recovery_action {
+                    // Recovering a dependent does not replace the UI's owner.
+                } else if job.op == "close" {
+                    // A closed root may leave a named source Close unresolved.
+                    // Keep its unavailable metadata reachable through the normal
+                    // explicit recovery confirmation. No model is adopted here.
+                    current = result
+                        .get("cleanup_recovery")
+                        .cloned()
+                        .unwrap_or(Value::Null);
                 } else if result.get("state").is_some() {
                     current = result["state"].clone();
                 } else if result.get("objects").is_some() && result.get("document").is_some() {
                     current = result;
                 } else if result.get("revision").is_some() {
                     current["revision"] = result["revision"].clone();
+                    if job.op == "save" {
+                        current["path"] = result["path"].clone();
+                        current["save_recovery"] = result["save_recovery"].clone();
+                        current["recovery_only"] = result["recovery_only"].clone();
+                    }
                 }
             }
             Err(message) => error = Some(message),
@@ -140,15 +246,26 @@ fn model_thread(
         }
         // Successful mutations already return the solved native snapshot. A
         // rejected native edit may still invalidate a revision during rollback.
-        if !accepted && let Some(document) = current["document"].as_str() {
+        if (!accepted || recovery_action)
+            && let Some(document) = current["document"].as_str()
+        {
             match call(&mut worker, "inspect", json!({"document":document})) {
                 Ok(state) => current = state,
-                Err(message) => error = Some(message),
+                Err(message) => {
+                    error.get_or_insert(message);
+                }
             }
+        }
+        if current.is_object() {
+            current["drawing_capabilities"] = worker.capabilities()["drawing"].clone();
+            current["rectangular_capabilities"] = worker.capabilities()["rectangular_draft"].clone();
         }
         let mut scenes = Vec::new();
         let mut display_failed = false;
-        for object in display_objects(&current) {
+        for object in display_objects(&current)
+            .into_iter()
+            .filter(|_| current["available"] != false)
+        {
             if current["sketch_edit"]["object"] == object {
                 continue;
             }
@@ -159,7 +276,9 @@ fn model_thread(
                 call(&mut worker, "topology", parameters),
             ) {
                 (Ok(m), Ok(t))
-                    if m["revision"] == current["revision"]
+                    if m["document"] == current["document"]
+                        && t["document"] == current["document"]
+                        && m["revision"] == current["revision"]
                         && t["revision"] == current["revision"]
                         && m["object"] == object
                         && t["object"] == object =>
@@ -167,11 +286,11 @@ fn model_thread(
                     scenes.push((m, t));
                 }
                 (Err(message), _) | (_, Err(message)) => {
-                    error = Some(message);
+                    error.get_or_insert(message);
                     display_failed = true;
                 }
                 _ => {
-                    error = Some("Display object or revision changed".into());
+                    error.get_or_insert_with(|| "Display object or revision changed".into());
                     display_failed = true;
                 }
             }
@@ -195,13 +314,34 @@ fn model_thread(
     }
 }
 
-fn feature_edits(registry: &Registry, draft: &Draft) -> Result<Vec<Value>, String> {
-    if draft.id == "native.assembly" {
+fn feature_edits(registry: &Registry, draft: &Draft, schema: &Value) -> Result<Vec<Value>, String> {
+    if draft.id == rectangular_extrude::ID {
+        rectangular_extrude::compile(&draft.parameters)
+    } else if draft.id == "native.assembly" {
         crate::assembly_commands::build(&draft.parameters["state"], &draft.parameters["request"])
     } else if draft.id == "native.history" {
         crate::history_commands::build(&draft.parameters["state"], &draft.parameters["request"])
+    } else if matches!(
+        draft.id.as_str(),
+        "native.slot_extrude" | "native.vertex_edit"
+    ) {
+        if draft.parameters["mode"] == "Up to vertex"
+            && (!draft.parameters["target"].is_string()
+                || !draft.parameters["target_id"].is_number()
+                || !draft.parameters["vertex_map"].is_string())
+        {
+            return Err("Choose a current sketch vertex".into());
+        }
+        let mut edit = draft.parameters.clone();
+        if draft.id == "native.vertex_edit" {
+            edit.as_object_mut().unwrap().remove("mode");
+        }
+        Ok(vec![edit])
     } else if draft.id == "native.properties" {
-        crate::property_commands::build(&draft.parameters)
+        crate::property_commands::build(&crate::hole_commands::active_parameters(
+            schema,
+            &crate::extrusion_commands::active_parameters(&draft.parameters)?,
+        ))
     } else if draft.id == "native.property" {
         Ok(vec![
             json!({"op":"set","object":draft.parameters["object"],"property":draft.parameters["property"],"value":draft.parameters["value"]}),
@@ -259,6 +399,12 @@ enum FileAction {
     Open,
     Close,
     Recover,
+    RecoverDependent {
+        index: usize,
+        owner_revision: u64,
+        revision: u64,
+        remove_references: bool,
+    },
 }
 
 pub struct Editor {
@@ -275,6 +421,7 @@ pub struct Editor {
     body_ui: BodyUi,
     property_ui: properties::PropertyUi,
     measurement_ui: measurements::MeasurementUi,
+    units_ui: units::UnitsUi,
     transform_ui: transforms::TransformUi,
     exchange_ui: exchange::ExchangeUi,
     draft: Option<Draft>,
@@ -328,6 +475,7 @@ impl Editor {
             body_ui: BodyUi::default(),
             property_ui: properties::PropertyUi::default(),
             measurement_ui: measurements::MeasurementUi::default(),
+            units_ui: Default::default(),
             transform_ui: transforms::TransformUi::default(),
             exchange_ui: exchange::ExchangeUi::default(),
             draft: None,
@@ -356,13 +504,30 @@ impl Editor {
     }
 
     fn send(&mut self, op: &str, mut parameters: Value) {
-        if self.busy {
+        if self.busy || self.units_ui.active() && op != "document_settings" {
             return;
         }
-        if op != "feature_schema" {
+        if self.state["recovery_only"] == true
+            && !matches!(
+                op,
+                "save" | "close" | "inspect" | "assembly_sources" | "new" | "open"
+            )
+            && !(op == "transaction"
+                && parameters["edits"].as_array().is_some_and(|edits| {
+                    !edits.is_empty() && edits.iter().all(|e| e["op"] == "assembly_relink")
+                }))
+        {
+            self.error=Some("Native links need recovery. Retry Save or Update / relink external source after correcting the native error.".into());
+            return;
+        }
+        let passive_test_read = cfg!(test) && op == "test_read";
+        if !matches!(op, "feature_schema" | "quantities") && !passive_test_read {
             self.measurement_invalidate();
         }
-        if !matches!(op, "new" | "open") {
+        if !matches!(
+            op,
+            "new" | "open" | "close_dependent" | "remove_dependent_references"
+        ) {
             parameters["document"] = self.state["document"].clone();
             parameters["expected_revision"] = self.state["revision"].clone();
             if let Some(token) = &self.sketch_ui.session {
@@ -370,7 +535,9 @@ impl Editor {
             }
         }
         self.busy = true;
-        self.error = None;
+        if !passive_test_read {
+            self.error = None;
+        }
         if self
             .jobs
             .try_send(Job {
@@ -381,6 +548,9 @@ impl Editor {
         {
             self.busy = false;
             self.error = Some("Model thread stopped".into());
+            if self.rectangular_active() {
+                let d=self.draft.as_mut().unwrap();d.valid=false;d.committing=false;
+            }
         }
     }
 
@@ -438,6 +608,15 @@ impl Editor {
     fn poll(&mut self) {
         while let Ok(reply) = self.replies.try_recv() {
             self.busy = false;
+            // Passive test instrumentation still receives the actual worker
+            // data through the driver journal, without replacing UI or scene.
+            #[cfg(test)]
+            if reply.op == "test_read" {
+                if !reply.accepted {
+                    self.error = reply.error;
+                }
+                continue;
+            }
             if reply.op == "measure" {
                 self.measurement_reply(reply);
                 continue;
@@ -452,8 +631,32 @@ impl Editor {
                 }
                 continue;
             }
+            if reply.op == "quantities" {
+                self.error = reply.error;
+                if success {
+                    self.quantity_reply(&reply.data);
+                } else {
+                    self.units_ui.quantity_failed();
+                }
+                continue;
+            }
+            if reply.op == "assembly_sources" {
+                self.error = reply.error;
+                if success {
+                    self.assembly_source_reply(reply.data);
+                }
+                continue;
+            }
+            let units_changed = self.state["units"]["index"] != reply.state["units"]["index"];
             self.error = reply.error;
             self.state = reply.state;
+            self.rectangular_reply(&reply.op, success);
+            self.viewport.reconcile_standard_plane(&self.state);
+            if reply.op == "save" && !success && self.state["save_recovery"].is_object() {
+                self.path = self.state["path"].as_str().unwrap_or_default().into();
+                self.file_input = self.path.clone();
+                self.dirty = true;
+            }
             self.viewport.set_scenes(reply.scenes);
             self.viewport.set_references(&self.state);
             if success
@@ -476,6 +679,7 @@ impl Editor {
                     "new" | "open" | "close" => {
                         self.dirty = false;
                         self.reset_document_interaction();
+                        self.viewport.clear_standard_plane();
                         self.viewport.fit();
                         if reply.op != "open" {
                             self.path.clear();
@@ -483,6 +687,10 @@ impl Editor {
                         } else if !self.file_input.is_empty() {
                             self.path = self.file_input.clone();
                         }
+                    }
+                    "document_settings" => {
+                        self.dirty |= units_changed;
+                        self.units_ui = units::UnitsUi::default();
                     }
                     "save" => {
                         self.dirty = false;
@@ -493,8 +701,8 @@ impl Editor {
                 if reply.op == "preview"
                     && let Some(d) = &mut self.draft
                 {
-                    d.valid = self.error.is_none();
-                    if d.id == "native.properties" {
+                    if d.id != rectangular_extrude::ID { d.valid = self.error.is_none() && d.changed.is_none(); }
+                    if d.id == "native.properties" && d.changed.is_none() {
                         self.sync_native_schema();
                         if let Some(draft) = &mut self.draft {
                             self.transform_ui.sync(&mut draft.parameters, &self.state);
@@ -515,6 +723,11 @@ impl Editor {
                 if success {
                     self.draft = None;
                 } else if let Some(d) = &mut self.draft {
+                    if d.id == "native.drawing" {
+                        self.error = Some(
+                            "The drawing change could not be applied. Cancel and try again.".into(),
+                        );
+                    }
                     d.committing = false;
                 }
             }
@@ -541,15 +754,34 @@ impl Editor {
         self.start_native_feature(match id {
             "feature.pad" => "PartDesign::Pad",
             "feature.pocket" => "PartDesign::Pocket",
+            "feature.revolution" => "PartDesign::Revolution",
             "feature.fillet" => "PartDesign::Fillet",
             other => other,
         });
     }
     fn preview(&mut self) {
+        if self.select_rectangular_route() { return; }
+        if self.rectangular_active() && self.rectangular_quantity_request() { return; }
+        if !self.rectangular_validate(false) { return; }
+        if self
+            .draft
+            .as_ref()
+            .is_some_and(|d| d.id == "native.drawing")
+        {
+            return;
+        }
+        if self.package_quantities(true) {
+            return;
+        }
         if let Some(draft) = &self.draft
             && let Some(type_id) = self.transform_ui.schema_request(&draft.parameters)
         {
-            self.send("feature_schema", json!({"type":type_id}));
+            let values = draft.parameters["transformations"]
+                .as_array()
+                .and_then(|steps| steps.iter().find(|step| step["type"] == type_id))
+                .map(|step| step["properties"].clone())
+                .unwrap_or_default();
+            self.send("feature_schema", json!({"type":type_id,"values":values}));
             return;
         }
         if self.transform_ui.awaiting_schema() {
@@ -559,12 +791,17 @@ impl Editor {
             return;
         };
         d.changed = None;
-        let edits = feature_edits(&self.registry, d);
+        d.valid = false;
+        let edits = feature_edits(&self.registry, d, &self.property_ui.schema);
         match edits {
             Ok(edits) => {
                 if d.deferred {
+                    if d.id == rectangular_extrude::ID { d.parameters["accepted_inputs"] = rectangular_extrude::rectangular_inputs(&d.parameters); }
                     d.valid = true;
                     return;
+                }
+                if d.id == rectangular_extrude::ID {
+                    d.parameters["sent_inputs"] = rectangular_extrude::rectangular_inputs(&d.parameters);
                 }
                 let params = json!({"label":d.name,"token":d.token,"edits":edits});
                 self.send("preview", params);
@@ -637,6 +874,7 @@ impl Editor {
                 parameters.insert("index".into(), snapshot["sketch"]["geometry_count"].clone());
             }
         }
+        self.units_ui.fields.clear();
         self.draft = Some(Draft {
             id: id.into(),
             name: package.label.clone(),
@@ -650,6 +888,7 @@ impl Editor {
         });
         self.sketch_ui.tool = Draw::Select;
         self.sketch_ui.clear_points();
+        self.package_quantities(false);
     }
     fn file_dialog(&mut self, save: bool) {
         self.file_input = self.path.clone();
@@ -673,6 +912,15 @@ impl Editor {
         }
     }
     fn finish_preview(&mut self, commit: bool) {
+        if commit && !self.rectangular_validate(true) { return; }
+        if self
+            .draft
+            .as_ref()
+            .is_some_and(|d| d.id == "native.drawing")
+        {
+            self.finish_drawing(commit);
+            return;
+        }
         if let Some(d) = &mut self.draft
             && d.deferred
         {
@@ -680,7 +928,7 @@ impl Editor {
                 self.draft = None;
                 return;
             }
-            let edits = feature_edits(&self.registry, d);
+            let edits = feature_edits(&self.registry, d, &self.property_ui.schema);
             match edits {
                 Ok(edits) => {
                     d.committing = true;
@@ -733,10 +981,38 @@ impl Editor {
                     self.send("close", json!({}));
                 }
             }
+            FileAction::RecoverDependent {
+                index,
+                owner_revision,
+                revision,
+                remove_references,
+            } => {
+                let owner = &self.state["close_dependents"][index];
+                if self.unavailable()
+                    && self.state["revision"].as_u64() == Some(owner_revision)
+                    && owner["revision"].as_u64() == Some(revision)
+                {
+                    self.send(
+                        if remove_references {
+                            "remove_dependent_references"
+                        } else {
+                            "close_dependent"
+                        },
+                        json!({
+                            "document":owner["document"], "expected_revision":revision,
+                            "edits":owner["reference_removals"]
+                        }),
+                    );
+                } else {
+                    self.error = Some(
+                        "Recovery dependent changed; inspect the unavailable document again".into(),
+                    );
+                }
+            }
         }
     }
 
-    fn toolbar(&mut self, ctx: &egui::Context) {
+    fn toolbar(&mut self, ctx: &egui::Context, was_busy: bool) {
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
@@ -745,11 +1021,13 @@ impl Editor {
                         .color(Color32::from_rgb(110, 182, 177)),
                 );
                 ui.separator();
-                let idle = self.sketch_ui.task.is_none()
+                self.workspace_units_controls(ui);
+                let idle = !self.units_ui.active()
+                    && self.sketch_ui.task.is_none()
                     && self.sketch_ui.drag.is_none()
                     && self.sketch_ui.dimension.is_none()
                     && !self.busy
-                    && !self.unavailable()
+                    && (!self.unavailable() || self.source_recovery())
                     && self.draft.is_none()
                     && self.sketch_creation.is_none()
                     && self.pending_file.is_none()
@@ -758,10 +1036,18 @@ impl Editor {
                     && !self.exchange_ui.active()
                     && !self.file_browser.active();
                 ui.add_enabled_ui(idle, |ui| {
-                    if self.sketch_ui.session.is_none() && ui.button("New").clicked() {
+                    if self.sketch_ui.session.is_none()
+                        && ui
+                            .add_enabled(!self.unavailable(), egui::Button::new("New"))
+                            .clicked()
+                    {
                         self.request_file(FileAction::New);
                     }
-                    if self.sketch_ui.session.is_none() && ui.button("Open").clicked() {
+                    if self.sketch_ui.session.is_none()
+                        && ui
+                            .add_enabled(!self.unavailable(), egui::Button::new("Open"))
+                            .clicked()
+                    {
                         self.request_file(FileAction::Open);
                     }
                     if self.sketch_ui.session.is_none() && ui.button("Save").clicked() {
@@ -770,11 +1056,12 @@ impl Editor {
                     if self.sketch_ui.session.is_none() && ui.button("Save as").clicked() {
                         self.file_dialog(true);
                     }
-                    self.exchange_controls(ui);
+                    ui.add_enabled_ui(!self.unavailable(), |ui| self.exchange_controls(ui));
                     ui.separator();
                     if ui
                         .add_enabled(
-                            self.state["undo_count"].as_u64().unwrap_or(0) > 0,
+                            !self.unavailable()
+                                && self.state["undo_count"].as_u64().unwrap_or(0) > 0,
                             egui::Button::new("Undo"),
                         )
                         .clicked()
@@ -783,7 +1070,8 @@ impl Editor {
                     }
                     if ui
                         .add_enabled(
-                            self.state["redo_count"].as_u64().unwrap_or(0) > 0,
+                            !self.unavailable()
+                                && self.state["redo_count"].as_u64().unwrap_or(0) > 0,
                             egui::Button::new("Redo"),
                         )
                         .clicked()
@@ -792,6 +1080,9 @@ impl Editor {
                     }
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if self.units_ui.active() {
+                        ui.disable();
+                    }
                     if ui.button("Fit").clicked() {
                         self.viewport.fit();
                     }
@@ -807,12 +1098,15 @@ impl Editor {
                         workflow_guide::open(ctx);
                     }
                     self.measurement_controls(ui);
+                    self.units_controls(ui);
+                    self.drawing_controls(ui);
                 });
             });
             ui.horizontal_wrapped(|ui| {
                 ui.add_enabled_ui(
-                    !self.busy
-                        && !self.unavailable()
+                    !self.units_ui.active()
+                        && !self.busy
+                        && (!self.unavailable() || self.source_recovery())
                         && self.sketch_ui.drag.is_none()
                         && self.sketch_ui.dimension.is_none()
                         && self.sketch_ui.task.is_none()
@@ -823,6 +1117,10 @@ impl Editor {
                         && !self.exchange_ui.active()
                         && !self.file_browser.active(),
                     |ui| {
+                        if self.source_recovery() {
+                            self.assembly_toolbar(ui);
+                            return;
+                        }
                         if self.sketch_ui.session.is_none() {
                             self.body_toolbar(ui);
                             self.assembly_toolbar(ui);
@@ -839,8 +1137,8 @@ impl Editor {
                                 }
                             });
                         }
-                        if self.sketch.is_some() {
-                            self.sketch_toolbar(ui);
+                        if self.sketch.is_some() && self.sketch_ui.session.is_some() {
+                            self.sketch_toolbar(ui, was_busy);
                         }
                         ui.separator();
                         if ui.button("Extrude").clicked() {
@@ -848,6 +1146,15 @@ impl Editor {
                         }
                         if ui.button("Pocket").clicked() {
                             self.feature_from_sketch("feature.pocket");
+                        }
+                        if ui.button("Revolve").clicked() {
+                            self.feature_from_sketch("feature.revolution");
+                        }
+                        if self.sketch_ui.session.is_none() && ui.button("Plane").clicked() {
+                            let selection = self.viewport.selected.as_ref().map(|s|s.object.clone()).or(self.selected_object.clone());
+                            if let Some(name) = selection.filter(|name| objects(&self.state).iter().any(|o|o["name"]==*name && matches!(o["type"].as_str(),Some("App::Plane" | "PartDesign::Plane")))) {
+                                self.start_offset_plane(&name);
+                            } else { self.start_native_feature("PartDesign::Plane"); }
                         }
                         if self.sketch_ui.session.is_none() && ui.button("Fillet").clicked() {
                             self.start_feature("feature.fillet");
@@ -879,8 +1186,19 @@ impl Editor {
     }
 
     fn panels(&mut self, ctx: &egui::Context) {
-        self.body_tree(ctx);
-        self.sketch_panel(ctx);
+        if self
+            .draft
+            .as_ref()
+            .is_some_and(|d| d.id == "native.drawing")
+        {
+            self.drawing_panel(ctx);
+            return;
+        }
+        if !self.source_recovery() {
+            self.units_dialog(ctx);
+            self.body_tree(ctx);
+            self.sketch_panel(ctx);
+        }
         if self.draft.is_some() {
             let mut commit = false;
             let mut cancel = false;
@@ -906,6 +1224,14 @@ impl Editor {
                             .max_height((ctx.content_rect().height() - 220.).clamp(150., 650.))
                             .show(ui, |ui| self.native_property_fields(ui));
                     }
+                    let rectangular = self.rectangular_active();
+                    if rectangular { self.rectangular_fields(ui); }
+                    let slot_extrude = self.draft.as_ref().is_some_and(|d| {
+                        matches!(d.id.as_str(), "native.slot_extrude" | "native.vertex_edit")
+                    });
+                    if slot_extrude {
+                        self.slot_extrusion_fields(ui);
+                    }
                     let assembly = self
                         .draft
                         .as_ref()
@@ -921,7 +1247,7 @@ impl Editor {
                         self.history_fields(ui);
                     }
                     let draft = self.draft.as_mut().unwrap();
-                    if !boolean && !native && !history && !assembly {
+                    if !boolean && !native && !history && !assembly && !slot_extrude && !rectangular {
                         ui.label(&draft.name);
                     }
                     if draft.deferred {
@@ -932,7 +1258,7 @@ impl Editor {
                         .as_object()
                         .unwrap()
                         .keys()
-                        .filter(|_| !boolean && !native && !history && !assembly)
+                        .filter(|_| !boolean && !native && !history && !assembly && !slot_extrude && !rectangular)
                         .cloned()
                         .collect();
                     ui.add_enabled_ui(!self.busy, |ui| {
@@ -999,6 +1325,15 @@ impl Editor {
                                     if changed {
                                         *current = json!(value);
                                     }
+                                } else if self
+                                    .registry
+                                    .get(&draft.id)
+                                    .and_then(|p| p.parameters.get(&field))
+                                    .is_some_and(|p| p.unit.is_some())
+                                {
+                                    let meta =
+                                        self.units_ui.fields.get(&field).unwrap_or(&Value::Null);
+                                    changed = units::quantity_field(ui, current, meta);
                                 } else if let Some(mut value) = current.as_f64() {
                                     changed = ui
                                         .add(egui::DragValue::new(&mut value).speed(0.2))
@@ -1026,12 +1361,14 @@ impl Editor {
                         }
                     });
                     ui.horizontal(|ui| {
-                        commit = ui
-                            .add_enabled(
-                                !self.busy && draft.valid && draft.changed.is_none(),
-                                egui::Button::new("Apply"),
-                            )
-                            .clicked();
+                        let apply_response = ui.add_enabled(
+                            !self.busy && draft.valid && draft.changed.is_none(),
+                            egui::Button::new("Apply"),
+                        );
+                        #[cfg(test)]
+                        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("convergence_apply_response"),
+                            (apply_response.clone(), ui.clip_rect(), ui.layer_id())));
+                        commit = apply_response.clicked();
                         cancel = ui
                             .add_enabled(!self.busy, egui::Button::new("Cancel"))
                             .clicked();
@@ -1045,16 +1382,212 @@ impl Editor {
         }
     }
 
-    fn canvas(&mut self, ui: &mut egui::Ui) {
+    fn canvas(&mut self, ui: &mut egui::Ui, sketch_input_blocked: bool, guide_input_allowed: bool) {
+        let before_sketch_selection = self.viewport.sketch_selection.clone();
+        let axis_profile_owner = self.property_ui.axis_profile.clone();
+        let axis_profile = axis_profile_owner.as_deref();
+        let collector_input_allowed = !self.unavailable()
+            && !egui::Popup::is_any_open(ui.ctx())
+            && !workflow_guide::active(ui.ctx())
+            && !self.units_ui.active()
+            && !self.measurement_is_open()
+            && self.pending_file.is_none()
+            && self.file_dialog.is_none()
+            && !self.overwrite
+            && !self.exchange_ui.active()
+            && !self.file_browser.active();
+        let axis_active = collector_input_allowed
+            && self.property_ui.axis_pick
+            && self.draft.as_ref().is_some_and(|draft| {
+                draft.parameters["type"] == "PartDesign::Revolution"
+                    && draft.parameters["properties"]["Profile"]["link"].as_str() == axis_profile
+                    && axis_profile.is_some()
+            });
+        if axis_active {
+            let sketch = objects(&self.state)
+                .iter()
+                .find(|o| o["name"].as_str() == axis_profile)
+                .cloned();
+            if !self.viewport.sketch_matches(&sketch) {
+                self.viewport.set_sketch(sketch);
+            }
+        } else if self.property_ui.axis_profile.is_some() {
+            let sketch = self.sketch_snapshot();
+            if !self.viewport.sketch_matches(&sketch) {
+                self.viewport.set_sketch(sketch);
+            }
+        }
         self.viewport.solid_select_in_sketch = self.sketch_ui.external;
         self.viewport.sketch_select_enabled = !self.sketch_ui.external
+            && self.sketch_ui.dimension_tool.is_none()
             && self.sketch_ui.tool == Draw::Select
             && self.sketch_ui.drag.is_none()
             && !self.sketch_ui.trim
             && !self.sketch_ui.split
             && self.sketch_ui.task.is_none();
         let before = self.viewport.selected.clone();
-        self.viewport.ui(ui);
+        let before_picks = self.viewport.selections.clone();
+        self.viewport.view_cube_input_enabled = !sketch_input_blocked && !self.busy;
+        self.viewport.set_sketch_editing(self.sketch_ui.session.is_some() && self.sketch.is_some());
+        let region_active = self.property_ui.region_pick && !self.property_ui.axis_pick
+            && !self.busy && collector_input_allowed && self.draft.is_some();
+        let region_body = self.draft.as_ref().and_then(|d|d.parameters["body"].as_str());
+        self.viewport.set_regions(&self.state, region_body, region_active);
+        let depth = self.extrude_depth_descriptor(collector_input_allowed
+            && !region_active && !axis_active && self.sketch_ui.session.is_none());
+        let depth = depth.or_else(|| self.offset_plane_descriptor(collector_input_allowed
+            && !region_active && !axis_active && self.sketch_ui.session.is_none()));
+        self.viewport.set_depth_handle(depth);
+        let loft_points = self.property_ui.loft_point_pick && collector_input_allowed && !self.busy
+            && self.draft.as_ref().is_some_and(|d| d.parameters["type"] == "Part::Loft");
+        self.viewport.set_loft_origins(&self.state, loft_points);
+        let picked = self.viewport.ui(ui).is_some();
+        if let Some((owner, length)) = self.viewport.take_depth_value() {
+            self.extrude_depth_edit(&owner, length);
+            self.offset_plane_edit(&owner, length);
+        }
+        if region_active && !self.viewport.depth_owns_pointer() && !self.viewport.view_cube_owns_pointer()
+            && self.viewport.response.as_ref().is_some_and(|r|r.clicked()) {
+            if let Some(selection)=ui.input(|i|i.pointer.interact_pos()).and_then(|p|self.viewport.region_hit(p))
+                && let Some(key)=selection.subelement.strip_prefix("Region:") {
+                let source=objects(&self.state).iter().find(|o|o["name"]==selection.object).cloned();
+                if let Some(source)=source {
+                    let name=self.unique("RegionProfile");
+                    let body_id=objects(&self.state).iter().find(|o|o["name"]==source["body"]).map(|o|o["native_id"].clone()).unwrap_or(Value::Null);
+                    if let Some(draft)=&mut self.draft {
+                        let mut keys=if draft.parameters["region_profile"]["source"]==selection.object {
+                            draft.parameters["region_profile"]["regions"].as_array().cloned().unwrap_or_default()
+                        } else {vec![]};
+                        if ui.input(|i|i.modifiers.shift) { if let Some(i)=keys.iter().position(|k|k==key) {keys.remove(i);} else {keys.push(json!(key));} }
+                        else { keys=vec![json!(key)]; }
+                        draft.parameters["properties"]["Profile"]=json!({"link":selection.object});
+                        draft.parameters["region_profile"]=json!({"name":name,"source":selection.object,
+                            "source_id":source["native_id"],"body":source["body"],"body_id":body_id,
+                            "source_token":source["planar_regions"]["source_token"],"regions":keys});
+                        draft.changed=Some(Instant::now()); draft.valid=false;
+                        self.property_ui.axis_profile=Some(selection.object);
+                    }
+                }
+                return;
+            }
+        }
+
+        if guide_input_allowed
+            && ui.is_enabled()
+            && !self.busy
+            && !self.unavailable()
+            && !self.viewport.view_cube_owns_pointer()
+            && !egui::Popup::is_any_open(ui.ctx())
+            && !workflow_guide::active(ui.ctx())
+            && self.draft.as_ref().is_some_and(|d| {
+                matches!(d.id.as_str(), "native.slot_extrude" | "native.vertex_edit")
+                    && d.parameters["mode"] == "Up to vertex"
+            })
+            && self.viewport.response.as_ref().is_some_and(|r| r.clicked())
+            && ui.input(|i| i.modifiers == egui::Modifiers::NONE)
+            && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
+        {
+            let draft = self.draft.as_ref().unwrap();
+            let source = draft.parameters["source"].clone();
+            let body = objects(&self.state)
+                .iter()
+                .find(|o| o["name"] == source)
+                .map(|o| o["body"].clone())
+                .unwrap_or(Value::Null);
+            let hits: Vec<_> = self
+                .viewport
+                .scene_vertices_at(pos)
+                .into_iter()
+                .filter(|hit| {
+                    hit.revision == self.state["revision"].as_u64()
+                        && hit.mapped_name.as_ref().is_some_and(|m| !m.is_empty())
+                        && objects(&self.state).iter().any(|o| {
+                            o["name"] == hit.object
+                                && o["name"] != source
+                                && o["body"] == body
+                                && o["type"] == "Sketcher::SketchObject"
+                                && o["effective_visibility"] == true
+                                && o["native_id"].is_number()
+                        })
+                })
+                .collect();
+            if hits.len() == 1 {
+                let hit = &hits[0];
+                let id = objects(&self.state)
+                    .iter()
+                    .find(|o| o["name"] == hit.object)
+                    .map(|o| o["native_id"].clone())
+                    .unwrap_or(Value::Null);
+                let draft = self.draft.as_mut().unwrap();
+                draft.parameters["target"] = json!(hit.object);
+                draft.parameters["target_id"] = id;
+                draft.parameters["vertex"] = json!(hit.subelement);
+                draft.parameters["vertex_map"] = json!(hit.mapped_name);
+                draft.changed = Some(Instant::now());
+                draft.valid = false;
+                self.error = None;
+            } else {
+                self.error = Some(
+                    if hits.is_empty() {
+                        "Choose a visible sketch vertex in the source Body"
+                    } else {
+                        "More than one visible sketch vertex is under the pointer"
+                    }
+                    .into(),
+                );
+            }
+            return;
+        }
+        // A plane followed by a visible sketch vertex is a common two-click
+        // attachment selection. Preserve the first pick without a modifier.
+        if !sketch_input_blocked
+            && !self.busy
+            && self.draft.is_none()
+            && self.sketch_ui.session.is_none()
+            && !self.viewport.view_cube_owns_pointer()
+            && before_picks.len() == 1
+            && objects(&self.state).iter().any(|o| {
+                o["name"] == before_picks[0].object
+                    && matches!(o["type"].as_str(), Some("App::Plane" | "PartDesign::Plane"))
+            })
+            && self.viewport.response.as_ref().is_some_and(|r| r.clicked())
+            && ui.input(|i| i.modifiers == egui::Modifiers::NONE)
+            && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
+        {
+            let hits: Vec<_> = self
+                .viewport
+                .scene_vertices_at(pos)
+                .into_iter()
+                .filter(|hit| {
+                    hit.revision == self.state["revision"].as_u64()
+                        && hit.mapped_name.as_ref().is_some_and(|m| !m.is_empty())
+                        && objects(&self.state).iter().any(|o| {
+                            o["name"] == hit.object
+                                && o["type"] == "Sketcher::SketchObject"
+                                && o["effective_visibility"] == true
+                        })
+                })
+                .collect();
+            if hits.len() == 1 {
+                let vertex = crate::viewport::Selection {
+                    object: hits[0].object.clone(),
+                    subelement: hits[0].subelement.clone(),
+                };
+                self.viewport.selections = vec![before_picks[0].clone(), vertex.clone()];
+                self.viewport.selected = Some(vertex);
+                self.error = None;
+            } else if hits.len() > 1 {
+                self.viewport.selections = before_picks;
+                self.viewport.selected = self.viewport.selections.last().cloned();
+                self.error =
+                    Some("More than one visible sketch vertex is under the pointer".into());
+            }
+        }
+        if axis_active && let Some(profile) = axis_profile {
+            self.viewport
+                .draw_construction_axes(ui.painter(), &self.state, profile);
+        }
+        let cube_owns_pointer = self.viewport.view_cube_owns_pointer();
         if self.viewport.selected != before {
             if !self.measurement_keeps_selection(ui.input(|i| i.modifiers.shift)) {
                 self.body_ui.selected.clear();
@@ -1065,8 +1598,95 @@ impl Editor {
                 .as_ref()
                 .map(|selection| selection.object.clone());
         }
-        if !self.unavailable() {
-            self.sketch_canvas(ui);
+        if axis_active
+            && !cube_owns_pointer
+            && !self.busy
+            && self.draft.is_some()
+            && self.viewport.response.as_ref().is_some_and(|r| r.clicked())
+            && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
+            && let Some(profile) = self.property_ui.axis_profile.clone()
+        {
+            match self
+                .viewport
+                .construction_axis_hit(&self.state, &profile, pos)
+            {
+                Err(error) => {
+                    self.error = Some(error);
+                    return;
+                }
+                Ok(Some(mut axis)) => {
+                    self.property_ui.axis_overlap = self
+                        .viewport
+                        .sketch_axis_hit(pos)
+                        .is_some_and(|hit| hit.point == 0 && matches!(hit.index, -1 | -2));
+                    let helper = self.unique("RevolveAxis");
+                    let body = self.draft.as_ref().unwrap().parameters["body"].clone();
+                    self.error = None;
+                    axis["name"] = json!(helper);
+                    axis["body"] = body;
+                    axis["profile"] = json!(profile);
+                    if let Some(draft) = &mut self.draft {
+                        draft.parameters["construction_axis"] = axis;
+                        draft.changed = Some(Instant::now());
+                        draft.valid = false;
+                        self.property_ui.axis_pick = false;
+                        self.viewport.set_sketch(None);
+                    }
+                    return;
+                }
+                Ok(None) => {}
+            }
+            let Some(hit) = self.viewport.sketch_hit(pos).filter(|hit| hit.point == 0) else {
+                self.error = Some("Choose a visible straight sketch edge in the same Body or a profile axis".into());
+                return;
+            };
+            let subelement = match hit.index {
+                -1 => Some("H_Axis".to_owned()),
+                -2 => Some("V_Axis".to_owned()),
+                _ => None,
+            };
+            if subelement.is_none() {
+                self.error = Some("Choose a native sketch horizontal or vertical axis".into());
+            }
+            if let Some(subelement) = subelement
+                && let Some(draft) = &mut self.draft
+            {
+                self.error = None;
+                self.property_ui.axis_overlap = false;
+                draft
+                    .parameters
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("construction_axis");
+                draft.parameters["properties"]["ReferenceAxis"] =
+                    json!({"link":profile,"subelements":[subelement]});
+                draft.changed = Some(Instant::now());
+                draft.valid = false;
+                self.property_ui.axis_pick = false;
+                self.viewport.set_sketch(None);
+            }
+        }
+        let guide_available = !self.unavailable()
+            && self.state["recovery_only"] != true
+            && self.state["document"].is_string()
+            && objects(&self.state).is_empty()
+            && self.draft.is_none()
+            && self.sketch_ui.session.is_none()
+            && (self.sketch_creation.is_none() || self.awaiting_standard_plane());
+        if let Some(plane) = self.viewport.standard_guides(
+            ui,
+            &self.state,
+            guide_available,
+            guide_input_allowed && !cube_owns_pointer,
+        ) && self.awaiting_standard_plane()
+        {
+            self.choose_standard_plane(plane);
+        }
+        if !self.unavailable() && !cube_owns_pointer {
+            self.sketch_canvas(ui, picked, sketch_input_blocked);
+        }
+        if self.viewport.sketch_selection != before_sketch_selection {
+            self.bind_mirror_selection();
         }
     }
 }
@@ -1076,13 +1696,51 @@ impl eframe::App for Editor {
         self.viewport.destroy_gl();
     }
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let was_busy = self.busy;
+        let shortcut_menu_was_open = shortcut_menu::is_open(ctx);
+        let rename_was_open = rename::is_open(ctx);
+        let shortcut_blocked = rename_was_open
+            || self.busy
+            || egui::Popup::is_any_open(ctx)
+            || self.unavailable()
+            || self.units_ui.active()
+            || self.measurement_is_open()
+            || self.pending_file.is_some()
+            || self.file_dialog.is_some()
+            || self.overwrite
+            || self.exchange_ui.active()
+            || self.file_browser.active()
+            || self.sketch_creation.is_some()
+            || self.draft.is_some()
+            || self.sketch_ui.drag.is_some()
+            || self.sketch_ui.dimension.is_some()
+            || self.sketch_ui.task.is_some();
         self.poll();
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::F1)) {
+        self.inline_line_input(ctx, was_busy);
+        self.viewport.reconcile_standard_plane(&self.state);
+        if self.draft.is_none() && self.property_ui.axis_profile.is_some() {
+            self.property_ui.axis_pick = false;
+            self.property_ui.axis_profile = None;
+            self.viewport.set_sketch(self.sketch_snapshot());
+        }
+        if !rename_was_open && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::F1)) {
             workflow_guide::open(ctx);
         }
         let guide_was_open = workflow_guide::active(ctx);
+        if !was_busy
+            && !shortcut_blocked
+            && !guide_was_open
+            && !ctx.wants_keyboard_input()
+            && self.sketch_ui.session.is_none()
+            && consume_exact_key(ctx, egui::Modifiers::NONE, Key::Space)
+        {
+            self.viewport.clear_selection();
+            self.body_ui.selected.clear();
+            self.selected_object = None;
+        }
+        self.units_ui.workspace_input_blocked = was_busy || self.busy || guide_was_open;
         if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close {
-            if self.unavailable() && !self.busy {
+            if self.unavailable() && !self.source_recovery() && !self.busy {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 self.pending_file = Some(FileAction::Recover);
             } else if self.busy
@@ -1102,13 +1760,31 @@ impl eframe::App for Editor {
         if self.allow_close {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
-        if ctx.input(|i| i.key_pressed(Key::Escape)) {
+        if (workflow_guide::active(ctx) || !self.units_ui.active())
+            && ctx.input(|i| i.key_pressed(Key::Escape))
+        {
             if workflow_guide::active(ctx) {
                 workflow_guide::close(ctx);
                 ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Escape));
+            } else if self.viewport.dismiss_other_menu(ctx) {
+                ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Escape));
+            } else if egui::Popup::is_any_open(ctx) {
+                egui::Popup::close_all(ctx);
+                ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Escape));
             } else if self.measurement_escape() {
                 ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Escape));
-            } else if self.unavailable() {
+            } else if rename::cancel(ctx) {
+                ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Escape));
+            } else if self.cancel_sketch_name(ctx) {
+                ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Escape));
+            } else if self.constraint_name_focused(ctx) {
+                // TextEdit may surrender current focus on Escape before this
+                // update; the previous-frame owner still receives the key.
+            } else if self.inline_line_foreign_focus(ctx) {
+                // The other text field receives Escape in its own widget.
+            } else if self.inline_line_cancel(ctx, was_busy) {
+                ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Escape));
+            } else if self.unavailable() && !self.source_recovery() {
                 self.pending_file = None;
             } else if self.file_browser.active() {
                 self.cancel_file_browser();
@@ -1128,9 +1804,30 @@ impl eframe::App for Editor {
                 self.sketch_escape();
             }
         }
-        self.toolbar(ctx);
+        self.rename_shortcut(ctx, was_busy, shortcut_blocked);
+        self.shortcut_menu(ctx, was_busy, shortcut_blocked || rename::is_open(ctx));
+        if !was_busy
+            && !self.busy
+            && !self.units_ui.active()
+            && !self.measurement_is_open()
+            && self.pending_file.is_none()
+            && self.file_dialog.is_none()
+            && !self.overwrite
+            && !self.exchange_ui.active()
+            && !self.file_browser.active()
+            && !workflow_guide::active(ctx)
+            && !egui::Popup::is_any_open(ctx)
+            && !ctx.wants_keyboard_input()
+            && self.property_ui.axis_profile.is_some()
+            && self.draft.is_some()
+            && consume_exact_key(ctx, egui::Modifiers::NONE, Key::Tab)
+        {
+            self.property_ui.axis_pick = true;
+        }
+        self.sketch_ui.name_input_blocked = shortcut_blocked || workflow_guide::active(ctx);
+        self.toolbar(ctx, was_busy);
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
-            if self.unavailable() {
+            if self.unavailable() && !self.source_recovery() {
                 ui.horizontal(|ui| self.recovery_controls(ui));
             }
             if self.sketch_ui.session.is_some()
@@ -1159,34 +1856,89 @@ impl eframe::App for Editor {
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(Color32::from_rgb(5, 7, 9)))
             .show(ctx, |ui| {
-                ui.add_enabled_ui(!guide_was_open && !workflow_guide::active(ctx), |ui| {
-                    self.canvas(ui)
-                });
+                ui.add_enabled_ui(
+                    !self.units_ui.active()
+                        && !guide_was_open
+                        && !workflow_guide::active(ctx)
+                        && !rename_was_open
+                        && !rename::is_open(ctx)
+                        && !shortcut_menu_was_open
+                        && !shortcut_menu::is_open(ctx),
+                    |ui| {
+                        let guide_input_allowed = !was_busy
+                            && !self.busy
+                            && !guide_was_open
+                            && !workflow_guide::active(ctx)
+                            && !egui::Popup::is_any_open(ctx)
+                            && !self.units_ui.active()
+                            && !self.measurement_is_open()
+                            && self.pending_file.is_none()
+                            && self.file_dialog.is_none()
+                            && !self.overwrite
+                            && !self.exchange_ui.active()
+                            && !self.file_browser.active()
+                            && !ctx.wants_keyboard_input();
+                        self.canvas(ui, shortcut_blocked, guide_input_allowed)
+                    },
+                );
             });
-        if !self.unavailable() && !guide_was_open && !workflow_guide::active(ctx) {
+        if self.source_recovery() && !guide_was_open && !workflow_guide::active(ctx) {
+            self.panels(ctx);
+            self.file_browser_ui(ctx);
+        } else if !self.unavailable() && !guide_was_open && !workflow_guide::active(ctx) {
             if !self.exchange_ui.active() && !self.file_browser.active() {
                 self.panels(ctx);
             }
             self.sketch_creation_dialog(ctx);
             self.exchange_dialog(ctx);
             self.file_browser_ui(ctx);
-            self.sketch_pump(ctx);
+            self.inline_line_ui(ctx, was_busy);
+            self.sketch_pump(ctx, shortcut_blocked || egui::Popup::is_any_open(ctx));
         }
         if !guide_was_open && !workflow_guide::active(ctx) {
-            self.measurement_ui(ctx);
+            self.measurement_ui(ctx, shortcut_blocked || egui::Popup::is_any_open(ctx));
             self.file_action_dialog(ctx);
         }
+        self.rename_dialog(ctx, was_busy);
         workflow_guide::show(ctx);
         let guide_is_open = workflow_guide::active(ctx);
         if guide_was_open || guide_is_open {
             self.sketch_help_input(ctx, !guide_is_open);
         }
+        if !was_busy
+            && !self.busy
+            && !self.units_ui.active()
+            && !self.measurement_is_open()
+            && self.pending_file.is_none()
+            && self.file_dialog.is_none()
+            && !self.overwrite
+            && !self.exchange_ui.active()
+            && !self.file_browser.active()
+            && !guide_was_open
+            && !guide_is_open
+            && !egui::Popup::is_any_open(ctx)
+            && !ctx.wants_keyboard_input()
+            && !self.property_ui.axis_pick
+            && self.draft.as_ref().is_some_and(|d| {
+                d.valid
+                    && d.changed.is_none()
+                    && matches!(
+                        d.parameters["type"].as_str(),
+                        Some("PartDesign::Pad" | "PartDesign::Revolution")
+                    )
+            })
+            && consume_exact_key(ctx, egui::Modifiers::NONE, Key::Enter)
+        {
+            self.finish_preview(true);
+        }
         // Text editors consume their own Undo first. Button focus must not
         // disable application shortcuts, and modals must block document writes.
         if !self.busy
+            && !rename_was_open
+            && !rename::is_open(ctx)
             && !guide_was_open
             && !workflow_guide::active(ctx)
-            && !self.unavailable()
+            && (!self.unavailable() || self.source_recovery())
             && self.draft.is_none()
             && self.sketch_creation.is_none()
             && self.pending_file.is_none()
@@ -1214,6 +1966,50 @@ impl eframe::App for Editor {
                 self.send("redo", json!({}));
             } else if ctx.input_mut(|i| i.consume_key(command, Key::Z)) {
                 self.send("undo", json!({}));
+            } else if !shortcut_blocked
+                && !egui::Popup::is_any_open(ctx)
+                && !ctx.wants_keyboard_input()
+                && self.sketch_ui.session.is_none()
+                && consume_exact_key(ctx, egui::Modifiers::SHIFT, Key::S)
+            {
+                self.new_sketch();
+            } else if !shortcut_blocked
+                && !egui::Popup::is_any_open(ctx)
+                && !ctx.wants_keyboard_input()
+                && consume_exact_key(ctx, egui::Modifiers::SHIFT, Key::E)
+            {
+                self.feature_from_sketch("feature.pad");
+            } else if !shortcut_blocked
+                && !egui::Popup::is_any_open(ctx)
+                && !ctx.wants_keyboard_input()
+                && consume_exact_key(ctx, egui::Modifiers::SHIFT, Key::W)
+            {
+                self.feature_from_sketch("feature.revolution");
+            } else if !shortcut_blocked
+                && !egui::Popup::is_any_open(ctx)
+                && !ctx.wants_keyboard_input()
+                && self.sketch_ui.session.is_some()
+                && consume_exact_key(ctx, egui::Modifiers::NONE, Key::N)
+            {
+                self.viewport.align_sketch();
+            } else if !shortcut_blocked
+                && !egui::Popup::is_any_open(ctx)
+                && !ctx.wants_keyboard_input()
+                && consume_exact_key(ctx, egui::Modifiers::NONE, Key::P)
+            {
+                self.viewport.toggle_planes(&self.state);
+                if !self.viewport.planes_visible() {
+                    let state = &self.state;
+                    let is_plane = |name: &str| {
+                        objects(state).iter().any(|object| {
+                            object["name"] == name && object["reference_display"]["kind"] == "plane"
+                        })
+                    };
+                    if self.selected_object.as_deref().is_some_and(is_plane) {
+                        self.selected_object = None;
+                    }
+                    self.body_ui.selected.retain(|name| !is_plane(name));
+                }
             } else if !ctx.wants_keyboard_input()
                 && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::F))
             {
@@ -1221,7 +2017,7 @@ impl eframe::App for Editor {
             }
         }
         if !self.busy
-            && !self.unavailable()
+            && (!self.unavailable() || self.source_recovery())
             && let Some(changed) = self.draft.as_ref().and_then(|d| d.changed)
         {
             if changed.elapsed() >= Duration::from_millis(150) {

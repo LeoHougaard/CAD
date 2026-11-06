@@ -1,0 +1,11 @@
+{
+  "exit_code": 0,
+  "executable_sha256": "1f57c21f74b64ee5ad7695f43dc298624d8a1414579f1e8095acf86446c05ec8",
+  "executable_unchanged": true,
+  "correction": "create existing harness output parent; no source or compiler changes",
+  "summary": [
+    "",
+    "test result: ok. 392 passed; 0 failed; 175 ignored; 0 measured; 28 filtered out; finished in 15.62s",
+    ""
+  ]
+}

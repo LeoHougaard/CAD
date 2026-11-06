@@ -22,6 +22,10 @@ macro_rules! feature {
 }
 
 static DEFINITIONS: &[FeatureDefinition] = &[
+    feature!("feature.part_mirror", "Mirror part", "Part::Mirroring", "Part", ["Source", "MirrorPlane", "Base", "Normal"]),
+    feature!("feature.new_loft", "New Loft", "Part::Loft", "Part", ["Sections", "Solid", "Ruled", "Closed"]),
+    feature!("feature.helix", "Helix curve", "Part::Helix", "Reference",
+        ["Turns", "LocalCoord", "StartAngle"]),
     feature!(
         "feature.pad",
         "Pad / Extrude",
@@ -905,6 +909,11 @@ pub fn defaults(
         _ => (),
     }
     match definition.type_id {
+        "Part::Loft" => {
+            properties.insert("Solid".into(), json!(true));
+            properties.insert("Ruled".into(), json!(false));
+            properties.insert("Closed".into(), json!(false));
+        }
         "PartDesign::Revolution"
         | "PartDesign::Groove"
         | "PartDesign::AdditiveHelix"

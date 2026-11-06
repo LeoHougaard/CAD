@@ -2,12 +2,14 @@
 
 pub mod assembly_commands;
 pub mod body_commands;
+pub mod document_units;
 #[cfg(feature = "desktop")]
 pub mod editor;
 pub mod extrusion_commands;
 pub mod feature_commands;
 mod gesture_leases;
 pub mod history_commands;
+pub mod hole_commands;
 pub mod measurement_commands;
 pub mod measurement_types;
 pub mod packages;
@@ -20,6 +22,8 @@ pub mod sketch_curve_commands;
 pub mod sketch_dimensions;
 mod sketch_journal;
 pub mod sketch_operation_commands;
+#[cfg(test)]
+mod terminal_recovery_tests;
 pub mod transform_commands;
 #[cfg(feature = "desktop")]
 pub mod viewport;
@@ -30,7 +34,7 @@ use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::time::{Duration, Instant};
 
@@ -63,6 +67,7 @@ pub enum Error {
     WorkerExited(String),
     Timeout(Duration),
     Closed,
+    ClosedAfter(String),
     Remote { code: String, message: String },
 }
 
@@ -75,6 +80,7 @@ impl fmt::Display for Error {
             Self::WorkerExited(message) => write!(f, "worker exited: {message}"),
             Self::Timeout(timeout) => write!(f, "worker response timed out after {timeout:?}"),
             Self::Closed => write!(f, "worker session is closed"),
+            Self::ClosedAfter(reason) => write!(f, "worker session is closed after {reason}"),
             Self::Remote { code, message } => write!(f, "{code}: {message}"),
         }
     }
@@ -110,6 +116,7 @@ pub struct WorkerSession {
     timeout: Duration,
     next_id: u64,
     closed: bool,
+    terminal_failure: Option<String>,
     capabilities: Value,
     journals: sketch_journal::Journals,
     callback_sequence: u64,
@@ -165,6 +172,7 @@ impl WorkerSession {
             timeout: config.response_timeout,
             next_id: 1,
             closed: false,
+            terminal_failure: None,
             capabilities: Value::Null,
             journals: sketch_journal::Journals::default(),
             callback_sequence: 0,
@@ -173,6 +181,12 @@ impl WorkerSession {
         };
         session.capabilities = session.call("capabilities", Map::new())?;
         Ok(session)
+    }
+
+    fn closed_error(&self) -> Error {
+        self.terminal_failure.as_ref().map_or(Error::Closed, |reason| {
+            Error::ClosedAfter(reason.clone())
+        })
     }
 
     pub fn capabilities(&self) -> &Value {
@@ -208,7 +222,7 @@ impl WorkerSession {
     /// Explicit caller IDs are retained. Remote failures remain response values.
     pub fn request(&mut self, mut request: Value) -> Result<Value, Error> {
         if self.closed {
-            return Err(Error::Closed);
+            return Err(self.closed_error());
         }
         let object = request
             .as_object_mut()
@@ -232,8 +246,23 @@ impl WorkerSession {
             .next_id
             .checked_add(1)
             .ok_or_else(|| Error::InvalidRequest("request IDs exhausted".into()))?;
+        let operation = request["op"].as_str().unwrap_or_default().to_owned();
+        let started = Instant::now();
         let result = self.exchange(&request, &id);
-        if result.is_err() {
+        if let Err(error) = &result {
+            let class = match error {
+                Error::Timeout(_) => "timeout",
+                Error::Protocol(_) => "protocol",
+                Error::Io(_) => "I/O",
+                Error::WorkerExited(_) => "worker exit",
+                Error::InvalidRequest(_) => "invalid request",
+                Error::Closed | Error::ClosedAfter(_) => "closed",
+                Error::Remote { .. } => "remote",
+            };
+            self.terminal_failure.get_or_insert_with(|| format!(
+                "{operation} request {id}: {class}, elapsed {}ms: {error}",
+                started.elapsed().as_millis()
+            ));
             self.shutdown();
         }
         result
@@ -340,6 +369,68 @@ impl WorkerSession {
         }
     }
 
+    /// On Windows, close stdin and wait for stdout EOF and the actual child exit.
+    /// Unix refuses this operation without changing the session; Drop retains
+    /// its existing private-process-group cleanup until graceful group lifetime
+    /// ownership is independently implemented and tested there.
+    /// Does not save documents. A timeout or transport error forces cleanup and
+    /// remains an error; a nonzero child status is returned without reinterpretation.
+    pub fn shutdown_gracefully(&mut self, timeout: Duration) -> Result<ExitStatus, Error> {
+        if self.closed {
+            return Err(self.closed_error());
+        }
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .filter(|_| !timeout.is_zero())
+            .ok_or_else(|| {
+                Error::InvalidRequest("shutdown timeout must be positive and finite".into())
+            })?;
+        #[cfg(unix)]
+        {
+            let _ = deadline;
+            Err(Error::InvalidRequest(
+                "graceful process-group shutdown is not supported on Unix".into(),
+            ))
+        }
+        #[cfg(not(unix))]
+        {
+            self.input.take();
+            let mut stdout_closed = false;
+            loop {
+                let status = match self.child.try_wait() {
+                    Ok(status) => status,
+                    Err(error) => {
+                        self.shutdown();
+                        return Err(Error::Io(error));
+                    }
+                };
+                let received = match self.output.try_recv() {
+                    Ok(Ok(_)) => true,
+                    Ok(Err(error)) => {
+                        self.shutdown();
+                        return Err(Error::Io(error));
+                    }
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        stdout_closed = true;
+                        false
+                    }
+                    Err(mpsc::TryRecvError::Empty) => false,
+                };
+                if let Some(status) = status.filter(|_| stdout_closed) {
+                    self.closed = true;
+                    return Ok(status);
+                }
+                if Instant::now() >= deadline {
+                    self.shutdown();
+                    return Err(Error::Timeout(timeout));
+                }
+                if !received {
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+            }
+        }
+    }
+
     /// Stop the child. Does not save native documents implicitly.
     pub fn shutdown(&mut self) {
         if self.closed {
@@ -365,7 +456,10 @@ impl WorkerSession {
 
 impl Drop for WorkerSession {
     fn drop(&mut self) {
+        #[cfg(unix)]
         self.shutdown();
+        #[cfg(not(unix))]
+        let _ = self.shutdown_gracefully(Duration::from_secs(1));
     }
 }
 
@@ -398,6 +492,91 @@ fn validate_response(response: &Value, id: &Value) -> Result<(), Error> {
 mod tests {
     use super::*;
 
+    // Raw decimal spellings captured from native worker responses.  The
+    // fixture writes them directly so its own JSON parser cannot change them.
+    #[test]
+    #[ignore = "transport fixture run only as a child process"]
+    fn native_float_wire_fixture() {
+        for line in io::stdin().lock().lines() {
+            let request: Value = serde_json::from_str(&line.unwrap()).unwrap();
+            println!(
+                "{{\"version\":1,\"id\":{},\"ok\":true,\"result\":{{\"values\":[-99.99999999999999,99.99999999999999,4.04121180963557e-14,-0.0]}}}}",
+                request["id"]
+            );
+            io::stdout().flush().unwrap();
+        }
+    }
+
+    #[test]
+    fn native_wire_float_bits_and_signed_zero_survive_json_roundtrip() {
+        let mut config = WorkerConfig::new(std::env::current_exe().unwrap(), "--quiet");
+        config.args = [
+            "--ignored",
+            "--exact",
+            "tests::native_float_wire_fixture",
+            "--nocapture",
+        ]
+        .map(OsString::from)
+        .to_vec();
+        config.response_timeout = Duration::from_secs(2);
+        let mut worker = WorkerSession::spawn(&config).unwrap();
+        let response = worker.call("native_values", Map::new()).unwrap();
+        let expected = [
+            0xc058_ffff_ffff_ffff_u64,
+            0x4058_ffff_ffff_ffff_u64,
+            0x3d26_c000_0000_0000_u64,
+            0x8000_0000_0000_0000_u64,
+        ];
+        let bits = |v: &Value| {
+            v["values"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|n| n.as_f64().unwrap().to_bits())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(bits(&response), expected);
+        let serialized = serde_json::to_vec(&response).unwrap();
+        let reparsed: Value = serde_json::from_slice(&serialized).unwrap();
+        assert_eq!(bits(&reparsed), expected);
+        worker.shutdown();
+    }
+
+    #[test]
+    fn first_terminal_protocol_reason_survives_later_closed_calls() {
+        let mut worker = session();
+        let pid = worker.child.id();
+        assert!(matches!(worker.call("malformed", Map::new()), Err(Error::Protocol(_))));
+        let Error::ClosedAfter(first) = worker.call("inspect", Map::new()).unwrap_err() else { panic!("missing first cause") };
+        assert!(first.contains("malformed request 2: protocol, elapsed "), "{first}");
+        assert!(first.contains("worker protocol:"), "{first}");
+        let Error::ClosedAfter(second) = worker.call("inspect", Map::new()).unwrap_err() else { panic!("lost first cause") };
+        assert_eq!(first, second);
+        assert_eq!(worker.child.id(), pid);
+        assert!(worker.child.try_wait().unwrap().is_some());
+    }
+
+    #[test]
+    fn first_terminal_timeout_is_retained_without_restarting() {
+        let mut worker = session();
+        worker.timeout = Duration::from_millis(30);
+        assert!(matches!(worker.call("delay", Map::new()), Err(Error::Timeout(_))));
+        let Error::ClosedAfter(reason) = worker.call("inspect", Map::new()).unwrap_err() else { panic!("missing timeout cause") };
+        assert!(reason.contains("delay request 2: timeout, elapsed "), "{reason}");
+        assert!(reason.contains("timed out after 30ms"), "{reason}");
+        assert!(worker.child.try_wait().unwrap().is_some());
+    }
+
+    #[test]
+    fn recoverable_remote_rejection_does_not_latch_a_terminal_reason() {
+        let mut worker = session();
+        assert!(matches!(worker.call("remote_error", Map::new()), Err(Error::Remote { .. })));
+        assert!(worker.terminal_failure.is_none());
+        assert!(worker.call("inspect", Map::new()).is_ok());
+        worker.shutdown();
+        assert!(matches!(worker.call("inspect", Map::new()), Err(Error::Closed)));
+    }
+
     fn session() -> WorkerSession {
         let mut config = WorkerConfig::new(std::env::current_exe().unwrap(), "--quiet");
         config.args = [
@@ -421,6 +600,7 @@ mod tests {
         let mut count = 0;
         let mut sequence = 0;
         let mut fixture_revision = 0;
+        let mut shutdown_config = Value::Null;
         let stdin = io::stdin();
         let mut lines = stdin.lock().lines();
         while let Some(line) = lines.next() {
@@ -564,6 +744,7 @@ mod tests {
                     }
                     response["result"]["callbacks"] = json!(replies);
                 }
+                "shutdown_config" => shutdown_config = request.clone(),
                 "crash" => std::process::exit(17),
                 #[cfg(target_os = "linux")]
                 // This fixture intentionally leaves a live descendant for the
@@ -602,6 +783,169 @@ mod tests {
                 std::thread::sleep(Duration::from_secs(4));
             }
         }
+        if let Some(marker) = shutdown_config["marker"].as_str() {
+            std::fs::write(marker, b"stdin EOF observed").unwrap();
+        }
+        for _ in 0..shutdown_config["lines"].as_u64().unwrap_or(0) {
+            println!("worker shutdown diagnostic");
+        }
+        io::stdout().flush().unwrap();
+        if let Some(ms) = shutdown_config["delay_ms"].as_u64() {
+            std::thread::sleep(Duration::from_millis(ms));
+        }
+        if let Some(code) = shutdown_config["exit_code"].as_i64() {
+            std::process::exit(i32::try_from(code).unwrap());
+        }
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn graceful_shutdown_waits_for_eof_and_reports_child_exit() {
+        let mut worker = session();
+        worker
+            .call(
+                "shutdown_config",
+                json!({"lines": 2048}).as_object().unwrap().clone(),
+            )
+            .unwrap();
+        assert!(
+            worker
+                .shutdown_gracefully(Duration::from_secs(2))
+                .unwrap()
+                .success()
+        );
+        assert!(worker.child.try_wait().unwrap().unwrap().success());
+        assert!(matches!(
+            worker.call("inspect", Map::new()),
+            Err(Error::Closed | Error::ClosedAfter(_))
+        ));
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn graceful_shutdown_preserves_nonzero_exit_status() {
+        let mut worker = session();
+        worker
+            .call(
+                "shutdown_config",
+                json!({"exit_code": 7}).as_object().unwrap().clone(),
+            )
+            .unwrap();
+        assert_eq!(
+            worker
+                .shutdown_gracefully(Duration::from_secs(2))
+                .unwrap()
+                .code(),
+            Some(7)
+        );
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn graceful_shutdown_timeout_forces_child_without_claiming_success() {
+        let mut worker = session();
+        worker
+            .call(
+                "shutdown_config",
+                json!({"delay_ms": 4000}).as_object().unwrap().clone(),
+            )
+            .unwrap();
+        assert!(matches!(
+            worker.shutdown_gracefully(Duration::from_millis(50)),
+            Err(Error::Timeout(_))
+        ));
+        assert!(worker.child.try_wait().unwrap().is_some());
+        assert!(matches!(
+            worker.shutdown_gracefully(Duration::from_secs(1)),
+            Err(Error::Closed | Error::ClosedAfter(_))
+        ));
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn graceful_shutdown_invalid_deadline_leaves_transport_usable() {
+        let mut worker = session();
+        assert!(matches!(
+            worker.shutdown_gracefully(Duration::ZERO),
+            Err(Error::InvalidRequest(_))
+        ));
+        assert!(matches!(
+            worker.shutdown_gracefully(Duration::MAX),
+            Err(Error::InvalidRequest(_))
+        ));
+        assert!(worker.call("inspect", Map::new()).is_ok());
+        worker.shutdown();
+        assert!(matches!(
+            worker.shutdown_gracefully(Duration::from_secs(1)),
+            Err(Error::Closed | Error::ClosedAfter(_))
+        ));
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn healthy_drop_delivers_stdin_eof() {
+        let marker =
+            std::env::temp_dir().join(format!("cad-worker-eof-{}.txt", std::process::id()));
+        assert!(!marker.exists());
+        let mut worker = session();
+        worker
+            .call(
+                "shutdown_config",
+                json!({"marker": marker}).as_object().unwrap().clone(),
+            )
+            .unwrap();
+        drop(worker);
+        assert_eq!(std::fs::read(&marker).unwrap(), b"stdin EOF observed");
+        std::fs::remove_file(marker).unwrap();
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    #[ignore = "requires the pinned native runtime and private profile"]
+    fn native_graceful_shutdown_observes_real_eof_and_exit() {
+        let runtime: Value = serde_json::from_slice(
+            &std::fs::read(std::env::var_os("CAD_GRACEFUL_RUNTIME").unwrap()).unwrap(),
+        )
+        .unwrap();
+        let mut config = WorkerConfig::new(
+            runtime["executable"].as_str().unwrap(),
+            runtime["script"].as_str().unwrap(),
+        );
+        config.args = runtime["args"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| OsString::from(v.as_str().unwrap()))
+            .collect();
+        let mut worker = WorkerSession::spawn(&config).unwrap();
+        let state = worker
+            .call(
+                "new",
+                json!({"name":"GracefulUnsaved"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            )
+            .unwrap();
+        assert_eq!(state["document"], "GracefulUnsaved");
+        let status = worker.shutdown_gracefully(Duration::from_secs(10)).unwrap();
+        assert_eq!(status.code(), Some(0));
+        assert!(worker.child.try_wait().unwrap().unwrap().success());
+        assert!(matches!(
+            worker.output.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_graceful_refusal_preserves_the_live_transport() {
+        let mut worker = session();
+        assert!(matches!(
+            worker.shutdown_gracefully(Duration::from_secs(1)),
+            Err(Error::InvalidRequest(_))
+        ));
+        assert!(worker.call("inspect", Map::new()).is_ok());
     }
 
     #[test]
@@ -648,7 +992,7 @@ mod tests {
             );
             assert!(matches!(
                 session.call("inspect", Map::new()),
-                Err(Error::Closed)
+                Err(Error::Closed | Error::ClosedAfter(_))
             ));
         }
     }
@@ -683,7 +1027,7 @@ mod tests {
             );
             assert!(matches!(
                 session.call("inspect", Map::new()),
-                Err(Error::Closed)
+                Err(Error::Closed | Error::ClosedAfter(_))
             ));
             assert!(session.child.try_wait().unwrap().is_some());
         }
@@ -729,7 +1073,7 @@ mod tests {
             );
             assert!(matches!(
                 session.call("inspect", Map::new()),
-                Err(Error::Closed)
+                Err(Error::Closed | Error::ClosedAfter(_))
             ));
             assert!(session.child.try_wait().unwrap().is_some());
         }
@@ -761,7 +1105,7 @@ mod tests {
         assert!(session.child.try_wait().unwrap().is_some());
         assert!(matches!(
             session.call("inspect", Map::new()),
-            Err(Error::Closed)
+            Err(Error::Closed | Error::ClosedAfter(_))
         ));
     }
 
@@ -780,7 +1124,7 @@ mod tests {
         assert!(session.child.try_wait().unwrap().is_some());
         assert!(matches!(
             session.call("inspect", Map::new()),
-            Err(Error::Closed)
+            Err(Error::Closed | Error::ClosedAfter(_))
         ));
     }
 
@@ -794,7 +1138,7 @@ mod tests {
             );
             assert!(matches!(
                 session.call("inspect", Map::new()),
-                Err(Error::Closed)
+                Err(Error::Closed | Error::ClosedAfter(_))
             ));
         }
     }
@@ -816,7 +1160,7 @@ mod tests {
         assert!(session.child.try_wait().unwrap().is_some());
         assert!(matches!(
             session.call("inspect", Map::new()),
-            Err(Error::Closed)
+            Err(Error::Closed | Error::ClosedAfter(_))
         ));
     }
 
@@ -877,7 +1221,7 @@ mod tests {
         assert!(session.child.try_wait().unwrap().is_some());
         assert!(matches!(
             session.call("inspect", Map::new()),
-            Err(Error::Closed)
+            Err(Error::Closed | Error::ClosedAfter(_))
         ));
     }
 }

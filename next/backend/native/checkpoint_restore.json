@@ -1,0 +1,14 @@
+{
+  "platform": "win32",
+  "python": [
+    3,
+    11,
+    14
+  ],
+  "adapter_sha256": "d743f8e6b391326b560256b94410227ede9adc99a3111cd69018631f78a96a59",
+  "runtime": {
+    "bin/FreeCADBase.dll": "b7b57a28f1c0389cdf41013854196a27c29172dc399b44d05d28b575a7a32f13",
+    "bin/FreeCADApp.dll": "efe57703f688cfefe7a6d806e3ea8592ffce516b06874c58597ab7c460780921",
+    "bin/python311.dll": "8743ce33e7477c376df35d2532a647526d3643191c04fc5c1c3730c139a5b240"
+  }
+}

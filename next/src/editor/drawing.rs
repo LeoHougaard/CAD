@@ -9,6 +9,7 @@ pub(super) fn preview(
     tool: Tool,
     points: &[[f64; 3]],
     cursor: Option<[f64; 3]>,
+    state: &serde_json::Value,
 ) {
     if tool == Tool::Select {
         return;
@@ -48,15 +49,33 @@ pub(super) fn preview(
                 path.push(cursor);
             }
         }
-        Tool::Rectangle => {
+        Tool::Rectangle | Tool::CenterRectangle => {
             if let Some(end) = cursor.or_else(|| points.get(1).copied()) {
+                let start = if tool == Tool::CenterRectangle {
+                    [2. * first[0] - end[0], 2. * first[1] - end[1], 0.]
+                } else {
+                    first
+                };
                 path.extend([
-                    first,
-                    [end[0], first[1], 0.],
+                    start,
+                    [end[0], start[1], 0.],
                     end,
-                    [first[0], end[1], 0.],
-                    first,
+                    [start[0], end[1], 0.],
+                    start,
                 ]);
+                rectangle_measurements(painter, viewport, tool, [first, end], state);
+            }
+        }
+        Tool::RegularPolygon { sides, circumscribed } => {
+            if let Some(end) = points.get(1).copied().or(cursor) {
+                if let Ok((mut vertices, _)) = crate::sketch_commands::regular_polygon(first,end,sides,circumscribed) {
+                    vertices.push(vertices[0]);
+                    path = vertices;
+                    painter.line_segment([project(first),project(end)],Stroke::new(0.8_f32,color.gamma_multiply(0.5)));
+                    painter.text(project(end)+Vec2::new(12.,12.),egui::Align2::LEFT_TOP,
+                        format!("{sides} sides | {} | +/-",if circumscribed {"Circumscribed"} else {"Inscribed"}),
+                        egui::FontId::proportional(13.),color);
+                }
             }
         }
         Tool::Circle => {
@@ -81,8 +100,8 @@ pub(super) fn preview(
             }
         }
         Tool::Arc => {
-            if let Some(&middle) = points.get(1) {
-                if let Some(end) = cursor.or_else(|| points.get(2).copied()) {
+            if let Some(&end) = points.get(1) {
+                if let Some(middle) = cursor.or_else(|| points.get(2).copied()) {
                     if let Some(arc) = Arc::through(first, middle, end) {
                         let screen_radius = projected_radius(
                             viewport,
@@ -97,7 +116,7 @@ pub(super) fn preview(
                         path.extend([first, middle, end]);
                     }
                 } else {
-                    path.extend([first, middle]);
+                    path.extend([first, end]);
                 }
             } else if let Some(cursor) = cursor {
                 path.extend([first, cursor]);
@@ -127,6 +146,38 @@ pub(super) fn preview(
         let position: Pos2 = project(*point);
         painter.circle_filled(position, 3., color);
     }
+}
+
+pub(super) fn rectangle_measurements(
+    painter: &egui::Painter,
+    viewport: &Viewport,
+    tool: Tool,
+    points: [[f64; 3]; 2],
+    state: &serde_json::Value,
+) {
+    if !matches!(tool, Tool::Rectangle | Tool::CenterRectangle)
+        || points.iter().flatten().any(|v| !v.is_finite())
+    {
+        return;
+    }
+    let [first, end] = points;
+    let factor = if tool == Tool::CenterRectangle { 2. } else { 1. };
+    let Some(width) = crate::document_units::preview_length(state, factor * (end[0] - first[0]).abs()) else { return; };
+    let Some(height) = crate::document_units::preview_length(state, factor * (end[1] - first[1]).abs()) else { return; };
+    let start = if tool == Tool::CenterRectangle {
+        [2. * first[0] - end[0], 2. * first[1] - end[1], 0.]
+    } else {
+        first
+    };
+    let screen: Vec<_> = [start, [end[0], start[1], 0.], end, [start[0], end[1], 0.]]
+        .into_iter().map(|p| viewport.sketch_screen_point(p)).collect();
+    if screen.iter().any(|p| !p.is_finite()) { return; }
+    let rect = egui::Rect::from_points(&screen);
+    let color = Color32::from_rgb(107, 215, 208);
+    painter.text(rect.center_bottom() + Vec2::new(0., 7.), egui::Align2::CENTER_TOP,
+                 width, egui::FontId::proportional(12.), color);
+    painter.text(rect.left_center() - Vec2::new(9., 0.), egui::Align2::RIGHT_CENTER,
+                 height, egui::FontId::proportional(12.), color);
 }
 
 fn conic_preview(
@@ -463,6 +514,44 @@ impl Arc {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn rectangle_feedback_paints_full_extents_in_current_native_units() {
+        let ctx = egui::Context::default();
+        let state = serde_json::json!({"units":{"preview_length":{"scale":0.5,"unit":"native-unit","decimals":3}}});
+        let before = state.clone();
+        for (tool, expected) in [
+            (Tool::CenterRectangle, ["2.000 native-unit", "3.000 native-unit"]),
+            (Tool::Rectangle, ["1.000 native-unit", "1.500 native-unit"]),
+        ] {
+            let out = ctx.run(egui::RawInput::default(), |ctx| {
+                preview(&ctx.layer_painter(egui::LayerId::background()), &Viewport::default(),
+                        tool, &[[7., 8., 0.]], Some([9., 11., 0.]), &state);
+            });
+            let texts: Vec<_> = out.shapes.iter().filter_map(|shape| match &shape.shape {
+                Shape::Text(text) => Some(text.galley.text().to_owned()), _ => None,
+            }).collect();
+            assert_eq!(texts, expected);
+        }
+        assert_eq!(state, before);
+    }
+
+    #[test]
+    fn rectangle_feedback_does_not_invent_units_or_paint_nonfinite_points() {
+        let ctx = egui::Context::default();
+        for (state, end) in [
+            (serde_json::Value::Null, [9., 11., 0.]),
+            (serde_json::json!({"units":{"preview_length":{"scale":1.,"unit":"mm","decimals":3}}}),
+             [f64::NAN, 11., 0.]),
+        ] {
+            let out = ctx.run(egui::RawInput::default(), |ctx| {
+                rectangle_measurements(&ctx.layer_painter(egui::LayerId::background()),
+                                       &Viewport::default(), Tool::Rectangle,
+                                       [[7., 8., 0.], end], &state);
+            });
+            assert!(!out.shapes.iter().any(|s| matches!(s.shape, Shape::Text(_))));
+        }
+    }
+
     fn close(a: [f64; 3], b: [f64; 3]) {
         assert!((a[0] - b[0]).hypot(a[1] - b[1]) < 1e-8, "{a:?} != {b:?}");
     }

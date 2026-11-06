@@ -38,6 +38,7 @@ impl Harness {
             exchange_ui: exchange::ExchangeUi::default(),
             draft: None,
             measurement_ui: super::super::measurements::MeasurementUi::default(),
+            units_ui: Default::default(),
             sequence: 0,
             error: None,
             status: String::new(),
@@ -386,6 +387,43 @@ fn fresh_rows(state: &Value) -> &Value {
         .find(|o| o["name"] == "Sketch")
         .unwrap()["sketch"]["constraints"]
 }
+
+#[test]
+fn placed_angle_datum_uses_native_creation_result_after_rejection() {
+    // Existing native capture supplies editor state only. This is a wire and
+    // dialog regression, not a reconstruction of the Pixel Receiver sketch.
+    let native = fresh_native();
+    let base = &native["ordinary_base"];
+    let mut h = Harness::new(base);
+    h.editor.begin_dimension_with_rays(
+        "Angle",
+        vec![
+            SketchElement { index: 0, point: 0 },
+            SketchElement { index: 1, point: 0 },
+        ],
+        Some([
+            SketchElement { index: 0, point: 1 },
+            SketchElement { index: 1, point: 1 },
+        ]),
+    );
+    assert_eq!(h.input.try_recv().unwrap().op, "quantities");
+    h.reply("quantities", base, true);
+    for accepted in [false, true] {
+        h.apply("45", false);
+        let job = h.request("transaction");
+        let edits = &job.parameters["edits"];
+        assert_eq!(edits[0]["kind"], "Angle");
+        assert_eq!(
+            &edits[0]["args"].as_array().unwrap()[..4],
+            &[json!(0), json!(1), json!(1), json!(1)]
+        );
+        assert_eq!(edits[1]["index_from"], 0);
+        assert!(edits[1].get("index").is_none());
+        assert_eq!(edits[1]["value"], "45");
+        h.reply("transaction", base, accepted);
+        assert_eq!(h.editor.sketch_ui.dimension.is_none(), accepted);
+    }
+}
 fn fresh_begin(h: &mut Harness, selection: Vec<SketchElement>) {
     h.editor.begin_dimension("Angle", selection);
 }
@@ -715,6 +753,11 @@ fn ordinary_new_dimension_failure_retains_literal_for_retry_or_local_cancel() {
         let mut h = Harness::new(&native["creation_base"]);
         h.editor
             .begin_dimension("Angle", vec![SketchElement { index: 0, point: 0 }]);
+        let seed = h.input.try_recv().unwrap();
+        assert_eq!(seed.op, "quantities");
+        h.editor.busy = false;
+        h.editor
+            .quantity_reply(&json!({"items":[{"input":"10 mm","default_unit":"mm"}]}));
         assert!(h.input.try_recv().is_err());
         h.apply("10 mm", false);
         let request = h.request("transaction");
@@ -816,4 +859,121 @@ fn ordinary_unrelated_replies_and_send_failure_keep_dialog_cancelable() {
     assert_eq!(h.editor.sketch_ui.selected_constraint, Some(4));
     assert_eq!(h.editor.state, native["ordinary_base"]);
     assert!(!h.editor.dirty);
+}
+
+impl Harness {
+    fn first_scale_apply_full_app(&mut self, value: &str, expression: bool) {
+        let edit = self.editor.sketch_ui.dimension.as_mut().unwrap();
+        edit.value = value.into();
+        edit.expression = expression;
+        edit.focus = true;
+        let context = egui::Context::default();
+        for enter in [false, true] {
+            let mut frame = eframe::Frame::_new_kittest();
+            let events = if enter { vec![egui::Event::Key {
+                key:egui::Key::Enter,physical_key:Some(egui::Key::Enter),
+                pressed:true,repeat:false,modifiers:egui::Modifiers::NONE
+            }] } else {vec![]};
+            let _ = context.run(egui::RawInput {
+                screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(1280.,850.))),
+                events,..Default::default()
+            }, |ctx| eframe::App::update(&mut self.editor,ctx,&mut frame));
+        }
+    }
+}
+
+// Contract-only snapshots below exercise the real Editor and request queue.
+// They are modeled inputs, not native/visual application acceptance evidence.
+fn first_scale_state(capable: bool) -> Value {
+    let mut state = data()["baseline"].clone();
+    state["objects"][0]["sketch"]["constraints"] = json!([{
+        "index":0,"type":"Distance","first":0,"first_pos":0,
+        "second":-2000,"second_pos":0,"third":-2000,"third_pos":0,
+        "driving":true,"active":true,"name":"","value":5.0,
+        "quantity":{"input":"5 mm","display":"5 mm"}
+    }]);
+    state["objects"][0]["sketch"]["constraint_count"] = json!(1);
+    state["objects"][0]["sketch"]["first_scale"] = if capable {
+        json!({"constraints":[0],"creators":[]})
+    } else { json!({"constraints":[],"creators":[]}) };
+    state
+}
+
+#[test]
+fn first_scale_existing_dimension_dialog_to_queue_and_failure_recovery() {
+    for capable in [true, false] {
+        let state = first_scale_state(capable);
+        let mut h = Harness::new(&state);
+        h.editor.dimension_at(0);
+        h.first_scale_apply_full_app("2 in", false);
+        let job = h.request("transaction");
+        let edits = job.parameters["edits"].as_array().unwrap();
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0]["first_scale"], if capable {json!(true)} else {Value::Null});
+        assert_eq!(edits[0]["value"], "2 in");
+        assert_eq!(edits[0]["index"], 0);
+        assert_eq!(h.editor.state, state, "Queueing cannot mutate the snapshot");
+        h.reply("transaction", &state, false);
+        assert_eq!(h.editor.state, state);
+        assert!(h.editor.sketch_ui.dimension.is_some());
+        assert!(!h.editor.sketch_ui.dimension.as_ref().unwrap().submitting);
+    }
+}
+
+#[test]
+fn first_scale_dialog_expression_reference_and_stale_target_denials() {
+    let state = first_scale_state(true);
+    let mut h = Harness::new(&state);
+    h.editor.dimension_at(0);
+    h.first_scale_apply_full_app("1 in + 1 in", true);
+    let job = h.request("transaction");
+    assert_eq!(job.parameters["edits"][0]["op"], "expression");
+    assert!(job.parameters["edits"][0].get("first_scale").is_none());
+    let mut reference = state.clone();
+    reference["objects"][0]["sketch"]["constraints"][0]["driving"] = json!(false);
+    let mut h = Harness::new(&reference);
+    h.editor.dimension_at(0);
+    assert!(h.editor.sketch_ui.dimension.is_none());
+    assert!(h.input.try_recv().is_err());
+    let mut h = Harness::new(&state);
+    h.editor.dimension_at(0);
+    h.editor.state["objects"][0]["sketch"]["constraints"][0]["type"] = json!("Radius");
+    let before = h.editor.state.clone();
+    h.first_scale_apply_full_app("2 in", false);
+    assert!(h.input.try_recv().is_err());
+    assert_eq!(h.editor.state, before);
+    assert!(h.editor.error.is_some());
+}
+
+#[test]
+fn first_scale_creator_dialog_uses_same_native_capability_and_symbolic_index() {
+    let mut state = first_scale_state(false);
+    state["objects"][0]["sketch"]["constraints"] = json!([]);
+    state["objects"][0]["sketch"]["constraint_count"] = json!(0);
+    state["objects"][0]["sketch"]["first_scale"]["creators"] =
+        json!([{"kind":"Distance","args":[0]}]);
+    let mut h = Harness::new(&state);
+    h.editor.begin_dimension("Distance", vec![SketchElement {index:0,point:0}]);
+    h.request("quantities");
+    h.reply("quantities", &state, true);
+    h.first_scale_apply_full_app("2 in", false);
+    let job = h.request("transaction");
+    assert_eq!(job.parameters["edits"][1]["index_from"], 0);
+    assert_eq!(job.parameters["edits"][1]["first_scale"], true);
+    assert_eq!(h.editor.state, state);
+}
+
+#[test]
+fn first_scale_full_app_ordinary_radius_and_angle_keep_legacy_requests() {
+    for (kind, value) in [("Radius","3 mm"),("Angle","45 deg")] {
+        let mut state = first_scale_state(false);
+        state["objects"][0]["sketch"]["constraints"][0]["type"] = json!(kind);
+        let mut h = Harness::new(&state);
+        h.editor.dimension_at(0);
+        h.first_scale_apply_full_app(value,false);
+        let job = h.request("transaction");
+        assert!(job.parameters["edits"][0].get("first_scale").is_none());
+        assert_eq!(job.parameters["edits"][0]["value"],value);
+        assert_eq!(h.editor.state,state);
+    }
 }

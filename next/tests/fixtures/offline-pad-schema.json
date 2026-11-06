@@ -1,0 +1,620 @@
+{
+  "expressions": {},
+  "properties": {
+    "AllowMultiFace": true,
+    "AlongSketchNormal": true,
+    "BaseFeature": null,
+    "Direction": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "ExpressionEngine": [],
+    "FuzzyTolerance": -1.0,
+    "Label": "Feature",
+    "Label2": "",
+    "Length": 10.0,
+    "Length2": 10.0,
+    "Midplane": false,
+    "Offset": 0.0,
+    "Offset2": 0.0,
+    "Placement": {
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    "Profile": null,
+    "ReferenceAxis": null,
+    "Refine": true,
+    "Reversed": false,
+    "SideType": "One side",
+    "Suppressed": false,
+    "TaperAngle": 0.0,
+    "TaperAngle2": 0.0,
+    "Type": "Length",
+    "Type2": "Length",
+    "UpToFace": null,
+    "UpToFace2": null,
+    "UpToShape": [],
+    "UpToShape2": [],
+    "UseCustomVector": false,
+    "Visibility": true,
+    "_Body": null,
+    "_ElementMapVersion": ""
+  },
+  "property_metadata": {
+    "AddSubShape": {
+      "documentation": "",
+      "editor_mode": [],
+      "group": "",
+      "hidden": false,
+      "read_only": true,
+      "status": []
+    },
+    "AllowMultiFace": {
+      "documentation": "Allow multiple faces in profile",
+      "editor_mode": [],
+      "group": "SketchBased",
+      "hidden": false,
+      "read_only": false,
+      "status": []
+    },
+    "AlongSketchNormal": {
+      "documentation": "Measure pad length along the sketch normal direction",
+      "editor_mode": [],
+      "group": "Pad",
+      "hidden": false,
+      "read_only": false,
+      "status": [],
+      "task_editable": true
+    },
+    "BaseFeature": {
+      "documentation": "",
+      "editor_mode": [
+        "Hidden"
+      ],
+      "group": "",
+      "hidden": true,
+      "read_only": false,
+      "status": [
+        "Hidden"
+      ]
+    },
+    "Direction": {
+      "documentation": "Pad direction vector",
+      "editor_mode": [],
+      "group": "Pad",
+      "hidden": false,
+      "read_only": false,
+      "status": [],
+      "task_editable": true
+    },
+    "ExpressionEngine": {
+      "documentation": "Property expressions",
+      "editor_mode": [
+        "Hidden"
+      ],
+      "group": "Base",
+      "hidden": true,
+      "read_only": true,
+      "status": [
+        26
+      ]
+    },
+    "FuzzyTolerance": {
+      "documentation": "Fuzzy tolerance:\nIf value > 0: use the value\nIf value = 0: leave default value\nIf value < 0: determine value",
+      "editor_mode": [],
+      "group": "Part Design",
+      "hidden": false,
+      "read_only": false,
+      "status": []
+    },
+    "Label": {
+      "documentation": "User name of the object (UTF8)",
+      "editor_mode": [],
+      "group": "Base",
+      "hidden": false,
+      "read_only": false,
+      "status": [
+        27
+      ]
+    },
+    "Label2": {
+      "documentation": "User description of the object (UTF8)",
+      "editor_mode": [
+        "Hidden"
+      ],
+      "group": "Base",
+      "hidden": true,
+      "read_only": false,
+      "status": [
+        "Output",
+        26
+      ]
+    },
+    "Length": {
+      "documentation": "Pad length",
+      "editor_mode": [],
+      "group": "Side1",
+      "hidden": false,
+      "quantity": {
+        "default_unit": "mm",
+        "display": "10.00 mm",
+        "input": "10 mm",
+        "signature": [
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "value": 10.0
+      },
+      "read_only": false,
+      "status": [],
+      "task_editable": true
+    },
+    "Length2": {
+      "documentation": "Pad length in 2nd direction",
+      "editor_mode": [],
+      "group": "Side2",
+      "hidden": false,
+      "quantity": {
+        "default_unit": "mm",
+        "display": "10.00 mm",
+        "input": "10 mm",
+        "signature": [
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "value": 10.0
+      },
+      "read_only": false,
+      "status": [],
+      "task_editable": true
+    },
+    "Midplane": {
+      "documentation": "Extrude symmetric to sketch face",
+      "editor_mode": [],
+      "group": "SketchBased",
+      "hidden": false,
+      "read_only": false,
+      "status": []
+    },
+    "Offset": {
+      "documentation": "Offset from face in which pad will end",
+      "editor_mode": [],
+      "group": "Side1",
+      "hidden": false,
+      "quantity": {
+        "default_unit": "mm",
+        "display": "0.00 mm",
+        "input": "0 mm",
+        "signature": [
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "value": 0.0
+      },
+      "read_only": false,
+      "status": [],
+      "task_editable": true
+    },
+    "Offset2": {
+      "documentation": "Offset from face in which pad will end on side 2",
+      "editor_mode": [],
+      "group": "Side2",
+      "hidden": false,
+      "quantity": {
+        "default_unit": "mm",
+        "display": "0.00 mm",
+        "input": "0 mm",
+        "signature": [
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "value": 0.0
+      },
+      "read_only": false,
+      "status": [],
+      "task_editable": true
+    },
+    "Placement": {
+      "documentation": "",
+      "editor_mode": [
+        "Hidden"
+      ],
+      "group": "",
+      "hidden": true,
+      "quantity": {
+        "position": [
+          {
+            "default_unit": "mm",
+            "display": "0.00 mm",
+            "input": "0 mm",
+            "signature": [
+              1,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "value": 0.0
+          },
+          {
+            "default_unit": "mm",
+            "display": "0.00 mm",
+            "input": "0 mm",
+            "signature": [
+              1,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "value": 0.0
+          },
+          {
+            "default_unit": "mm",
+            "display": "0.00 mm",
+            "input": "0 mm",
+            "signature": [
+              1,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "value": 0.0
+          }
+        ]
+      },
+      "read_only": false,
+      "status": [
+        "Hidden",
+        23
+      ]
+    },
+    "PreviewShape": {
+      "documentation": "",
+      "editor_mode": [
+        "Hidden"
+      ],
+      "group": "",
+      "hidden": true,
+      "read_only": true,
+      "status": [
+        "Hidden",
+        "Transient",
+        "Output"
+      ]
+    },
+    "Profile": {
+      "documentation": "Reference to sketch",
+      "editor_mode": [],
+      "group": "SketchBased",
+      "hidden": false,
+      "read_only": false,
+      "status": []
+    },
+    "ReferenceAxis": {
+      "documentation": "Reference axis of direction",
+      "editor_mode": [],
+      "group": "Pad",
+      "hidden": false,
+      "read_only": false,
+      "status": [],
+      "task_editable": true
+    },
+    "Refine": {
+      "documentation": "Refine shape (clean up redundant edges) after operations",
+      "editor_mode": [],
+      "group": "Part Design",
+      "hidden": false,
+      "read_only": false,
+      "status": []
+    },
+    "Reversed": {
+      "documentation": "Reverse extrusion direction",
+      "editor_mode": [],
+      "group": "SketchBased",
+      "hidden": false,
+      "read_only": false,
+      "status": []
+    },
+    "Shape": {
+      "documentation": "",
+      "editor_mode": [],
+      "group": "",
+      "hidden": false,
+      "read_only": true,
+      "status": []
+    },
+    "ShapeMaterial": {
+      "documentation": "",
+      "editor_mode": [],
+      "group": "",
+      "hidden": false,
+      "read_only": false,
+      "status": []
+    },
+    "SideType": {
+      "documentation": "Type of sides definition",
+      "editor_mode": [],
+      "enumerations": [
+        "One side",
+        "Two sides",
+        "Symmetric"
+      ],
+      "group": "Pad",
+      "hidden": false,
+      "read_only": false,
+      "status": []
+    },
+    "Suppressed": {
+      "documentation": "Is object suppressed",
+      "editor_mode": [],
+      "group": "Base",
+      "hidden": false,
+      "read_only": false,
+      "status": []
+    },
+    "SuppressedShape": {
+      "documentation": "",
+      "editor_mode": [],
+      "group": "",
+      "hidden": false,
+      "read_only": true,
+      "status": []
+    },
+    "TaperAngle": {
+      "documentation": "Taper angle",
+      "editor_mode": [],
+      "group": "Side1",
+      "hidden": false,
+      "quantity": {
+        "default_unit": "\u00b0",
+        "display": "0.00\u00b0",
+        "input": "0 \u00b0",
+        "signature": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1
+        ],
+        "value": 0.0
+      },
+      "read_only": false,
+      "status": [],
+      "task_editable": true
+    },
+    "TaperAngle2": {
+      "documentation": "Taper angle for 2nd direction",
+      "editor_mode": [],
+      "group": "Side2",
+      "hidden": false,
+      "quantity": {
+        "default_unit": "\u00b0",
+        "display": "0.00\u00b0",
+        "input": "0 \u00b0",
+        "signature": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1
+        ],
+        "value": 0.0
+      },
+      "read_only": false,
+      "status": [],
+      "task_editable": true
+    },
+    "Type": {
+      "documentation": "Pad type for side 1",
+      "editor_mode": [],
+      "enumerations": [
+        "Length",
+        "UpToLast",
+        "UpToFirst",
+        "UpToFace",
+        "?TwoLengths",
+        "UpToShape"
+      ],
+      "group": "Side1",
+      "hidden": false,
+      "read_only": false,
+      "status": []
+    },
+    "Type2": {
+      "documentation": "Pad type for side 2",
+      "editor_mode": [],
+      "enumerations": [
+        "Length",
+        "UpToLast",
+        "UpToFirst",
+        "UpToFace",
+        "?TwoLengths",
+        "UpToShape"
+      ],
+      "group": "Side2",
+      "hidden": false,
+      "read_only": false,
+      "status": [],
+      "task_editable": true
+    },
+    "UpToFace": {
+      "documentation": "Face where pad will end",
+      "editor_mode": [],
+      "group": "Side1",
+      "hidden": false,
+      "read_only": false,
+      "status": [],
+      "task_editable": true
+    },
+    "UpToFace2": {
+      "documentation": "Face where pad will end on side2",
+      "editor_mode": [],
+      "group": "Side2",
+      "hidden": false,
+      "read_only": false,
+      "status": [],
+      "task_editable": true
+    },
+    "UpToShape": {
+      "documentation": "Faces or shape(s) where pad will end",
+      "editor_mode": [],
+      "group": "Side1",
+      "hidden": false,
+      "read_only": false,
+      "status": [],
+      "task_editable": true
+    },
+    "UpToShape2": {
+      "documentation": "Faces or shape(s) where pad will end on side2",
+      "editor_mode": [],
+      "group": "Side2",
+      "hidden": false,
+      "read_only": false,
+      "status": [],
+      "task_editable": true
+    },
+    "UseCustomVector": {
+      "documentation": "Use custom vector for pad direction",
+      "editor_mode": [],
+      "group": "Pad",
+      "hidden": false,
+      "read_only": false,
+      "status": []
+    },
+    "Visibility": {
+      "documentation": "",
+      "editor_mode": [
+        "Hidden"
+      ],
+      "group": "",
+      "hidden": true,
+      "read_only": false,
+      "status": [
+        "Hidden",
+        "Output",
+        "NoModify"
+      ]
+    },
+    "_Body": {
+      "documentation": "",
+      "editor_mode": [
+        "ReadOnly",
+        "Hidden"
+      ],
+      "group": "Base",
+      "hidden": true,
+      "read_only": true,
+      "status": [
+        24,
+        25,
+        26,
+        27
+      ]
+    },
+    "_ElementMapVersion": {
+      "documentation": "",
+      "editor_mode": [
+        "Hidden"
+      ],
+      "group": "Base",
+      "hidden": true,
+      "read_only": true,
+      "status": [
+        25,
+        26,
+        27
+      ]
+    }
+  },
+  "property_types": {
+    "AddSubShape": "Part::PropertyPartShape",
+    "AllowMultiFace": "App::PropertyBool",
+    "AlongSketchNormal": "App::PropertyBool",
+    "BaseFeature": "App::PropertyLink",
+    "Direction": "App::PropertyVector",
+    "ExpressionEngine": "App::PropertyExpressionEngine",
+    "FuzzyTolerance": "App::PropertyFloatConstraint",
+    "Label": "App::PropertyString",
+    "Label2": "App::PropertyString",
+    "Length": "App::PropertyLength",
+    "Length2": "App::PropertyLength",
+    "Midplane": "App::PropertyBool",
+    "Offset": "App::PropertyLength",
+    "Offset2": "App::PropertyLength",
+    "Placement": "App::PropertyPlacement",
+    "PreviewShape": "Part::PropertyPartShape",
+    "Profile": "App::PropertyLinkSub",
+    "ReferenceAxis": "App::PropertyLinkSub",
+    "Refine": "App::PropertyBool",
+    "Reversed": "App::PropertyBool",
+    "Shape": "Part::PropertyPartShape",
+    "ShapeMaterial": "Materials::PropertyMaterial",
+    "SideType": "App::PropertyEnumeration",
+    "Suppressed": "App::PropertyBool",
+    "SuppressedShape": "Part::PropertyPartShape",
+    "TaperAngle": "App::PropertyAngle",
+    "TaperAngle2": "App::PropertyAngle",
+    "Type": "App::PropertyEnumeration",
+    "Type2": "App::PropertyEnumeration",
+    "UpToFace": "App::PropertyLinkSub",
+    "UpToFace2": "App::PropertyLinkSub",
+    "UpToShape": "App::PropertyLinkSubList",
+    "UpToShape2": "App::PropertyLinkSubList",
+    "UseCustomVector": "App::PropertyBool",
+    "Visibility": "App::PropertyBool",
+    "_Body": "App::PropertyLinkHidden",
+    "_ElementMapVersion": "App::PropertyString"
+  },
+  "type": "PartDesign::Pad"
+}

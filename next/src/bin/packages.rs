@@ -41,6 +41,7 @@ fn read_json(argument: String) -> Result<Value, Box<dyn std::error::Error>> {
 
 enum Mode {
     Catalog,
+    Units(Value),
     Seed(Value),
     Properties(Value),
     ExtrusionSchema(Value),
@@ -73,7 +74,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 package_options = true;
                 parameters = serde_json::from_str(&args.next().ok_or("Missing parameters")?)?
             }
-            "--feature-catalog"
+            "--document-units"
+            | "--feature-catalog"
             | "--feature-seed"
             | "--native-properties"
             | "--extrusion-schema"
@@ -86,6 +88,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 mode = Some(match arg.as_str() {
                     "--feature-catalog" => Mode::Catalog,
+                    "--document-units" => Mode::Units(read_json(
+                        args.next()
+                            .ok_or("--document-units requires {state,unit_system}")?,
+                    )?),
                     "--extrusion-schema" => Mode::ExtrusionSchema(read_json(
                         args.next().ok_or("--extrusion-schema requires JSON or -")?,
                     )?),
@@ -116,6 +122,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             "--help" | "-h" => {
                 println!(
+                    "--document-units JSON builds a guarded native document_settings request from {{state,unit_system}}. It never builds a transaction edit."
+                );
+                println!(
                     "--native-assembly JSON builds native Assembly/Link/joint edits from {{state,request}}. Use - for stdin."
                 );
                 println!(
@@ -131,6 +140,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             return Err("Feature compiler modes cannot be mixed with package options".into());
         }
         let result = match mode {
+            Mode::Units(request) => cad_next::document_units::settings(
+                &request["state"],
+                request["unit_system"]
+                    .as_u64()
+                    .ok_or("Choose a native unit index")?,
+            )?,
             Mode::Assembly(request) => {
                 let request: HistoryRequest = serde_json::from_value(request)?;
                 serde_json::to_value(cad_next::assembly_commands::build(

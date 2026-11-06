@@ -10,16 +10,137 @@ use std::{
 
 #[derive(Default)]
 pub(super) struct PropertyUi {
-    schema: Value,
+    pub(super) schema: Value,
     loading: bool,
     filter: String,
     advanced: bool,
     buffers: BTreeMap<String, String>,
     reference: super::profile_references::ProfileReferenceUi,
+    pub(super) region_pick: bool,
+    pub(super) loft_point_pick: bool,
+    pub(super) axis_profile: Option<String>,
+    pub(super) axis_pick: bool,
+    pub(super) axis_overlap: bool,
+}
+
+fn selected_line_slot_candidate(source: &Value) -> bool {
+    let Some(geometry) = source["sketch"]["geometry"].as_array() else {
+        return false;
+    };
+    let normal: Vec<_> = geometry
+        .iter()
+        .filter(|g| g["construction"] == false)
+        .collect();
+    let kinds: Vec<_> = normal.iter().filter_map(|g| g["kind"].as_str()).collect();
+    kinds.len() == normal.len()
+        && kinds.iter().all(|k| matches!(*k, "line" | "arc" | "point"))
+        && kinds.iter().filter(|k| **k == "line").count() == 3
+        && kinds.iter().filter(|k| **k == "arc").count() == 2
 }
 
 impl Editor {
-    fn native_link_selection(&self) -> Vec<(String, String)> {
+    pub(super) fn start_slot_extrusion(&mut self, profile: &str) -> bool {
+        let Some(source) = objects(&self.state).iter().find(|o| o["name"] == profile) else {
+            return false;
+        };
+        if !selected_line_slot_candidate(source) {
+            return false;
+        }
+        let source_id = source["native_id"].clone();
+        let Some(body) = crate::body_commands::body_of(&self.state, profile) else {
+            self.error = Some("The sketch has no native Body".into());
+            return true;
+        };
+        let Some(body_id) = objects(&self.state)
+            .iter()
+            .find(|o| o["name"] == body)
+            .and_then(|o| o["native_id"].as_i64())
+        else {
+            self.error = Some("The source Body identity is unavailable".into());
+            return true;
+        };
+        if !source_id.is_number() {
+            self.error = Some("The sketch identity is unavailable".into());
+            return true;
+        }
+        let new_body = self.unique("Body");
+        let binder = self.unique("ProfileBinder");
+        let plane = self.unique("VertexPlane");
+        let name = self.unique("Pad");
+        self.sequence += 1;
+        self.draft = Some(Draft {
+            id: "native.slot_extrude".into(),
+            name: "Extrude".into(),
+            token: format!("extrude-{}-{}", std::process::id(), self.sequence),
+            parameters: json!({"op":"create_vertex_extrusion","source":profile,
+                "source_id":source_id,"body":body,"body_id":body_id,
+                "target":null,"target_id":null,"vertex":null,"vertex_map":null,
+                "new_body":new_body,"binder":binder,"plane":plane,"name":name,
+                "mode":"Blind","length":25.0}),
+            changed: Some(Instant::now()),
+            valid: false,
+            all_parameters: false,
+            deferred: self.state["redo_count"].as_u64().unwrap_or(0) > 0,
+            committing: false,
+        });
+        self.property_ui = PropertyUi::default();
+        self.sketch = None;
+        self.viewport.set_sketch(None);
+        true
+    }
+
+    pub(super) fn slot_extrusion_fields(&mut self, ui: &mut egui::Ui) {
+        let enabled = !self.busy;
+        let Some(draft) = &mut self.draft else {
+            return;
+        };
+        ui.add_enabled_ui(enabled, |ui| {
+            ui.label("Extrude");
+            ui.horizontal(|ui| {
+                ui.label("Solid");
+                ui.label("New");
+            });
+            let mut mode = draft.parameters["mode"]
+                .as_str()
+                .unwrap_or("Blind")
+                .to_owned();
+            if draft.id == "native.vertex_edit" {
+                ui.label("Up to vertex");
+            } else {
+                egui::ComboBox::from_id_salt("slot_extrude_end")
+                    .selected_text(&mode)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut mode, "Blind".to_owned(), "Blind");
+                        ui.selectable_value(&mut mode, "Up to vertex".to_owned(), "Up to vertex");
+                    });
+            }
+            if draft.parameters["mode"] != mode {
+                draft.parameters["mode"] = json!(mode);
+                for field in ["target", "target_id", "vertex", "vertex_map"] {
+                    draft.parameters[field] = Value::Null;
+                }
+                draft.valid = false;
+                draft.changed = (mode == "Blind").then(Instant::now);
+            }
+            if mode == "Blind" {
+                let mut length = draft.parameters["length"].as_f64().unwrap_or(25.0);
+                if ui
+                    .add(egui::DragValue::new(&mut length).suffix(" mm"))
+                    .changed()
+                {
+                    draft.parameters["length"] = json!(length);
+                    draft.valid = false;
+                    draft.changed = Some(Instant::now());
+                }
+            } else if let Some(target) = draft.parameters["target"].as_str() {
+                ui.label(format!("Vertex of {target}"));
+            } else {
+                ui.label("Select a vertex");
+            }
+        });
+    }
+
+    pub(super) fn native_link_selection(&self) -> Vec<(String, String)> {
         if !self.viewport.selections.is_empty() {
             self.viewport
                 .selections
@@ -41,15 +162,27 @@ impl Editor {
                 .iter()
                 .find(|o| o["name"] == draft.parameters["name"])
         {
-            let reference_profile = draft.parameters.get("reference_choice").is_some();
+            // Keep semantic source links stable when the native preview uses an
+            // associative helper. Only the compiled edit substitutes that helper.
+            let reference_profile = draft.parameters.get("reference_choice").is_some()
+                || draft.parameters.get("region_profile").is_some();
+            let plane_point = draft.parameters.get("plane_point").is_some();
+            let inactive_literals =
+                crate::hole_commands::inactive_literals(object, &draft.parameters);
             if let Some(changes) = draft.parameters["properties"].as_object_mut() {
                 // Native options can lock dependent fields or normalize their
                 // values. Replay the accepted state, not stale form inputs.
                 changes.retain(|property, value| {
+                    if inactive_literals.contains(property) {
+                        return true;
+                    }
                     if !property_commands::writable(object, property) {
                         return false;
                     }
                     if reference_profile && property == "Profile" {
+                        return true;
+                    }
+                    if plane_point && matches!(property.as_str(), "AttachmentSupport" | "MapMode") {
                         return true;
                     }
                     if let Some(native) = object["properties"].get(property) {
@@ -62,6 +195,12 @@ impl Editor {
                         || changes.contains_key(property)
                             && object["expressions"].get(property).is_none()
                 });
+            }
+            if let Some(task) = draft.parameters.get_mut("offset_plane") {
+                if object["plane_offset"].is_object() {
+                    task["magnitude"] = object["plane_offset"]["length"].clone();
+                    task["flipped"] = object["plane_offset"]["flipped"].clone();
+                }
             }
             self.property_ui.schema = object.clone();
         }
@@ -106,18 +245,31 @@ impl Editor {
     }
 
     pub(super) fn start_native_feature(&mut self, type_id: &str) {
+        self.start_native_feature_for_profile(type_id, None);
+    }
+
+    pub(super) fn start_native_feature_for_profile(
+        &mut self,
+        type_id: &str,
+        profile: Option<&str>,
+    ) {
         let Some(definition) = feature_commands::get(type_id) else {
             self.error = Some(format!("Unknown native feature {type_id}"));
             return;
         };
         let name = self.unique(definition.type_id.split("::").last().unwrap_or("Feature"));
-        let selections = self.native_link_selection();
-        let selected = self
-            .tree_selections()
-            .first()
-            .cloned()
-            .or(self.sketch.clone())
-            .or(self.selected_object.clone());
+        let selections = if let Some(profile) = profile {
+            vec![(profile.to_owned(), String::new())]
+        } else {
+            self.native_link_selection()
+        };
+        let selected = profile.map(str::to_owned).or_else(|| {
+            self.tree_selections()
+                .first()
+                .cloned()
+                .or(self.sketch.clone())
+                .or(self.selected_object.clone())
+        });
         let mut body = self.body().or_else(|| {
             selections
                 .first()
@@ -146,6 +298,68 @@ impl Editor {
                 return;
             }
         };
+        let mirror_task = if type_id == "Part::Mirroring" {
+            match super::part_mirror::initial(&self.state, &selections) {
+                Ok(task) => Some(task), Err(error) => { self.error=Some(error); return; }
+            }
+        } else { None };
+        let helix_reference = if type_id == "Part::Helix" {
+            let Some((source, subelement)) = selections.first().filter(|_| selections.len() == 1) else {
+                self.error = Some("Select a cylindrical face or circular edge before Helix".into()); return;
+            };
+            let Some(obj) = objects(&self.state).iter().find(|o| o["name"] == *source) else { return; };
+            let selection = crate::viewport::Selection { object:source.clone(), subelement:subelement.clone() };
+            let Some((mapped, revision)) = self.viewport.scene_subelement_identity(&selection) else {
+                self.error = Some("Selected topology has no current native identity".into()); return;
+            };
+            if Some(revision) != self.state["revision"].as_u64() {
+                self.error = Some("Selected topology is stale".into()); return;
+            }
+            let source_id = match &obj["native_id"] {
+                Value::String(id) => id.clone(), Value::Number(id) => id.to_string(),
+                _ => { self.error = Some("Source identity is unavailable".into()); return; }
+            };
+            Some(json!({"source":source,"source_id":source_id,"subelement":subelement,"mapped_name":mapped,
+                "face_binder":self.unique("HelixFace"),"edge_binder":self.unique("HelixCircle")}))
+        } else { None };
+        let mut plane_point = None;
+        if type_id == "PartDesign::Plane" && selections.len() == 2 {
+            let first = objects(&self.state)
+                .iter()
+                .find(|o| o["name"] == selections[0].0);
+            let second = objects(&self.state)
+                .iter()
+                .find(|o| o["name"] == selections[1].0);
+            if first.is_some_and(|o| {
+                matches!(o["type"].as_str(), Some("App::Plane" | "PartDesign::Plane"))
+            }) && second.is_some_and(|o| o["type"] == "Sketcher::SketchObject")
+                && selections[1].1.starts_with("Vertex")
+            {
+                let selection = crate::viewport::Selection {
+                    object: selections[1].0.clone(),
+                    subelement: selections[1].1.clone(),
+                };
+                let Some((mapped, revision)) = self.viewport.scene_vertex_identity(&selection)
+                else {
+                    self.error =
+                        Some("The selected sketch vertex has no current native identity".into());
+                    return;
+                };
+                if Some(revision) != self.state["revision"].as_u64() || mapped.is_empty() {
+                    self.error = Some("The selected sketch vertex is stale".into());
+                    return;
+                }
+                properties.insert(
+                    "AttachmentSupport".into(),
+                    json!([
+                    {"link":selections[0].0,"subelements":[]},
+                    {"link":selections[1].0,"subelements":[selections[1].1]}]),
+                );
+                properties.insert("MapMode".into(), json!("ParallelPlane"));
+                plane_point = Some(json!({"plane":selections[0].0,"object":selections[1].0,
+                    "subelement":selections[1].1,"mapped_name":mapped,"body":body}));
+            }
+        }
         if definition.preferred_properties.contains(&"Profile")
             && let Some(source) = selected.as_deref().and_then(|name| {
                 objects(&self.state).iter().find(|object| {
@@ -161,6 +375,10 @@ impl Editor {
                 &self.state,
                 reference_name,
             ),
+            axis_profile: (type_id == "PartDesign::Revolution")
+                .then(|| profile.map(str::to_owned))
+                .flatten(),
+            region_pick: definition.preferred_properties.contains(&"Profile"),
             loading: true,
             ..PropertyUi::default()
         };
@@ -176,6 +394,13 @@ impl Editor {
             deferred: self.state["redo_count"].as_u64().unwrap_or(0) > 0,
             committing: false,
         });
+        if let Some(task) = mirror_task { self.draft.as_mut().unwrap().parameters["part_mirror"] = task; }
+        if let Some(reference) = helix_reference {
+            self.draft.as_mut().unwrap().parameters["helix_reference"] = reference;
+        }
+        if let Some(guard) = plane_point {
+            self.draft.as_mut().unwrap().parameters["plane_point"] = guard;
+        }
         if let Some(draft) = &mut self.draft {
             let profile = draft.parameters["properties"]["Profile"].clone();
             self.property_ui
@@ -190,7 +415,7 @@ impl Editor {
         {
             self.transform_ui.begin(&mut draft.parameters, &self.state);
         }
-        self.send("feature_schema", json!({"type":type_id}));
+        self.send("feature_schema", json!({"type":type_id,"values":self.draft.as_ref().map(|d| d.parameters["properties"].clone()).unwrap_or_default()}));
     }
 
     pub(super) fn native_schema_reply(&mut self, schema: Value, success: bool) {
@@ -211,6 +436,33 @@ impl Editor {
         else {
             return;
         };
+        if self.edit_rectangular(&object) { return; }
+        if object["vertex_extrusion"].is_object() {
+            let mut parameters = object["vertex_extrusion"].clone();
+            parameters["op"] = json!("update_vertex_extrusion");
+            parameters["mode"] = json!("Up to vertex");
+            self.sequence += 1;
+            self.property_ui = PropertyUi::default();
+            self.draft = Some(Draft {
+                id: "native.vertex_edit".into(),
+                name: format!("Edit {}", object["label"].as_str().unwrap_or(name)),
+                token: format!("extrude-edit-{}-{}", std::process::id(), self.sequence),
+                parameters,
+                changed: None,
+                valid: false,
+                all_parameters: false,
+                deferred: self.state["redo_count"].as_u64().unwrap_or(0) > 0,
+                committing: false,
+            });
+            self.sketch = None;
+            self.viewport.set_sketch(None);
+            return;
+        }
+        if object["internal_vertex_extrusion"] == true {
+            self.error =
+                Some("This extrusion cannot be edited with its current native references".into());
+            return;
+        }
         self.sequence += 1;
         let body = crate::body_commands::body_of(&self.state, name);
         let tip = body
@@ -254,9 +506,69 @@ impl Editor {
     }
 
     pub(super) fn native_property_fields(&mut self, ui: &mut egui::Ui) {
+        if self.draft.as_ref().is_some_and(|d| d.parameters["type"] == "Part::Mirroring") {
+            self.part_mirror_fields(ui); return;
+        }
+        if self.draft.as_ref().is_some_and(|d| d.parameters["type"] == "Part::Loft") {
+            self.new_loft_fields(ui); return;
+        }
+        if self.draft.as_ref().is_some_and(|d| d.parameters.get("offset_plane").is_some()) {
+            self.offset_plane_fields(ui); return;
+        }
         let selected = self.native_link_selection();
+        let axis_editable = !self.busy && !self.unavailable();
         let draft = self.draft.as_mut().unwrap();
         ui.label(&draft.name);
+        if crate::feature_commands::get(draft.parameters["type"].as_str().unwrap_or("")).is_some_and(|d| d.preferred_properties.contains(&"Profile")) {
+            if ui.selectable_label(self.property_ui.region_pick, "Pick sketch regions").clicked() {
+                self.property_ui.region_pick = !self.property_ui.region_pick;
+                self.property_ui.axis_pick = false;
+            }
+        }
+        if self.property_ui.axis_profile.is_some() {
+            if ui
+                .selectable_label(self.property_ui.axis_pick, "Revolve axis (Tab)")
+                .clicked()
+            {
+                self.property_ui.axis_pick = true;
+                self.property_ui.region_pick = false;
+            }
+            if self.property_ui.axis_pick {
+                ui.label(
+                    "Pick a visible straight sketch edge or the profile's horizontal or vertical axis",
+                );
+            }
+            if let Some(master) = draft.parameters["construction_axis"]["master"].as_str() {
+                ui.label(format!("Axis dependency: construction line in {master}"));
+            }
+            if self.property_ui.axis_overlap {
+                ui.label("Axes overlap here. The construction line is selected.");
+            }
+            if let Some(profile) = &self.property_ui.axis_profile {
+                ui.add_enabled_ui(axis_editable, |ui| {
+                    ui.horizontal(|ui| {
+                        for (label, axis) in
+                            [("Profile H axis", "H_Axis"), ("Profile V axis", "V_Axis")]
+                        {
+                            if ui.button(label).clicked() {
+                                draft
+                                    .parameters
+                                    .as_object_mut()
+                                    .unwrap()
+                                    .remove("construction_axis");
+                                draft.parameters["properties"]["ReferenceAxis"] =
+                                    json!({"link":profile,"subelements":[axis]});
+                                draft.changed = Some(Instant::now());
+                                draft.valid = false;
+                                self.property_ui.axis_pick = false;
+                                self.property_ui.axis_overlap = false;
+                                self.viewport.set_sketch(None);
+                            }
+                        }
+                    });
+                });
+            }
+        }
         if let Some(error) = &self.error {
             ui.colored_label(egui::Color32::from_rgb(225, 142, 138), error);
         }
@@ -268,6 +580,18 @@ impl Editor {
             ui.weak("Native property schema unavailable");
             return;
         }
+        if let Some(point) = draft.parameters.get("plane_point") {
+            ui.label("Plane point");
+            ui.label(format!(
+                "Plane: {}",
+                point["plane"].as_str().unwrap_or_default()
+            ));
+            ui.label(format!(
+                "Vertex: {}",
+                point["object"].as_str().unwrap_or_default()
+            ));
+            return;
+        }
         ui.horizontal(|ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut self.property_ui.filter)
@@ -276,8 +600,10 @@ impl Editor {
             );
             ui.checkbox(&mut self.property_ui.advanced, "All properties");
         });
-        let task_schema =
-            crate::extrusion_commands::task_schema(&self.property_ui.schema, &draft.parameters);
+        let task_schema = crate::hole_commands::task_schema(
+            &crate::extrusion_commands::task_schema(&self.property_ui.schema, &draft.parameters),
+            &draft.parameters,
+        );
         let schema = &task_schema;
         let extrusion = crate::extrusion_commands::supported(
             draft.parameters["type"].as_str().unwrap_or_default(),
@@ -339,6 +665,9 @@ impl Editor {
                         {
                             continue;
                         }
+                        if draft.parameters["type"] == "Part::Helix" && filter.is_empty()
+                            && !self.property_ui.advanced && !preferred.contains(&property.as_str())
+                        { continue; }
                         if filter.is_empty() && !self.property_ui.advanced && (hidden || !writable)
                         {
                             continue;
@@ -347,6 +676,8 @@ impl Editor {
                             .get(&property)
                             .cloned()
                             .unwrap_or_else(|| schema["properties"][&property].clone());
+                        let mut draft_angle = crate::extrusion_commands::draft_angle(
+                            &draft.parameters, schema, &property);
                         let mut expression = draft.parameters["expressions"]
                             .get(&property)
                             .cloned()
@@ -373,7 +704,15 @@ impl Editor {
                             }
                             ui.horizontal(|ui| {
                                 ui.add_enabled_ui(!expression.is_string(), |ui| {
-                                    if let Some(base) = &edge_base {
+                                    if let Some(angle) = &mut draft_angle {
+                                        ui.label("Draft magnitude");
+                                        // Native schema text is signed; the task value is a magnitude.
+                                        let quantity = json!({"default_unit":metadata["quantity"]["default_unit"]});
+                                        value_changed = super::units::quantity_field(ui, &mut angle["magnitude"], &quantity);
+                                        let mut inward = angle["inward"].as_bool().unwrap_or(false);
+                                        value_changed |= ui.checkbox(&mut inward, "Inward").changed();
+                                        angle["inward"] = json!(inward);
+                                    } else if let Some(base) = &edge_base {
                                         let before = value.clone();
                                         fillet_edges_widget(
                                             ui,
@@ -381,6 +720,8 @@ impl Editor {
                                             &selected,
                                             base,
                                             native_objects,
+                                            &metadata["quantity"],
+                                            &metadata["quantity_default"],
                                         );
                                         value_changed = value != before;
                                     } else {
@@ -501,11 +842,21 @@ impl Editor {
                             ui.separator();
                         });
                         if value_changed {
-                            draft.parameters["properties"][&property] = value;
+                            crate::hole_commands::remember_literal(
+                                schema,
+                                &mut draft.parameters,
+                                &property,
+                            );
+                            if let Some(angle) = draft_angle {
+                                draft.parameters["draft_angles"][&property] = angle;
+                            } else {
+                                draft.parameters["properties"][&property] = value;
+                            }
                             changed = true;
                         }
                         if expression_changed {
                             draft.parameters["expressions"][&property] = expression;
+                            crate::extrusion_commands::relinquish_draft_angle(&mut draft.parameters, &property);
                             changed = true;
                         }
                     }
@@ -533,6 +884,7 @@ impl Editor {
                                 .clicked()
                             {
                                 draft.parameters["expressions"][&path] = json!(expr);
+                                crate::extrusion_commands::relinquish_draft_angle(&mut draft.parameters, &path);
                                 changed = true;
                             }
                             if ui
@@ -543,6 +895,7 @@ impl Editor {
                                 .clicked()
                             {
                                 draft.parameters["expressions"][&path] = Value::Null;
+                                crate::extrusion_commands::relinquish_draft_angle(&mut draft.parameters, &path);
                                 changed = true;
                             }
                         });
@@ -568,9 +921,10 @@ impl Editor {
     }
 }
 
-fn display(value: &Value) -> String {
-    value
+pub(super) fn display(value: &Value) -> String {
+    value["quantity_input"]
         .as_str()
+        .or_else(|| value.as_str())
         .map(str::to_owned)
         .unwrap_or_else(|| value.to_string())
 }
@@ -631,16 +985,28 @@ fn property_widget_with_selection(
     own: &str,
     selections: Result<&[(String, String)], &str>,
 ) -> bool {
+    #[cfg(test)]
+    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("convergence_property_scope"), property.to_owned()));
     let selected = selections.unwrap_or_default();
     let before = value.clone();
     let kind = type_id.strip_prefix("App::Property").unwrap_or_default();
-    if type_id == "Part::PropertyFilletEdges" {
+    if metadata["quantity"].get("signature").is_some() {
+        super::units::quantity_field(ui, value, &metadata["quantity"]);
+    } else if type_id == "Part::PropertyFilletEdges" {
         let base = objects
             .iter()
             .find(|object| object["name"] == own)
             .map(|object| &object["properties"]["Base"])
             .unwrap_or(&Value::Null);
-        fillet_edges_widget(ui, value, selected, base, objects);
+        fillet_edges_widget(
+            ui,
+            value,
+            selected,
+            base,
+            objects,
+            &metadata["quantity"],
+            &metadata["quantity_default"],
+        );
     } else if kind == "Map" {
         map_widget(ui, value);
     } else if kind == "Color" {
@@ -744,12 +1110,18 @@ fn property_widget_with_selection(
         if (selections.is_err() || !selected.is_empty()) && selection.is_err() {
             ui.colored_label(egui::Color32::from_rgb(225, 142, 138), reason);
         }
-    } else if matches!(kind, "Vector" | "VectorDistance" | "Position") {
+    } else if matches!(kind, "VectorDistance" | "Position") {
+        physical_vector(ui, value, &metadata["quantity"]);
+    } else if kind == "Vector" {
         vector_widget(ui, value, 3);
     } else if kind == "Placement" {
         ui.vertical(|ui| {
             ui.label("Position");
-            vector_widget(ui, &mut value["position"], 3);
+            physical_vector(
+                ui,
+                &mut value["position"],
+                &metadata["quantity"]["position"],
+            );
             ui.label("Rotation quaternion x, y, z, w");
             vector_widget(ui, &mut value["rotation"], 4);
         });
@@ -779,6 +1151,8 @@ fn property_widget_with_selection(
             *value = json!(text);
         }
     }
+    #[cfg(test)]
+    ui.ctx().data_mut(|d| d.remove::<String>(egui::Id::new("convergence_property_scope")));
     before != *value
 }
 
@@ -789,7 +1163,7 @@ fn link_widget(ui: &mut egui::Ui, value: &mut Value, sub: bool, objects: &[Value
         .find(|o| o["name"] == name)
         .and_then(|o| o["label"].as_str())
         .unwrap_or(name);
-    egui::ComboBox::from_id_salt("link")
+    let _link_response = egui::ComboBox::from_id_salt("link")
         .selected_text(if label.is_empty() { "None" } else { label })
         .width(150.)
         .show_ui(ui, |ui| {
@@ -811,6 +1185,11 @@ fn link_widget(ui: &mut egui::Ui, value: &mut Value, sub: bool, objects: &[Value
                 }
             }
         });
+    #[cfg(test)]
+    if ui.ctx().data(|d| d.get_temp::<String>(egui::Id::new("convergence_property_scope"))).as_deref() == Some("Profile") {
+        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("convergence_profile_response"),
+            (_link_response.response.clone(), ui.clip_rect(), ui.layer_id(), value.clone())));
+    }
     if sub && !value.is_null() {
         let id = ui.make_persistent_id("subelement_text");
         let canonical = value["subelements"]
@@ -845,6 +1224,16 @@ fn link_widget(ui: &mut egui::Ui, value: &mut Value, sub: bool, objects: &[Value
         }
     }
 }
+fn physical_vector(ui: &mut egui::Ui, value: &mut Value, metadata: &Value) {
+    ui.horizontal(|ui| {
+        for i in 0..3 {
+            ui.push_id(i, |ui| {
+                super::units::quantity_field(ui, &mut value[i], &metadata[i]);
+            });
+        }
+    });
+}
+
 fn vector_widget(ui: &mut egui::Ui, value: &mut Value, count: usize) {
     let mut v = (0..count)
         .map(|i| value[i].as_f64().unwrap_or(if i == 3 { 1. } else { 0. }))
@@ -1025,6 +1414,8 @@ fn fillet_edges_widget(
     selected: &[(String, String)],
     base: &Value,
     objects: &[Value],
+    metadata: &Value,
+    default: &Value,
 ) {
     let mut edges = value.as_array().cloned().unwrap_or_default();
     let mut changed = false;
@@ -1043,14 +1434,28 @@ fn fillet_edges_widget(
                         changed = true;
                     }
                     for i in 1..3 {
-                        let mut radius = edge[i].as_f64().unwrap_or(1.);
-                        if ui
-                            .add(egui::DragValue::new(&mut radius).speed(0.1))
-                            .changed()
-                        {
-                            edge[i] = json!(radius);
-                            changed = true;
-                        }
+                        ui.push_id(i, |ui| {
+                            // Add/selection/removal can replace or move a row
+                            // before native preview refreshes its metadata.
+                            // Match unchanged numbers to native quantities by
+                            // value; new rows use the native default quantity.
+                            let quantity = if edge[i].is_number() {
+                                metadata
+                                    .as_array()
+                                    .into_iter()
+                                    .flatten()
+                                    .filter_map(Value::as_array)
+                                    .flatten()
+                                    .find(|q| q["value"] == edge[i])
+                                    .unwrap_or(default)
+                            } else {
+                                metadata
+                                    .get(index)
+                                    .and_then(|row| row.get(i))
+                                    .unwrap_or(default)
+                            };
+                            changed |= super::units::quantity_field(ui, &mut edge[i], quantity);
+                        });
                     }
                     if ui.small_button("Remove").clicked() {
                         remove = Some(index);
@@ -1088,6 +1493,26 @@ fn fillet_edges_widget(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slot_route_accepts_reordered_curves_and_optional_points() {
+        let mut geometry = vec![
+            json!({"kind":"line","construction":false}),
+            json!({"kind":"arc","construction":false}),
+            json!({"kind":"line","construction":false}),
+            json!({"kind":"arc","construction":false}),
+            json!({"kind":"line","construction":false}),
+        ];
+        let source = |geometry: &[Value]| json!({"sketch":{"geometry":geometry}});
+        assert!(selected_line_slot_candidate(&source(&geometry)));
+        geometry.push(json!({"kind":"point","construction":false}));
+        geometry.push(json!({"kind":"point","construction":false}));
+        geometry.push(json!({"kind":"circle","construction":true}));
+        geometry.reverse();
+        assert!(selected_line_slot_candidate(&source(&geometry)));
+        geometry.push(json!({"kind":"circle","construction":false}));
+        assert!(!selected_line_slot_candidate(&source(&geometry)));
+    }
 
     fn picks(values: &[(&str, &str)]) -> Vec<(String, String)> {
         values
@@ -1164,7 +1589,15 @@ mod tests {
         let selected = picks(&[("Other", "Edge7")]);
         let output = context.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                fillet_edges_widget(ui, &mut value, &selected, &base, &[]);
+                fillet_edges_widget(
+                    ui,
+                    &mut value,
+                    &selected,
+                    &base,
+                    &[],
+                    &Value::Null,
+                    &Value::Null,
+                );
             });
         });
         assert_eq!(value, original);

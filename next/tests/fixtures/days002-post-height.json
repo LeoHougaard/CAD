@@ -1,0 +1,4061 @@
+{
+  "document_uid": "89c2e5d3-0cd3-41a0-9ca9-029a4bcdd06d",
+  "drawing": {
+    "document_uid": "89c2e5d3-0cd3-41a0-9ca9-029a4bcdd06d",
+    "objects": []
+  },
+  "document": "PartStudio1",
+  "path": "",
+  "save_recovery": null,
+  "recovery_only": false,
+  "revision": 10,
+  "objects": [
+    {
+      "name": "Body3",
+      "native_id": 4968,
+      "type": "PartDesign::Body",
+      "label": "Body3",
+      "effective_visibility": true,
+      "valid": true,
+      "status": "Valid",
+      "state": [
+        "Up-to-date"
+      ],
+      "properties": {
+        "AllowCompound": true,
+        "BaseFeature": null,
+        "ExpressionEngine": [],
+        "Group": [
+          {
+            "link": "Sketch2"
+          }
+        ],
+        "Label": "Body3",
+        "Label2": "",
+        "Origin": {
+          "link": "Origin"
+        },
+        "Placement": {
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "Tip": null,
+        "Visibility": true,
+        "_ElementMapVersion": "15.70200.5",
+        "_GroupTouched": false
+      },
+      "property_types": {
+        "AllowCompound": "App::PropertyBool",
+        "BaseFeature": "App::PropertyLink",
+        "ExpressionEngine": "App::PropertyExpressionEngine",
+        "Group": "App::PropertyLinkList",
+        "Label": "App::PropertyString",
+        "Label2": "App::PropertyString",
+        "Origin": "App::PropertyLink",
+        "Placement": "App::PropertyPlacement",
+        "Shape": "Part::PropertyPartShape",
+        "ShapeMaterial": "Materials::PropertyMaterial",
+        "Tip": "App::PropertyLink",
+        "Visibility": "App::PropertyBool",
+        "_ElementMapVersion": "App::PropertyString",
+        "_GroupTouched": "App::PropertyBool"
+      },
+      "property_metadata": {
+        "AllowCompound": {
+          "group": "Base",
+          "documentation": "Allow multiple solids in Body",
+          "status": [],
+          "read_only": false,
+          "hidden": false,
+          "editor_mode": []
+        },
+        "BaseFeature": {
+          "group": "",
+          "documentation": "",
+          "status": [],
+          "read_only": false,
+          "hidden": false,
+          "editor_mode": []
+        },
+        "ExpressionEngine": {
+          "group": "Base",
+          "documentation": "Property expressions",
+          "status": [
+            26
+          ],
+          "read_only": true,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        },
+        "Group": {
+          "group": "Base",
+          "documentation": "List of referenced objects",
+          "status": [],
+          "read_only": false,
+          "hidden": false,
+          "editor_mode": []
+        },
+        "Label": {
+          "group": "Base",
+          "documentation": "User name of the object (UTF8)",
+          "status": [
+            27
+          ],
+          "read_only": false,
+          "hidden": false,
+          "editor_mode": []
+        },
+        "Label2": {
+          "group": "Base",
+          "documentation": "User description of the object (UTF8)",
+          "status": [
+            "Output",
+            26
+          ],
+          "read_only": false,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        },
+        "Origin": {
+          "group": "",
+          "documentation": "Origin linked to the group",
+          "status": [
+            26
+          ],
+          "read_only": false,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        },
+        "Placement": {
+          "group": "",
+          "documentation": "",
+          "status": [
+            23
+          ],
+          "read_only": false,
+          "hidden": false,
+          "editor_mode": [],
+          "quantity": {
+            "position": [
+              {
+                "display": "0.00 in",
+                "input": "0 in",
+                "default_unit": "in",
+                "signature": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "value": 0.0
+              },
+              {
+                "display": "0.00 in",
+                "input": "0 in",
+                "default_unit": "in",
+                "signature": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "value": 0.0
+              },
+              {
+                "display": "0.00 in",
+                "input": "0 in",
+                "default_unit": "in",
+                "signature": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "value": 0.0
+              }
+            ]
+          }
+        },
+        "Shape": {
+          "group": "",
+          "documentation": "",
+          "status": [],
+          "read_only": true,
+          "hidden": false,
+          "editor_mode": []
+        },
+        "ShapeMaterial": {
+          "group": "",
+          "documentation": "",
+          "status": [],
+          "read_only": false,
+          "hidden": false,
+          "editor_mode": []
+        },
+        "Tip": {
+          "group": "",
+          "documentation": "",
+          "status": [],
+          "read_only": false,
+          "hidden": false,
+          "editor_mode": []
+        },
+        "Visibility": {
+          "group": "",
+          "documentation": "",
+          "status": [
+            "Hidden",
+            "Output",
+            "NoModify"
+          ],
+          "read_only": false,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        },
+        "_ElementMapVersion": {
+          "group": "Base",
+          "documentation": "",
+          "status": [
+            25,
+            26,
+            27
+          ],
+          "read_only": true,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        },
+        "_GroupTouched": {
+          "group": "Base",
+          "documentation": "",
+          "status": [
+            "Output",
+            25,
+            26
+          ],
+          "read_only": true,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        }
+      },
+      "expressions": {},
+      "body": "Body3",
+      "history_flags": {
+        "can_tip": false,
+        "can_reorder": false,
+        "transform_step": false
+      },
+      "body_state": {
+        "tip": null,
+        "consumed_by": [],
+        "display_object": null
+      },
+      "global_placement": {
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "shape": {
+        "null": true,
+        "valid": false,
+        "volume": 0,
+        "area": 0,
+        "solids": 0,
+        "faces": 0,
+        "edges": 0,
+        "vertices": 0,
+        "bounds": null
+      }
+    },
+    {
+      "name": "Origin",
+      "native_id": 4969,
+      "type": "App::Origin",
+      "label": "Origin",
+      "effective_visibility": true,
+      "valid": true,
+      "status": "Valid",
+      "state": [
+        "Up-to-date"
+      ],
+      "properties": {
+        "ExpressionEngine": [],
+        "Group": [],
+        "Label": "Origin",
+        "Label2": "",
+        "OriginFeatures": [
+          {
+            "link": "X_Axis"
+          },
+          {
+            "link": "Y_Axis"
+          },
+          {
+            "link": "Z_Axis"
+          },
+          {
+            "link": "XY_Plane"
+          },
+          {
+            "link": "XZ_Plane"
+          },
+          {
+            "link": "YZ_Plane"
+          },
+          {
+            "link": "Origin001"
+          }
+        ],
+        "Placement": {
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "Visibility": true,
+        "_ElementMapVersion": "",
+        "_GroupTouched": false
+      },
+      "property_types": {
+        "ExpressionEngine": "App::PropertyExpressionEngine",
+        "Group": "App::PropertyLinkList",
+        "Label": "App::PropertyString",
+        "Label2": "App::PropertyString",
+        "OriginFeatures": "App::PropertyLinkList",
+        "Placement": "App::PropertyPlacement",
+        "Visibility": "App::PropertyBool",
+        "_ElementMapVersion": "App::PropertyString",
+        "_GroupTouched": "App::PropertyBool"
+      },
+      "property_metadata": {
+        "ExpressionEngine": {
+          "group": "Base",
+          "documentation": "Property expressions",
+          "status": [
+            26
+          ],
+          "read_only": true,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        },
+        "Group": {
+          "group": "Base",
+          "documentation": "List of referenced objects",
+          "status": [
+            "Transient"
+          ],
+          "read_only": false,
+          "hidden": false,
+          "editor_mode": []
+        },
+        "Label": {
+          "group": "Base",
+          "documentation": "User name of the object (UTF8)",
+          "status": [
+            27
+          ],
+          "read_only": false,
+          "hidden": false,
+          "editor_mode": []
+        },
+        "Label2": {
+          "group": "Base",
+          "documentation": "User description of the object (UTF8)",
+          "status": [
+            "Output",
+            26
+          ],
+          "read_only": false,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        },
+        "OriginFeatures": {
+          "group": "",
+          "documentation": "Axis and baseplanes controlled by the LCS",
+          "status": [
+            26
+          ],
+          "read_only": false,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        },
+        "Placement": {
+          "group": "",
+          "documentation": "",
+          "status": [
+            "Hidden",
+            23
+          ],
+          "read_only": false,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ],
+          "quantity": {
+            "position": [
+              {
+                "display": "0.00 in",
+                "input": "0 in",
+                "default_unit": "in",
+                "signature": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "value": 0.0
+              },
+              {
+                "display": "0.00 in",
+                "input": "0 in",
+                "default_unit": "in",
+                "signature": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "value": 0.0
+              },
+              {
+                "display": "0.00 in",
+                "input": "0 in",
+                "default_unit": "in",
+                "signature": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "value": 0.0
+              }
+            ]
+          }
+        },
+        "Visibility": {
+          "group": "",
+          "documentation": "",
+          "status": [
+            "Hidden",
+            "Output",
+            "NoModify"
+          ],
+          "read_only": false,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        },
+        "_ElementMapVersion": {
+          "group": "Base",
+          "documentation": "",
+          "status": [
+            25,
+            26,
+            27
+          ],
+          "read_only": true,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        },
+        "_GroupTouched": {
+          "group": "Base",
+          "documentation": "",
+          "status": [
+            25,
+            26
+          ],
+          "read_only": true,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        }
+      },
+      "expressions": {},
+      "body": "Body3",
+      "history_flags": {
+        "can_tip": false,
+        "can_reorder": false,
+        "transform_step": false
+      },
+      "global_placement": {
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "reference_display": {
+        "kind": "origin",
+        "placement": {
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "visible": true,
+        "size": [
+          20.0,
+          20.0
+        ],
+        "subelement": "",
+        "line_axis": "z"
+      }
+    },
+    {
+      "name": "X_Axis",
+      "native_id": 4970,
+      "type": "App::Line",
+      "label": "X-axis",
+      "effective_visibility": true,
+      "valid": true,
+      "status": "Valid",
+      "state": [
+        "Up-to-date"
+      ],
+      "properties": {
+        "ExpressionEngine": [],
+        "Label": "X-axis",
+        "Label2": "",
+        "Placement": {
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "Role": "X_Axis",
+        "Visibility": true,
+        "_ElementMapVersion": ""
+      },
+      "property_types": {
+        "ExpressionEngine": "App::PropertyExpressionEngine",
+        "Label": "App::PropertyString",
+        "Label2": "App::PropertyString",
+        "Placement": "App::PropertyPlacement",
+        "Role": "App::PropertyString",
+        "Visibility": "App::PropertyBool",
+        "_ElementMapVersion": "App::PropertyString"
+      },
+      "property_metadata": {
+        "ExpressionEngine": {
+          "group": "Base",
+          "documentation": "Property expressions",
+          "status": [
+            26
+          ],
+          "read_only": true,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        },
+        "Label": {
+          "group": "Base",
+          "documentation": "User name of the object (UTF8)",
+          "status": [
+            27
+          ],
+          "read_only": false,
+          "hidden": false,
+          "editor_mode": []
+        },
+        "Label2": {
+          "group": "Base",
+          "documentation": "User description of the object (UTF8)",
+          "status": [
+            "Output",
+            26
+          ],
+          "read_only": false,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        },
+        "Placement": {
+          "group": "",
+          "documentation": "",
+          "status": [
+            "Hidden",
+            23
+          ],
+          "read_only": false,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ],
+          "quantity": {
+            "position": [
+              {
+                "display": "0.00 in",
+                "input": "0 in",
+                "default_unit": "in",
+                "signature": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "value": 0.0
+              },
+              {
+                "display": "0.00 in",
+                "input": "0 in",
+                "default_unit": "in",
+                "signature": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "value": 0.0
+              },
+              {
+                "display": "0.00 in",
+                "input": "0 in",
+                "default_unit": "in",
+                "signature": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "value": 0.0
+              }
+            ]
+          }
+        },
+        "Role": {
+          "group": "",
+          "documentation": "Role of the datum in the local coordinate system.",
+          "status": [
+            "Hidden",
+            24
+          ],
+          "read_only": true,
+          "hidden": true,
+          "editor_mode": [
+            "ReadOnly",
+            "Hidden"
+          ]
+        },
+        "Visibility": {
+          "group": "",
+          "documentation": "",
+          "status": [
+            "Hidden",
+            "Output",
+            "NoModify"
+          ],
+          "read_only": false,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        },
+        "_ElementMapVersion": {
+          "group": "Base",
+          "documentation": "",
+          "status": [
+            25,
+            26,
+            27
+          ],
+          "read_only": true,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        }
+      },
+      "expressions": {},
+      "body": "Body3",
+      "history_flags": {
+        "can_tip": false,
+        "can_reorder": false,
+        "transform_step": false
+      },
+      "global_placement": {
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "reference_display": {
+        "kind": "line",
+        "placement": {
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "visible": true,
+        "size": [
+          20.0,
+          20.0
+        ],
+        "subelement": "Edge1",
+        "line_axis": "x"
+      },
+      "shape": {
+        "null": false,
+        "valid": true,
+        "volume": 0.0,
+        "area": 0.0,
+        "solids": 0,
+        "faces": 0,
+        "edges": 1,
+        "vertices": 0,
+        "bounds": {
+          "min": [
+            -1e+100,
+            0.0,
+            0.0
+          ],
+          "max": [
+            1e+100,
+            0.0,
+            0.0
+          ]
+        }
+      }
+    },
+    {
+      "name": "Y_Axis",
+      "native_id": 4971,
+      "type": "App::Line",
+      "label": "Y-axis",
+      "effective_visibility": true,
+      "valid": true,
+      "status": "Valid",
+      "state": [
+        "Up-to-date"
+      ],
+      "properties": {
+        "ExpressionEngine": [],
+        "Label": "Y-axis",
+        "Label2": "",
+        "Placement": {
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.5,
+            0.5,
+            0.5,
+            0.5000000000000001
+          ]
+        },
+        "Role": "Y_Axis",
+        "Visibility": true,
+        "_ElementMapVersion": ""
+      },
+      "property_types": {
+        "ExpressionEngine": "App::PropertyExpressionEngine",
+        "Label": "App::PropertyString",
+        "Label2": "App::PropertyString",
+        "Placement": "App::PropertyPlacement",
+        "Role": "App::PropertyString",
+        "Visibility": "App::PropertyBool",
+        "_ElementMapVersion": "App::PropertyString"
+      },
+      "property_metadata": {
+        "ExpressionEngine": {
+          "group": "Base",
+          "documentation": "Property expressions",
+          "status": [
+            26
+          ],
+          "read_only": true,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        },
+        "Label": {
+          "group": "Base",
+          "documentation": "User name of the object (UTF8)",
+          "status": [
+            27
+          ],
+          "read_only": false,
+          "hidden": false,
+          "editor_mode": []
+        },
+        "Label2": {
+          "group": "Base",
+          "documentation": "User description of the object (UTF8)",
+          "status": [
+            "Output",
+            26
+          ],
+          "read_only": false,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        },
+        "Placement": {
+          "group": "",
+          "documentation": "",
+          "status": [
+            "Hidden",
+            23
+          ],
+          "read_only": false,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ],
+          "quantity": {
+            "position": [
+              {
+                "display": "0.00 in",
+                "input": "0 in",
+                "default_unit": "in",
+                "signature": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "value": 0.0
+              },
+              {
+                "display": "0.00 in",
+                "input": "0 in",
+                "default_unit": "in",
+                "signature": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "value": 0.0
+              },
+              {
+                "display": "0.00 in",
+                "input": "0 in",
+                "default_unit": "in",
+                "signature": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "value": 0.0
+              }
+            ]
+          }
+        },
+        "Role": {
+          "group": "",
+          "documentation": "Role of the datum in the local coordinate system.",
+          "status": [
+            "Hidden",
+            24
+          ],
+          "read_only": true,
+          "hidden": true,
+          "editor_mode": [
+            "ReadOnly",
+            "Hidden"
+          ]
+        },
+        "Visibility": {
+          "group": "",
+          "documentation": "",
+          "status": [
+            "Hidden",
+            "Output",
+            "NoModify"
+          ],
+          "read_only": false,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        },
+        "_ElementMapVersion": {
+          "group": "Base",
+          "documentation": "",
+          "status": [
+            25,
+            26,
+            27
+          ],
+          "read_only": true,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        }
+      },
+      "expressions": {},
+      "body": "Body3",
+      "history_flags": {
+        "can_tip": false,
+        "can_reorder": false,
+        "transform_step": false
+      },
+      "global_placement": {
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.5,
+          0.5,
+          0.5,
+          0.5000000000000001
+        ]
+      },
+      "reference_display": {
+        "kind": "line",
+        "placement": {
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.5,
+            0.5,
+            0.5,
+            0.5000000000000001
+          ]
+        },
+        "visible": true,
+        "size": [
+          20.0,
+          20.0
+        ],
+        "subelement": "Edge1",
+        "line_axis": "x"
+      },
+      "shape": {
+        "null": false,
+        "valid": true,
+        "volume": 0.0,
+        "area": 0.0,
+        "solids": 0,
+        "faces": 0,
+        "edges": 1,
+        "vertices": 0,
+        "bounds": {
+          "min": [
+            0.0,
+            -1e+100,
+            0.0
+          ],
+          "max": [
+            0.0,
+            1e+100,
+            0.0
+          ]
+        }
+      }
+    },
+    {
+      "name": "Z_Axis",
+      "native_id": 4972,
+      "type": "App::Line",
+      "label": "Z-axis",
+      "effective_visibility": true,
+      "valid": true,
+      "status": "Valid",
+      "state": [
+        "Up-to-date"
+      ],
+      "properties": {
+        "ExpressionEngine": [],
+        "Label": "Z-axis",
+        "Label2": "",
+        "Placement": {
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.5,
+            -0.5,
+            0.5,
+            0.5000000000000001
+          ]
+        },
+        "Role": "Z_Axis",
+        "Visibility": true,
+        "_ElementMapVersion": ""
+      },
+      "property_types": {
+        "ExpressionEngine": "App::PropertyExpressionEngine",
+        "Label": "App::PropertyString",
+        "Label2": "App::PropertyString",
+        "Placement": "App::PropertyPlacement",
+        "Role": "App::PropertyString",
+        "Visibility": "App::PropertyBool",
+        "_ElementMapVersion": "App::PropertyString"
+      },
+      "property_metadata": {
+        "ExpressionEngine": {
+          "group": "Base",
+          "documentation": "Property expressions",
+          "status": [
+            26
+          ],
+          "read_only": true,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        },
+        "Label": {
+          "group": "Base",
+          "documentation": "User name of the object (UTF8)",
+          "status": [
+            27
+          ],
+          "read_only": false,
+          "hidden": false,
+          "editor_mode": []
+        },
+        "Label2": {
+          "group": "Base",
+          "documentation": "User description of the object (UTF8)",
+          "status": [
+            "Output",
+            26
+          ],
+          "read_only": false,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        },
+        "Placement": {
+          "group": "",
+          "documentation": "",
+          "status": [
+            "Hidden",
+            23
+          ],
+          "read_only": false,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ],
+          "quantity": {
+            "position": [
+              {
+                "display": "0.00 in",
+                "input": "0 in",
+                "default_unit": "in",
+                "signature": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "value": 0.0
+              },
+              {
+                "display": "0.00 in",
+                "input": "0 in",
+                "default_unit": "in",
+                "signature": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "value": 0.0
+              },
+              {
+                "display": "0.00 in",
+                "input": "0 in",
+                "default_unit": "in",
+                "signature": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "value": 0.0
+              }
+            ]
+          }
+        },
+        "Role": {
+          "group": "",
+          "documentation": "Role of the datum in the local coordinate system.",
+          "status": [
+            "Hidden",
+            24
+          ],
+          "read_only": true,
+          "hidden": true,
+          "editor_mode": [
+            "ReadOnly",
+            "Hidden"
+          ]
+        },
+        "Visibility": {
+          "group": "",
+          "documentation": "",
+          "status": [
+            "Hidden",
+            "Output",
+            "NoModify"
+          ],
+          "read_only": false,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        },
+        "_ElementMapVersion": {
+          "group": "Base",
+          "documentation": "",
+          "status": [
+            25,
+            26,
+            27
+          ],
+          "read_only": true,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        }
+      },
+      "expressions": {},
+      "body": "Body3",
+      "history_flags": {
+        "can_tip": false,
+        "can_reorder": false,
+        "transform_step": false
+      },
+      "global_placement": {
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.5,
+          -0.5,
+          0.5,
+          0.5000000000000001
+        ]
+      },
+      "reference_display": {
+        "kind": "line",
+        "placement": {
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.5,
+            -0.5,
+            0.5,
+            0.5000000000000001
+          ]
+        },
+        "visible": true,
+        "size": [
+          20.0,
+          20.0
+        ],
+        "subelement": "Edge1",
+        "line_axis": "x"
+      },
+      "shape": {
+        "null": false,
+        "valid": true,
+        "volume": 0.0,
+        "area": 0.0,
+        "solids": 0,
+        "faces": 0,
+        "edges": 1,
+        "vertices": 0,
+        "bounds": {
+          "min": [
+            0.0,
+            0.0,
+            -1e+100
+          ],
+          "max": [
+            0.0,
+            0.0,
+            1e+100
+          ]
+        }
+      }
+    },
+    {
+      "name": "XY_Plane",
+      "native_id": 4973,
+      "type": "App::Plane",
+      "label": "XY-plane",
+      "effective_visibility": true,
+      "valid": true,
+      "status": "Valid",
+      "state": [
+        "Up-to-date"
+      ],
+      "properties": {
+        "ExpressionEngine": [],
+        "Label": "XY-plane",
+        "Label2": "",
+        "Placement": {
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "Role": "XY_Plane",
+        "Visibility": true,
+        "_ElementMapVersion": ""
+      },
+      "property_types": {
+        "ExpressionEngine": "App::PropertyExpressionEngine",
+        "Label": "App::PropertyString",
+        "Label2": "App::PropertyString",
+        "Placement": "App::PropertyPlacement",
+        "Role": "App::PropertyString",
+        "Visibility": "App::PropertyBool",
+        "_ElementMapVersion": "App::PropertyString"
+      },
+      "property_metadata": {
+        "ExpressionEngine": {
+          "group": "Base",
+          "documentation": "Property expressions",
+          "status": [
+            26
+          ],
+          "read_only": true,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        },
+        "Label": {
+          "group": "Base",
+          "documentation": "User name of the object (UTF8)",
+          "status": [
+            27
+          ],
+          "read_only": false,
+          "hidden": false,
+          "editor_mode": []
+        },
+        "Label2": {
+          "group": "Base",
+          "documentation": "User description of the object (UTF8)",
+          "status": [
+            "Output",
+            26
+          ],
+          "read_only": false,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        },
+        "Placement": {
+          "group": "",
+          "documentation": "",
+          "status": [
+            "Hidden",
+            23
+          ],
+          "read_only": false,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ],
+          "quantity": {
+            "position": [
+              {
+                "display": "0.00 in",
+                "input": "0 in",
+                "default_unit": "in",
+                "signature": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "value": 0.0
+              },
+              {
+                "display": "0.00 in",
+                "input": "0 in",
+                "default_unit": "in",
+                "signature": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "value": 0.0
+              },
+              {
+                "display": "0.00 in",
+                "input": "0 in",
+                "default_unit": "in",
+                "signature": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "value": 0.0
+              }
+            ]
+          }
+        },
+        "Role": {
+          "group": "",
+          "documentation": "Role of the datum in the local coordinate system.",
+          "status": [
+            "Hidden",
+            24
+          ],
+          "read_only": true,
+          "hidden": true,
+          "editor_mode": [
+            "ReadOnly",
+            "Hidden"
+          ]
+        },
+        "Visibility": {
+          "group": "",
+          "documentation": "",
+          "status": [
+            "Hidden",
+            "Output",
+            "NoModify"
+          ],
+          "read_only": false,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        },
+        "_ElementMapVersion": {
+          "group": "Base",
+          "documentation": "",
+          "status": [
+            25,
+            26,
+            27
+          ],
+          "read_only": true,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        }
+      },
+      "expressions": {},
+      "body": "Body3",
+      "history_flags": {
+        "can_tip": false,
+        "can_reorder": false,
+        "transform_step": false
+      },
+      "global_placement": {
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "reference_display": {
+        "kind": "plane",
+        "placement": {
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "visible": true,
+        "size": [
+          20.0,
+          20.0
+        ],
+        "subelement": "Face1",
+        "line_axis": "z"
+      },
+      "shape": {
+        "null": false,
+        "valid": true,
+        "volume": 0.0,
+        "area": 8e+100,
+        "solids": 0,
+        "faces": 1,
+        "edges": 0,
+        "vertices": 0,
+        "bounds": {
+          "min": [
+            -1e+100,
+            -1e+100,
+            0.0
+          ],
+          "max": [
+            1e+100,
+            1e+100,
+            0.0
+          ]
+        }
+      }
+    },
+    {
+      "name": "XZ_Plane",
+      "native_id": 4974,
+      "type": "App::Plane",
+      "label": "XZ-plane",
+      "effective_visibility": true,
+      "valid": true,
+      "status": "Valid",
+      "state": [
+        "Up-to-date"
+      ],
+      "properties": {
+        "ExpressionEngine": [],
+        "Label": "XZ-plane",
+        "Label2": "",
+        "Placement": {
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.7071067811865475,
+            0.0,
+            0.0,
+            0.7071067811865475
+          ]
+        },
+        "Role": "XZ_Plane",
+        "Visibility": true,
+        "_ElementMapVersion": ""
+      },
+      "property_types": {
+        "ExpressionEngine": "App::PropertyExpressionEngine",
+        "Label": "App::PropertyString",
+        "Label2": "App::PropertyString",
+        "Placement": "App::PropertyPlacement",
+        "Role": "App::PropertyString",
+        "Visibility": "App::PropertyBool",
+        "_ElementMapVersion": "App::PropertyString"
+      },
+      "property_metadata": {
+        "ExpressionEngine": {
+          "group": "Base",
+          "documentation": "Property expressions",
+          "status": [
+            26
+          ],
+          "read_only": true,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        },
+        "Label": {
+          "group": "Base",
+          "documentation": "User name of the object (UTF8)",
+          "status": [
+            27
+          ],
+          "read_only": false,
+          "hidden": false,
+          "editor_mode": []
+        },
+        "Label2": {
+          "group": "Base",
+          "documentation": "User description of the object (UTF8)",
+          "status": [
+            "Output",
+            26
+          ],
+          "read_only": false,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        },
+        "Placement": {
+          "group": "",
+          "documentation": "",
+          "status": [
+            "Hidden",
+            23
+          ],
+          "read_only": false,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ],
+          "quantity": {
+            "position": [
+              {
+                "display": "0.00 in",
+                "input": "0 in",
+                "default_unit": "in",
+                "signature": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "value": 0.0
+              },
+              {
+                "display": "0.00 in",
+                "input": "0 in",
+                "default_unit": "in",
+                "signature": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "value": 0.0
+              },
+              {
+                "display": "0.00 in",
+                "input": "0 in",
+                "default_unit": "in",
+                "signature": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "value": 0.0
+              }
+            ]
+          }
+        },
+        "Role": {
+          "group": "",
+          "documentation": "Role of the datum in the local coordinate system.",
+          "status": [
+            "Hidden",
+            24
+          ],
+          "read_only": true,
+          "hidden": true,
+          "editor_mode": [
+            "ReadOnly",
+            "Hidden"
+          ]
+        },
+        "Visibility": {
+          "group": "",
+          "documentation": "",
+          "status": [
+            "Hidden",
+            "Output",
+            "NoModify"
+          ],
+          "read_only": false,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        },
+        "_ElementMapVersion": {
+          "group": "Base",
+          "documentation": "",
+          "status": [
+            25,
+            26,
+            27
+          ],
+          "read_only": true,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        }
+      },
+      "expressions": {},
+      "body": "Body3",
+      "history_flags": {
+        "can_tip": false,
+        "can_reorder": false,
+        "transform_step": false
+      },
+      "global_placement": {
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ]
+      },
+      "reference_display": {
+        "kind": "plane",
+        "placement": {
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.7071067811865476,
+            0.0,
+            0.0,
+            0.7071067811865476
+          ]
+        },
+        "visible": true,
+        "size": [
+          20.0,
+          20.0
+        ],
+        "subelement": "Face1",
+        "line_axis": "z"
+      },
+      "shape": {
+        "null": false,
+        "valid": true,
+        "volume": 0.0,
+        "area": 8.000000000000003e+100,
+        "solids": 0,
+        "faces": 1,
+        "edges": 0,
+        "vertices": 0,
+        "bounds": {
+          "min": [
+            -1e+100,
+            0.0,
+            -1e+100
+          ],
+          "max": [
+            1e+100,
+            0.0,
+            1e+100
+          ]
+        }
+      }
+    },
+    {
+      "name": "YZ_Plane",
+      "native_id": 4975,
+      "type": "App::Plane",
+      "label": "YZ-plane",
+      "effective_visibility": true,
+      "valid": true,
+      "status": "Valid",
+      "state": [
+        "Up-to-date"
+      ],
+      "properties": {
+        "ExpressionEngine": [],
+        "Label": "YZ-plane",
+        "Label2": "",
+        "Placement": {
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.5,
+            0.5,
+            0.5,
+            0.5000000000000001
+          ]
+        },
+        "Role": "YZ_Plane",
+        "Visibility": true,
+        "_ElementMapVersion": ""
+      },
+      "property_types": {
+        "ExpressionEngine": "App::PropertyExpressionEngine",
+        "Label": "App::PropertyString",
+        "Label2": "App::PropertyString",
+        "Placement": "App::PropertyPlacement",
+        "Role": "App::PropertyString",
+        "Visibility": "App::PropertyBool",
+        "_ElementMapVersion": "App::PropertyString"
+      },
+      "property_metadata": {
+        "ExpressionEngine": {
+          "group": "Base",
+          "documentation": "Property expressions",
+          "status": [
+            26
+          ],
+          "read_only": true,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        },
+        "Label": {
+          "group": "Base",
+          "documentation": "User name of the object (UTF8)",
+          "status": [
+            27
+          ],
+          "read_only": false,
+          "hidden": false,
+          "editor_mode": []
+        },
+        "Label2": {
+          "group": "Base",
+          "documentation": "User description of the object (UTF8)",
+          "status": [
+            "Output",
+            26
+          ],
+          "read_only": false,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        },
+        "Placement": {
+          "group": "",
+          "documentation": "",
+          "status": [
+            "Hidden",
+            23
+          ],
+          "read_only": false,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ],
+          "quantity": {
+            "position": [
+              {
+                "display": "0.00 in",
+                "input": "0 in",
+                "default_unit": "in",
+                "signature": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "value": 0.0
+              },
+              {
+                "display": "0.00 in",
+                "input": "0 in",
+                "default_unit": "in",
+                "signature": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "value": 0.0
+              },
+              {
+                "display": "0.00 in",
+                "input": "0 in",
+                "default_unit": "in",
+                "signature": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "value": 0.0
+              }
+            ]
+          }
+        },
+        "Role": {
+          "group": "",
+          "documentation": "Role of the datum in the local coordinate system.",
+          "status": [
+            "Hidden",
+            24
+          ],
+          "read_only": true,
+          "hidden": true,
+          "editor_mode": [
+            "ReadOnly",
+            "Hidden"
+          ]
+        },
+        "Visibility": {
+          "group": "",
+          "documentation": "",
+          "status": [
+            "Hidden",
+            "Output",
+            "NoModify"
+          ],
+          "read_only": false,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        },
+        "_ElementMapVersion": {
+          "group": "Base",
+          "documentation": "",
+          "status": [
+            25,
+            26,
+            27
+          ],
+          "read_only": true,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        }
+      },
+      "expressions": {},
+      "body": "Body3",
+      "history_flags": {
+        "can_tip": false,
+        "can_reorder": false,
+        "transform_step": false
+      },
+      "global_placement": {
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.5,
+          0.5,
+          0.5,
+          0.5000000000000001
+        ]
+      },
+      "reference_display": {
+        "kind": "plane",
+        "placement": {
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.5,
+            0.5,
+            0.5,
+            0.5000000000000001
+          ]
+        },
+        "visible": true,
+        "size": [
+          20.0,
+          20.0
+        ],
+        "subelement": "Face1",
+        "line_axis": "z"
+      },
+      "shape": {
+        "null": false,
+        "valid": true,
+        "volume": 0.0,
+        "area": 8e+100,
+        "solids": 0,
+        "faces": 1,
+        "edges": 0,
+        "vertices": 0,
+        "bounds": {
+          "min": [
+            0.0,
+            -1e+100,
+            -1e+100
+          ],
+          "max": [
+            0.0,
+            1e+100,
+            1e+100
+          ]
+        }
+      }
+    },
+    {
+      "name": "Origin001",
+      "native_id": 4976,
+      "type": "App::Point",
+      "label": "Origin001",
+      "effective_visibility": true,
+      "valid": true,
+      "status": "Valid",
+      "state": [
+        "Up-to-date"
+      ],
+      "properties": {
+        "ExpressionEngine": [],
+        "Label": "Origin001",
+        "Label2": "",
+        "Placement": {
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "Role": "Origin",
+        "Visibility": true,
+        "_ElementMapVersion": ""
+      },
+      "property_types": {
+        "ExpressionEngine": "App::PropertyExpressionEngine",
+        "Label": "App::PropertyString",
+        "Label2": "App::PropertyString",
+        "Placement": "App::PropertyPlacement",
+        "Role": "App::PropertyString",
+        "Visibility": "App::PropertyBool",
+        "_ElementMapVersion": "App::PropertyString"
+      },
+      "property_metadata": {
+        "ExpressionEngine": {
+          "group": "Base",
+          "documentation": "Property expressions",
+          "status": [
+            26
+          ],
+          "read_only": true,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        },
+        "Label": {
+          "group": "Base",
+          "documentation": "User name of the object (UTF8)",
+          "status": [
+            27
+          ],
+          "read_only": false,
+          "hidden": false,
+          "editor_mode": []
+        },
+        "Label2": {
+          "group": "Base",
+          "documentation": "User description of the object (UTF8)",
+          "status": [
+            "Output",
+            26
+          ],
+          "read_only": false,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        },
+        "Placement": {
+          "group": "",
+          "documentation": "",
+          "status": [
+            "Hidden",
+            23
+          ],
+          "read_only": false,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ],
+          "quantity": {
+            "position": [
+              {
+                "display": "0.00 in",
+                "input": "0 in",
+                "default_unit": "in",
+                "signature": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "value": 0.0
+              },
+              {
+                "display": "0.00 in",
+                "input": "0 in",
+                "default_unit": "in",
+                "signature": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "value": 0.0
+              },
+              {
+                "display": "0.00 in",
+                "input": "0 in",
+                "default_unit": "in",
+                "signature": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "value": 0.0
+              }
+            ]
+          }
+        },
+        "Role": {
+          "group": "",
+          "documentation": "Role of the datum in the local coordinate system.",
+          "status": [
+            "Hidden",
+            24
+          ],
+          "read_only": true,
+          "hidden": true,
+          "editor_mode": [
+            "ReadOnly",
+            "Hidden"
+          ]
+        },
+        "Visibility": {
+          "group": "",
+          "documentation": "",
+          "status": [
+            "Hidden",
+            "Output",
+            "NoModify"
+          ],
+          "read_only": false,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        },
+        "_ElementMapVersion": {
+          "group": "Base",
+          "documentation": "",
+          "status": [
+            25,
+            26,
+            27
+          ],
+          "read_only": true,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        }
+      },
+      "expressions": {},
+      "body": "Body3",
+      "history_flags": {
+        "can_tip": false,
+        "can_reorder": false,
+        "transform_step": false
+      },
+      "global_placement": {
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "reference_display": {
+        "kind": "point",
+        "placement": {
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "visible": true,
+        "size": [
+          20.0,
+          20.0
+        ],
+        "subelement": "Vertex1",
+        "line_axis": "z"
+      },
+      "shape": {
+        "null": false,
+        "valid": true,
+        "volume": 0.0,
+        "area": 0.0,
+        "solids": 0,
+        "faces": 0,
+        "edges": 0,
+        "vertices": 1,
+        "bounds": {
+          "min": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "max": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      }
+    },
+    {
+      "name": "Sketch2",
+      "native_id": 4977,
+      "type": "Sketcher::SketchObject",
+      "label": "Sketch2",
+      "effective_visibility": true,
+      "valid": true,
+      "status": "Touched",
+      "state": [
+        "Touched"
+      ],
+      "properties": {
+        "ArcFitTolerance": 1e-06,
+        "AttacherEngine": "Engine 3D",
+        "AttacherType": "Attacher::AttachEnginePlane",
+        "AttachmentOffset": {
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "AttachmentSupport": [
+          {
+            "link": "XZ_Plane",
+            "subelements": [
+              ""
+            ]
+          }
+        ],
+        "Exports": [],
+        "ExpressionEngine": [],
+        "ExternalGeometry": [],
+        "ExternalTypes": [
+          0
+        ],
+        "FullyConstrained": false,
+        "Label": "Sketch2",
+        "Label2": "",
+        "MakeInternals": false,
+        "MapMode": "FlatFace",
+        "MapPathParameter": 0.0,
+        "MapReversed": false,
+        "Placement": {
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.7071067811865475,
+            0.0,
+            0.0,
+            0.7071067811865476
+          ]
+        },
+        "Visibility": true,
+        "_ElementMapVersion": "15.70200.5",
+        "_ExternalGeoVersion": 1
+      },
+      "property_types": {
+        "ArcFitTolerance": "App::PropertyPrecision",
+        "AttacherEngine": "App::PropertyEnumeration",
+        "AttacherType": "App::PropertyString",
+        "AttachmentOffset": "App::PropertyPlacement",
+        "AttachmentSupport": "App::PropertyLinkSubList",
+        "Constraints": "Sketcher::PropertyConstraintList",
+        "Exports": "App::PropertyLinkListHidden",
+        "ExpressionEngine": "App::PropertyExpressionEngine",
+        "ExternalGeo": "Part::PropertyGeometryList",
+        "ExternalGeometry": "App::PropertyLinkSubList",
+        "ExternalTypes": "App::PropertyIntegerList",
+        "FullyConstrained": "App::PropertyBool",
+        "Geometry": "Part::PropertyGeometryList",
+        "InternalShape": "Part::PropertyPartShape",
+        "Label": "App::PropertyString",
+        "Label2": "App::PropertyString",
+        "MakeInternals": "App::PropertyBool",
+        "MapMode": "App::PropertyEnumeration",
+        "MapPathParameter": "App::PropertyFloat",
+        "MapReversed": "App::PropertyBool",
+        "Placement": "App::PropertyPlacement",
+        "Shape": "Part::PropertyPartShape",
+        "ShapeMaterial": "Materials::PropertyMaterial",
+        "Visibility": "App::PropertyBool",
+        "_ElementMapVersion": "App::PropertyString",
+        "_ExternalGeoVersion": "App::PropertyInteger"
+      },
+      "property_metadata": {
+        "ArcFitTolerance": {
+          "group": "Sketch",
+          "documentation": "Tolerance for fitting arcs of projected external geometry",
+          "status": [],
+          "read_only": false,
+          "hidden": false,
+          "editor_mode": []
+        },
+        "AttacherEngine": {
+          "group": "Attachment",
+          "documentation": "Attach engine object driving the attachment.",
+          "status": [],
+          "read_only": false,
+          "hidden": false,
+          "editor_mode": [],
+          "enumerations": [
+            "Engine 3D",
+            "Engine Plane",
+            "Engine Line",
+            "Engine Point"
+          ]
+        },
+        "AttacherType": {
+          "group": "Attachment",
+          "documentation": "Class name of attach engine object driving the attachment.",
+          "status": [
+            24,
+            26
+          ],
+          "read_only": true,
+          "hidden": true,
+          "editor_mode": [
+            "ReadOnly",
+            "Hidden"
+          ]
+        },
+        "AttachmentOffset": {
+          "group": "Attachment",
+          "documentation": "Extra placement to apply in addition to attachment (in local coordinates)",
+          "status": [],
+          "read_only": false,
+          "hidden": false,
+          "editor_mode": [],
+          "quantity": {
+            "position": [
+              {
+                "display": "0.00 in",
+                "input": "0 in",
+                "default_unit": "in",
+                "signature": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "value": 0.0
+              },
+              {
+                "display": "0.00 in",
+                "input": "0 in",
+                "default_unit": "in",
+                "signature": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "value": 0.0
+              },
+              {
+                "display": "0.00 in",
+                "input": "0 in",
+                "default_unit": "in",
+                "signature": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "value": 0.0
+              }
+            ]
+          }
+        },
+        "AttachmentSupport": {
+          "group": "Attachment",
+          "documentation": "Support of the 2D geometry",
+          "status": [],
+          "read_only": false,
+          "hidden": false,
+          "editor_mode": []
+        },
+        "Constraints": {
+          "group": "Sketch",
+          "documentation": "Sketch constraints",
+          "status": [],
+          "read_only": true,
+          "hidden": false,
+          "editor_mode": []
+        },
+        "Exports": {
+          "group": "Sketch",
+          "documentation": "Sketch export geometry",
+          "status": [
+            26
+          ],
+          "read_only": false,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        },
+        "ExpressionEngine": {
+          "group": "Base",
+          "documentation": "Property expressions",
+          "status": [
+            26
+          ],
+          "read_only": true,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        },
+        "ExternalGeo": {
+          "group": "Sketch",
+          "documentation": "Sketch external geometry",
+          "status": [
+            26
+          ],
+          "read_only": true,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        },
+        "ExternalGeometry": {
+          "group": "Sketch",
+          "documentation": "Sketch external geometry",
+          "status": [
+            24
+          ],
+          "read_only": true,
+          "hidden": false,
+          "editor_mode": [
+            "ReadOnly"
+          ]
+        },
+        "ExternalTypes": {
+          "group": "Sketch",
+          "documentation": "Sketch external geometry type: 0 = projection, 1 = intersection, 2 = both.",
+          "status": [
+            26
+          ],
+          "read_only": false,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        },
+        "FullyConstrained": {
+          "group": "Sketch",
+          "documentation": "Sketch is fully constrained",
+          "status": [
+            24,
+            26,
+            27
+          ],
+          "read_only": true,
+          "hidden": true,
+          "editor_mode": [
+            "ReadOnly",
+            "Hidden"
+          ]
+        },
+        "Geometry": {
+          "group": "Sketch",
+          "documentation": "Sketch geometry",
+          "status": [
+            13
+          ],
+          "read_only": true,
+          "hidden": false,
+          "editor_mode": []
+        },
+        "InternalShape": {
+          "group": "",
+          "documentation": "",
+          "status": [],
+          "read_only": true,
+          "hidden": false,
+          "editor_mode": []
+        },
+        "Label": {
+          "group": "Base",
+          "documentation": "User name of the object (UTF8)",
+          "status": [
+            27
+          ],
+          "read_only": false,
+          "hidden": false,
+          "editor_mode": []
+        },
+        "Label2": {
+          "group": "Base",
+          "documentation": "User description of the object (UTF8)",
+          "status": [
+            "Output",
+            26
+          ],
+          "read_only": false,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        },
+        "MakeInternals": {
+          "group": "Internal Geometry",
+          "documentation": "Enables selection of closed profiles within a sketch as input for operations",
+          "status": [],
+          "read_only": false,
+          "hidden": false,
+          "editor_mode": []
+        },
+        "MapMode": {
+          "group": "Attachment",
+          "documentation": "Mode of attachment to other object",
+          "status": [],
+          "read_only": false,
+          "hidden": false,
+          "editor_mode": [],
+          "enumerations": [
+            "Deactivated",
+            "Translate",
+            "ObjectXY",
+            "ObjectXZ",
+            "ObjectYZ",
+            "FlatFace",
+            "TangentPlane",
+            "NormalToEdge",
+            "FrenetNB",
+            "FrenetTN",
+            "FrenetTB",
+            "Concentric",
+            "SectionOfRevolution",
+            "ThreePointsPlane",
+            "ThreePointsNormal",
+            "Folding",
+            "ObjectX",
+            "ObjectY",
+            "ObjectZ",
+            "AxisOfCurvature",
+            "Directrix1",
+            "Directrix2",
+            "Asymptote1",
+            "Asymptote2",
+            "Tangent",
+            "Normal",
+            "Binormal",
+            "TangentU",
+            "TangentV",
+            "TwoPointLine",
+            "IntersectionLine",
+            "ProximityLine",
+            "ObjectOrigin",
+            "Focus1",
+            "Focus2",
+            "OnEdge",
+            "CenterOfCurvature",
+            "CenterOfMass",
+            "IntersectionPoint",
+            "Vertex",
+            "ProximityPoint1",
+            "ProximityPoint2",
+            "AxisOfInertia1",
+            "AxisOfInertia2",
+            "AxisOfInertia3",
+            "InertialCS",
+            "FaceNormal",
+            "OZX",
+            "OZY",
+            "OXY",
+            "OXZ",
+            "OYZ",
+            "OYX",
+            "ParallelPlane",
+            "MidPoint"
+          ]
+        },
+        "MapPathParameter": {
+          "group": "Attachment",
+          "documentation": "Sets point of curve to map the sketch to. 0..1 = start..end",
+          "status": [
+            "Hidden"
+          ],
+          "read_only": false,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        },
+        "MapReversed": {
+          "group": "Attachment",
+          "documentation": "Reverse Z-direction (flip sketch upside down)",
+          "status": [],
+          "read_only": false,
+          "hidden": false,
+          "editor_mode": []
+        },
+        "Placement": {
+          "group": "",
+          "documentation": "",
+          "status": [
+            "ReadOnly",
+            23
+          ],
+          "read_only": true,
+          "hidden": false,
+          "editor_mode": [
+            "ReadOnly"
+          ],
+          "quantity": {
+            "position": [
+              {
+                "display": "0.00 in",
+                "input": "0 in",
+                "default_unit": "in",
+                "signature": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "value": 0.0
+              },
+              {
+                "display": "0.00 in",
+                "input": "0 in",
+                "default_unit": "in",
+                "signature": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "value": 0.0
+              },
+              {
+                "display": "0.00 in",
+                "input": "0 in",
+                "default_unit": "in",
+                "signature": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "value": 0.0
+              }
+            ]
+          }
+        },
+        "Shape": {
+          "group": "",
+          "documentation": "",
+          "status": [],
+          "read_only": true,
+          "hidden": false,
+          "editor_mode": []
+        },
+        "ShapeMaterial": {
+          "group": "",
+          "documentation": "",
+          "status": [],
+          "read_only": false,
+          "hidden": false,
+          "editor_mode": []
+        },
+        "Visibility": {
+          "group": "",
+          "documentation": "",
+          "status": [
+            "Hidden",
+            "Output",
+            "NoModify"
+          ],
+          "read_only": false,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        },
+        "_ElementMapVersion": {
+          "group": "Base",
+          "documentation": "",
+          "status": [
+            25,
+            26,
+            27
+          ],
+          "read_only": true,
+          "hidden": true,
+          "editor_mode": [
+            "Hidden"
+          ]
+        },
+        "_ExternalGeoVersion": {
+          "group": "Compatibility",
+          "documentation": "Version of external geometry projection algorithm",
+          "status": [
+            24,
+            26
+          ],
+          "read_only": true,
+          "hidden": true,
+          "editor_mode": [
+            "ReadOnly",
+            "Hidden"
+          ]
+        }
+      },
+      "expressions": {},
+      "body": "Body3",
+      "rectangular_profile": {
+        "eligible": false,
+        "reason": "Unsupported rectangle source family",
+        "version": 1
+      },
+      "history_flags": {
+        "can_tip": false,
+        "can_reorder": true,
+        "transform_step": false
+      },
+      "global_placement": {
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.7071067811865475,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ]
+      },
+      "shape": {
+        "null": false,
+        "valid": true,
+        "volume": 0.0,
+        "area": 0.0,
+        "solids": 0,
+        "faces": 0,
+        "edges": 4,
+        "vertices": 4,
+        "bounds": {
+          "min": [
+            -32.09291076660156,
+            -5.639932965095795e-15,
+            -25.4
+          ],
+          "max": [
+            32.09291076660156,
+            5.639932965095795e-15,
+            25.4
+          ]
+        }
+      },
+      "sketch": {
+        "geometry_count": 4,
+        "constraint_count": 10,
+        "task_capabilities": {
+          "mirror": {
+            "default_copy": {
+              "available": true,
+              "reason": null
+            },
+            "create_symmetry_constraints": {
+              "available": true,
+              "reason": null
+            }
+          }
+        },
+        "degrees_of_freedom": 1,
+        "conflicting_constraints": [],
+        "redundant_constraints": [],
+        "geometry": [
+          {
+            "index": 0,
+            "geometry_type": "Part::GeomLineSegment",
+            "kind": "line",
+            "construction": false,
+            "points": [
+              [
+                -32.09291076660156,
+                -25.4,
+                0.0
+              ],
+              [
+                32.09291076660156,
+                -25.4,
+                0.0
+              ]
+            ],
+            "handles": [
+              {
+                "index": 0,
+                "point": 1,
+                "position": [
+                  -32.09291076660156,
+                  -25.4,
+                  0.0
+                ],
+                "draggable": true
+              },
+              {
+                "index": 0,
+                "point": 2,
+                "position": [
+                  32.09291076660156,
+                  -25.4,
+                  0.0
+                ],
+                "draggable": true
+              }
+            ],
+            "editable": true,
+            "start": [
+              -32.09291076660156,
+              -25.4,
+              0.0
+            ],
+            "end": [
+              32.09291076660156,
+              -25.4,
+              0.0
+            ],
+            "first_parameter": 0.0,
+            "last_parameter": 64.18582153320312,
+            "persistent_id": 1
+          },
+          {
+            "index": 1,
+            "geometry_type": "Part::GeomLineSegment",
+            "kind": "line",
+            "construction": false,
+            "points": [
+              [
+                32.09291076660156,
+                -25.4,
+                0.0
+              ],
+              [
+                32.09291076660156,
+                25.4,
+                0.0
+              ]
+            ],
+            "handles": [
+              {
+                "index": 1,
+                "point": 1,
+                "position": [
+                  32.09291076660156,
+                  -25.4,
+                  0.0
+                ],
+                "draggable": true
+              },
+              {
+                "index": 1,
+                "point": 2,
+                "position": [
+                  32.09291076660156,
+                  25.4,
+                  0.0
+                ],
+                "draggable": true
+              }
+            ],
+            "editable": true,
+            "start": [
+              32.09291076660156,
+              -25.4,
+              0.0
+            ],
+            "end": [
+              32.09291076660156,
+              25.4,
+              0.0
+            ],
+            "first_parameter": 0.0,
+            "last_parameter": 50.8,
+            "persistent_id": 2
+          },
+          {
+            "index": 2,
+            "geometry_type": "Part::GeomLineSegment",
+            "kind": "line",
+            "construction": false,
+            "points": [
+              [
+                32.09291076660156,
+                25.4,
+                0.0
+              ],
+              [
+                -32.09291076660156,
+                25.4,
+                0.0
+              ]
+            ],
+            "handles": [
+              {
+                "index": 2,
+                "point": 1,
+                "position": [
+                  32.09291076660156,
+                  25.4,
+                  0.0
+                ],
+                "draggable": true
+              },
+              {
+                "index": 2,
+                "point": 2,
+                "position": [
+                  -32.09291076660156,
+                  25.4,
+                  0.0
+                ],
+                "draggable": true
+              }
+            ],
+            "editable": true,
+            "start": [
+              32.09291076660156,
+              25.4,
+              0.0
+            ],
+            "end": [
+              -32.09291076660156,
+              25.4,
+              0.0
+            ],
+            "first_parameter": 0.0,
+            "last_parameter": 64.18582153320312,
+            "persistent_id": 3
+          },
+          {
+            "index": 3,
+            "geometry_type": "Part::GeomLineSegment",
+            "kind": "line",
+            "construction": false,
+            "points": [
+              [
+                -32.09291076660156,
+                25.4,
+                0.0
+              ],
+              [
+                -32.09291076660156,
+                -25.4,
+                0.0
+              ]
+            ],
+            "handles": [
+              {
+                "index": 3,
+                "point": 1,
+                "position": [
+                  -32.09291076660156,
+                  25.4,
+                  0.0
+                ],
+                "draggable": true
+              },
+              {
+                "index": 3,
+                "point": 2,
+                "position": [
+                  -32.09291076660156,
+                  -25.4,
+                  0.0
+                ],
+                "draggable": true
+              }
+            ],
+            "editable": true,
+            "start": [
+              -32.09291076660156,
+              25.4,
+              0.0
+            ],
+            "end": [
+              -32.09291076660156,
+              -25.4,
+              0.0
+            ],
+            "first_parameter": 0.0,
+            "last_parameter": 50.8,
+            "persistent_id": 4
+          }
+        ],
+        "mapped_edges": [
+          "g1;SKT",
+          "g2;SKT",
+          "g3;SKT",
+          "g4;SKT"
+        ],
+        "axes": [
+          {
+            "index": -1,
+            "geometry_type": "Part::GeomLineSegment",
+            "kind": "line",
+            "construction": true,
+            "points": [
+              [
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                1.0,
+                0.0,
+                0.0
+              ]
+            ],
+            "handles": [],
+            "editable": false,
+            "start": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "end": [
+              1.0,
+              0.0,
+              0.0
+            ],
+            "first_parameter": 0.0,
+            "last_parameter": 1.0
+          },
+          {
+            "index": -2,
+            "geometry_type": "Part::GeomLineSegment",
+            "kind": "line",
+            "construction": true,
+            "points": [
+              [
+                0.0,
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                1.0,
+                0.0
+              ]
+            ],
+            "handles": [],
+            "editable": false,
+            "start": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "end": [
+              0.0,
+              1.0,
+              0.0
+            ],
+            "first_parameter": 0.0,
+            "last_parameter": 1.0
+          }
+        ],
+        "spline_controls": [],
+        "externals": [],
+        "constraints": [
+          {
+            "index": 0,
+            "type": "Coincident",
+            "first": 0,
+            "first_pos": 2,
+            "second": 1,
+            "second_pos": 1,
+            "third": -2000,
+            "third_pos": 0,
+            "value": 0.0,
+            "name": "",
+            "driving": true,
+            "virtual": false,
+            "active": true
+          },
+          {
+            "index": 1,
+            "type": "Coincident",
+            "first": 1,
+            "first_pos": 2,
+            "second": 2,
+            "second_pos": 1,
+            "third": -2000,
+            "third_pos": 0,
+            "value": 0.0,
+            "name": "",
+            "driving": true,
+            "virtual": false,
+            "active": true
+          },
+          {
+            "index": 2,
+            "type": "Coincident",
+            "first": 2,
+            "first_pos": 2,
+            "second": 3,
+            "second_pos": 1,
+            "third": -2000,
+            "third_pos": 0,
+            "value": 0.0,
+            "name": "",
+            "driving": true,
+            "virtual": false,
+            "active": true
+          },
+          {
+            "index": 3,
+            "type": "Coincident",
+            "first": 3,
+            "first_pos": 2,
+            "second": 0,
+            "second_pos": 1,
+            "third": -2000,
+            "third_pos": 0,
+            "value": 0.0,
+            "name": "",
+            "driving": true,
+            "virtual": false,
+            "active": true
+          },
+          {
+            "index": 4,
+            "type": "Horizontal",
+            "first": 0,
+            "first_pos": 0,
+            "second": -2000,
+            "second_pos": 0,
+            "third": -2000,
+            "third_pos": 0,
+            "value": 0.0,
+            "name": "",
+            "driving": true,
+            "virtual": false,
+            "active": true
+          },
+          {
+            "index": 5,
+            "type": "Vertical",
+            "first": 1,
+            "first_pos": 0,
+            "second": -2000,
+            "second_pos": 0,
+            "third": -2000,
+            "third_pos": 0,
+            "value": 0.0,
+            "name": "",
+            "driving": true,
+            "virtual": false,
+            "active": true
+          },
+          {
+            "index": 6,
+            "type": "Horizontal",
+            "first": 2,
+            "first_pos": 0,
+            "second": -2000,
+            "second_pos": 0,
+            "third": -2000,
+            "third_pos": 0,
+            "value": 0.0,
+            "name": "",
+            "driving": true,
+            "virtual": false,
+            "active": true
+          },
+          {
+            "index": 7,
+            "type": "Vertical",
+            "first": 3,
+            "first_pos": 0,
+            "second": -2000,
+            "second_pos": 0,
+            "third": -2000,
+            "third_pos": 0,
+            "value": 0.0,
+            "name": "",
+            "driving": true,
+            "virtual": false,
+            "active": true
+          },
+          {
+            "index": 8,
+            "type": "Symmetric",
+            "first": 0,
+            "first_pos": 1,
+            "second": 2,
+            "second_pos": 1,
+            "third": -1,
+            "third_pos": 1,
+            "value": 0.0,
+            "name": "",
+            "driving": true,
+            "virtual": false,
+            "active": true
+          },
+          {
+            "index": 9,
+            "type": "Distance",
+            "first": 3,
+            "first_pos": 0,
+            "second": -2000,
+            "second_pos": 0,
+            "third": -2000,
+            "third_pos": 0,
+            "value": 50.8,
+            "quantity": {
+              "display": "2.00 in",
+              "input": "2 in",
+              "default_unit": "in",
+              "signature": [
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "value": 50.8
+            },
+            "name": "",
+            "driving": true,
+            "virtual": false,
+            "active": true
+          }
+        ]
+      }
+    }
+  ],
+  "units": {
+    "index": 3,
+    "label": "Imperial decimal (in, lb)",
+    "preview_length": {
+      "unit": "in",
+      "scale": 0.03937007874015748,
+      "decimals": 3
+    },
+    "sketch_frame": {
+      "size_mm": [
+        152.39999999999998,
+        152.39999999999998
+      ],
+      "purpose": "editing-guide"
+    },
+    "choices": [
+      {
+        "index": 0,
+        "label": "Standard (mm, kg, s, \u00b0)",
+        "workspace_defaults": {
+          "length": {
+            "display": "0.00 mm",
+            "input": "0 mm",
+            "default_unit": "mm",
+            "signature": [
+              1,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "value": 0.0
+          },
+          "angle": {
+            "display": "0.00\u00b0",
+            "input": "0 \u00b0",
+            "default_unit": "\u00b0",
+            "signature": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              1
+            ],
+            "value": 0.0
+          },
+          "mass": {
+            "display": "0.00 \u00b5g",
+            "input": "0 \u00b5g",
+            "default_unit": "\u00b5g",
+            "signature": [
+              0,
+              1,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "value": 0.0
+          }
+        }
+      },
+      {
+        "index": 1,
+        "label": "MKS (m, kg, s, \u00b0)",
+        "workspace_defaults": {
+          "length": {
+            "display": "0.00 mm",
+            "input": "0 mm",
+            "default_unit": "mm",
+            "signature": [
+              1,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "value": 0.0
+          },
+          "angle": {
+            "display": "0.00 deg",
+            "input": "0 deg",
+            "default_unit": "deg",
+            "signature": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              1
+            ],
+            "value": 0.0
+          },
+          "mass": {
+            "display": "0.00 \u00b5g",
+            "input": "0 \u00b5g",
+            "default_unit": "\u00b5g",
+            "signature": [
+              0,
+              1,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "value": 0.0
+          }
+        }
+      },
+      {
+        "index": 2,
+        "label": "US customary (in, lb)",
+        "workspace_defaults": {
+          "length": {
+            "display": "0.00 in",
+            "input": "0 in",
+            "default_unit": "in",
+            "signature": [
+              1,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "value": 0.0
+          },
+          "angle": {
+            "display": "0.00\u00b0",
+            "input": "0 \u00b0",
+            "default_unit": "\u00b0",
+            "signature": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              1
+            ],
+            "value": 0.0
+          },
+          "mass": {
+            "display": "0.00 lb",
+            "input": "0 lb",
+            "default_unit": "lb",
+            "signature": [
+              0,
+              1,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "value": 0.0
+          }
+        }
+      },
+      {
+        "index": 3,
+        "label": "Imperial decimal (in, lb)",
+        "workspace_defaults": {
+          "length": {
+            "display": "0.00 in",
+            "input": "0 in",
+            "default_unit": "in",
+            "signature": [
+              1,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "value": 0.0
+          },
+          "angle": {
+            "display": "0.00\u00b0",
+            "input": "0 \u00b0",
+            "default_unit": "\u00b0",
+            "signature": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              1
+            ],
+            "value": 0.0
+          },
+          "mass": {
+            "display": "0.00 lb",
+            "input": "0 lb",
+            "default_unit": "lb",
+            "signature": [
+              0,
+              1,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "value": 0.0
+          }
+        }
+      },
+      {
+        "index": 4,
+        "label": "Building Euro (cm, m\u00b2, m\u00b3)",
+        "workspace_defaults": {
+          "length": {
+            "display": "0.00 cm",
+            "input": "0 cm",
+            "default_unit": "cm",
+            "signature": [
+              1,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "value": 0.0
+          },
+          "angle": {
+            "display": "0.00 deg",
+            "input": "0 deg",
+            "default_unit": "deg",
+            "signature": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              1
+            ],
+            "value": 0.0
+          },
+          "mass": {
+            "display": "0.00 kg",
+            "input": "0 kg",
+            "default_unit": "kg",
+            "signature": [
+              0,
+              1,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "value": 0.0
+          }
+        }
+      },
+      {
+        "index": 5,
+        "label": "Building US (ft-in, sqft, cft)",
+        "workspace_defaults": {
+          "length": {
+            "display": "0",
+            "input": "0 in",
+            "default_unit": "in",
+            "signature": [
+              1,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "value": 0.0
+          },
+          "angle": {
+            "display": "0.00\u00b0",
+            "input": "0 \u00b0",
+            "default_unit": "\u00b0",
+            "signature": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              1
+            ],
+            "value": 0.0
+          },
+          "mass": {
+            "display": "0.00 kg",
+            "input": "0 kg",
+            "default_unit": "kg",
+            "signature": [
+              0,
+              1,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "value": 0.0
+          }
+        }
+      },
+      {
+        "index": 6,
+        "label": "Metric small parts & CNC (mm, mm/min)",
+        "workspace_defaults": {
+          "length": {
+            "display": "0.00 mm",
+            "input": "0 mm",
+            "default_unit": "mm",
+            "signature": [
+              1,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "value": 0.0
+          },
+          "angle": {
+            "display": "0.00\u00b0",
+            "input": "0 \u00b0",
+            "default_unit": "\u00b0",
+            "signature": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              1
+            ],
+            "value": 0.0
+          },
+          "mass": {
+            "display": "0.00 kg",
+            "input": "0 kg",
+            "default_unit": "kg",
+            "signature": [
+              0,
+              1,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "value": 0.0
+          }
+        }
+      },
+      {
+        "index": 7,
+        "label": "Imperial for Civil Eng (ft, lb, mph)",
+        "workspace_defaults": {
+          "length": {
+            "display": "0.00 ft",
+            "input": "0 ft",
+            "default_unit": "ft",
+            "signature": [
+              1,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "value": 0.0
+          },
+          "angle": {
+            "display": "0\u00b0",
+            "input": "0 deg",
+            "default_unit": "deg",
+            "signature": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              1
+            ],
+            "value": 0.0
+          },
+          "mass": {
+            "display": "0.00 lb",
+            "input": "0 lb",
+            "default_unit": "lb",
+            "signature": [
+              0,
+              1,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "value": 0.0
+          }
+        }
+      },
+      {
+        "index": 8,
+        "label": "FEM (mm, N, s)",
+        "workspace_defaults": {
+          "length": {
+            "display": "0.00 mm",
+            "input": "0 mm",
+            "default_unit": "mm",
+            "signature": [
+              1,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "value": 0.0
+          },
+          "angle": {
+            "display": "0.00 deg",
+            "input": "0 deg",
+            "default_unit": "deg",
+            "signature": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              1
+            ],
+            "value": 0.0
+          },
+          "mass": {
+            "display": "0.00 t",
+            "input": "0 t",
+            "default_unit": "t",
+            "signature": [
+              0,
+              1,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "value": 0.0
+          }
+        }
+      },
+      {
+        "index": 9,
+        "label": "Meter decimal (m, m\u00b2, m\u00b3)",
+        "workspace_defaults": {
+          "length": {
+            "display": "0.00 m",
+            "input": "0 m",
+            "default_unit": "m",
+            "signature": [
+              1,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "value": 0.0
+          },
+          "angle": {
+            "display": "0.00 deg",
+            "input": "0 deg",
+            "default_unit": "deg",
+            "signature": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              1
+            ],
+            "value": 0.0
+          },
+          "mass": {
+            "display": "0.00 kg",
+            "input": "0 kg",
+            "default_unit": "kg",
+            "signature": [
+              0,
+              1,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "value": 0.0
+          }
+        }
+      }
+    ],
+    "defaults": {
+      "mm": {
+        "display": "0.00 in",
+        "input": "0 in",
+        "default_unit": "in",
+        "signature": [
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "value": 0.0
+      },
+      "deg": {
+        "display": "0.00\u00b0",
+        "input": "0 \u00b0",
+        "default_unit": "\u00b0",
+        "signature": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1
+        ],
+        "value": 0.0
+      },
+      "rad": {
+        "display": "0.00\u00b0",
+        "input": "0 \u00b0",
+        "default_unit": "\u00b0",
+        "signature": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1
+        ],
+        "value": 0.0
+      },
+      "mm^2": {
+        "display": "0.00 in^2",
+        "input": "0 in^2",
+        "default_unit": "in^2",
+        "signature": [
+          2,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "value": 0.0
+      },
+      "mm^3": {
+        "display": "0.00 in^3",
+        "input": "0 in^3",
+        "default_unit": "in^3",
+        "signature": [
+          3,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "value": 0.0
+      }
+    },
+    "undoable": false
+  },
+  "redo_count": 0,
+  "undo_count": 2,
+  "sketch_edit": {
+    "object": "Sketch2",
+    "token": "sketch-30232-4"
+  },
+  "available": true,
+  "recovery_available": false,
+  "preview": null
+}

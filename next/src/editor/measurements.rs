@@ -53,6 +53,10 @@ impl Editor {
             .collect()
     }
 
+    pub(super) fn measurement_is_open(&self) -> bool {
+        self.measurement_ui.open
+    }
+
     pub(super) fn measurement_keeps_selection(&self, additive: bool) -> bool {
         self.measurement_ui.open && additive
     }
@@ -70,6 +74,7 @@ impl Editor {
 
     fn measurement_available(&self) -> bool {
         !self.unavailable()
+            && self.state["recovery_only"] != true
             && self.state["document"].is_string()
             && self.pending_file.is_none()
             && self.file_dialog.is_none()
@@ -89,7 +94,7 @@ impl Editor {
     pub(super) fn measurement_controls(&mut self, ui: &mut egui::Ui) {
         if ui
             .add_enabled(self.measurement_available(), egui::Button::new("Measure"))
-            .on_hover_text("Inspect native geometry | Ctrl+M")
+            .on_hover_text("Inspect native geometry | [")
             .clicked()
         {
             self.measurement_ui.open = true;
@@ -180,10 +185,11 @@ impl Editor {
         }
     }
 
-    pub(super) fn measurement_ui(&mut self, ctx: &egui::Context) {
-        if self.measurement_available()
+    pub(super) fn measurement_ui(&mut self, ctx: &egui::Context, shortcut_blocked: bool) {
+        if !shortcut_blocked
+            && self.measurement_available()
             && !ctx.wants_keyboard_input()
-            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, Key::M))
+            && super::consume_exact_key(ctx, egui::Modifiers::NONE, Key::OpenBracket)
         {
             self.measurement_ui.open = true;
         }
@@ -316,3 +322,15 @@ impl Editor {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+impl MeasurementUi {
+    pub(super) fn test_retained_receipt(state:&Value) -> Self {
+        Self { open:true, attempted:Some(json!({"document":state["document"],"expected_revision":state["revision"]})),
+            pending:None,error:None,result:Some(Measurement{document:state["document"].as_str().unwrap().into(),revision:state["revision"].as_u64().unwrap(),
+                unit_system:"mm".into(),selections:vec![],distance:None,angle:None,angle_unavailable:None}) }
+    }
+    pub(super) fn test_snapshot(&self) -> String {
+        format!("{:?}",(&self.open,&self.attempted,&self.pending,&self.result,&self.error))
+    }
+}

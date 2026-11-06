@@ -15,7 +15,7 @@ Third-party addons and unrelated FreeCAD workbenches have no blanket parity comm
 | Sketch geometry, constraints and solver | Native Sketcher C++; Python task adapter; Rust drawing, constraints and sketch-task command construction/interaction. | Entire declared geometry/constraint scope, solved freedom, conflicts, drag/trim/split/extend, fillet/chamfer, Carbon Copy, spline edits, external references and units. |
 | Document graph, references and attachment | FreeCAD App/Part C++; Python adapter; Rust ownership/display queries. | Linked edits, topology remapping, transformed attachment, suppression, reorder and dependency failures. |
 | Expressions and units | Native C++ expression engine and quantities. | Dimensional compatibility, dependency propagation, named constraints, cycles, errors and saved expressions. |
-| Accepted sketch-action journal | Rust owns accepted edit groups, cursor, staged acceptance/history moves, branch truncation, replay planning and counts. Python performs native replay. | Matched action/history, rejected staging and recovery, consumed profiles, reopen, strict snapshots and resource gates. Desktop acceptance of this extraction remains open. |
+| Accepted sketch-action journal | Rust owns accepted edit groups and opaque native checkpoints, cursor, staged acceptance/history moves, branch truncation and counts. Python captures/restores whole-object native content in one document. | Matched exact geometry/constraint/expression XML and persistent IDs, ElementMap/external references, rejected staging/recovery, consumed profiles, reopen and resource gates. Physical desktop and expanded checkpoint resource acceptance remain open. |
 | Document revision registry | Rust owns the worker-local map, monotonic clock, lookup/publication/close state and missing/stale token checks. Python requests checks and chooses publication timing. | Matched complete responses, malformed tokens, multi-document leases, name reuse, publication/recovery faults and resource gates. Desktop acceptance remains open. |
 | Transactions, history and recomputation | C++ document transactions; Python native replay payloads and native sequencing; Rust preview/sketch tokens, worker-wide and active-sketch edit admission, staged gesture metadata, poison state, revisions and accepted-action journal. | Atomic failure, revision guards, preview ownership, action/document Undo/Redo, Cancel and validated final recomputation. |
 | Persistence and interchange | C++ FCStd and STEP/IGES through Python; Rust file browser; legacy prototype preserved separately. | Editable graph and references after reopen; explicit import/export coverage, browser cancellation/replacement, unsupported-data reporting and original preservation. |
@@ -32,9 +32,10 @@ assemblies and executable extensions. The Rust feature catalog and typed native 
 a native type appearing in an allowlist or form does not establish a complete
 end-to-end workflow. See [UI-COVERAGE.md](UI-COVERAGE.md).
 
-The accepted-action journal is the first bounded extraction from preview/sketch
-session orchestration. Its matched native and resource checks pass on Windows;
-desktop acceptance remains open. Rust also owns the revision registry,
+The accepted-action journal is a bounded extraction from preview/sketch
+session orchestration. The checkpoint restoration change expands its original
+gate: native identity/history checks pass for the declared cases, while matched
+checkpoint resource and physical desktop acceptance remain open. Rust also owns the revision registry,
 preview/sketch gesture tokens, worker-wide mutation admission, staged metadata
 and poison state. Python retains opaque native replay payloads,
 native transaction sequencing and the decision when to advance a revision.

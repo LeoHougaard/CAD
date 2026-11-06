@@ -5,13 +5,12 @@ use serde_json::{Value, json};
 fn finite_vector(value: &Value) -> bool {
     value.as_array().is_some_and(|v| {
         v.len() == 3
-            && v.iter().all(|n| n.as_f64().is_some_and(f64::is_finite))
+            && v.iter().all(crate::document_units::scalar)
             && v[2].as_f64().is_some_and(|z| z.abs() < 1e-9)
     })
 }
 fn scalar(value: &Value) -> bool {
-    value.as_f64().is_some_and(f64::is_finite)
-        || value.as_str().is_some_and(|s| !s.trim().is_empty())
+    crate::document_units::scalar(value)
 }
 fn integer(value: &Value, min: i64, max: i64) -> bool {
     value.as_i64().is_some_and(|n| (min..=max).contains(&n))
@@ -21,6 +20,195 @@ fn geometry(snapshot: &Value, index: i32) -> Option<&Value> {
         .as_array()?
         .iter()
         .find(|g| g["index"].as_i64() == Some(index as i64))
+}
+
+/// Slot around one selected native line. The original line keeps its geometry
+/// ID and construction state; the generated boundary is solver-coupled to it.
+pub fn selected_line_slot(
+    snapshot: &Value,
+    selection: &[SketchElement],
+) -> Result<Vec<Value>, String> {
+    let object = snapshot["name"]
+        .as_str()
+        .filter(|name| {
+            !name.is_empty()
+                && name.chars().enumerate().all(|(i, c)| {
+                    c.is_ascii_alphabetic() || c == '_' || i > 0 && c.is_ascii_digit()
+                })
+        })
+        .ok_or("Choose a native sketch")?;
+    let [selected] = selection else {
+        return Err("Select one whole native sketch line".into());
+    };
+    let line = geometry(snapshot, selected.index)
+        .filter(|g| {
+            selected.index >= 0
+                && selected.point == 0
+                && g["kind"] == "line"
+                && g["editable"] == true
+                && !g["persistent_id"].is_null()
+        })
+        .ok_or("Select one whole editable native sketch line")?;
+    let native_point = |p: &Value| {
+        p.as_array().is_some_and(|v| {
+            v.len() == 3
+                && v.iter().all(|x| x.as_f64().is_some_and(f64::is_finite))
+                && v[2].as_f64().is_some_and(|z| z.abs() < 1e-9)
+        })
+    };
+    if !native_point(&line["start"]) || !native_point(&line["end"]) {
+        return Err("The selected line has invalid native endpoints".into());
+    }
+    let a = [
+        line["start"][0].as_f64().unwrap(),
+        line["start"][1].as_f64().unwrap(),
+    ];
+    let b = [
+        line["end"][0].as_f64().unwrap(),
+        line["end"][1].as_f64().unwrap(),
+    ];
+    let dx = b[0] - a[0];
+    let dy = b[1] - a[1];
+    let length = dx.hypot(dy);
+    if !length.is_finite() || length <= 1e-9 {
+        return Err("The selected line has zero length".into());
+    }
+    let (ux, uy) = (dx / length, dy / length);
+    let (nx, ny) = (-uy * 10., ux * 10.);
+    let point = |p: [f64; 2], x: f64, y: f64| json!([p[0] + x, p[1] + y, 0.]);
+    let first = snapshot["sketch"]["geometry_count"]
+        .as_u64()
+        .and_then(|n| i32::try_from(n).ok())
+        .filter(|n| *n <= i32::MAX - 4)
+        .ok_or("The native geometry count is unavailable")?;
+    if selected.index >= first {
+        return Err("The selected line changed; select it again".into());
+    }
+    let mut edits = vec![
+        json!({"op":"geometry","object":object,"kind":"arc","start":point(a,nx,ny),"mid":point(a,-ux*10.,-uy*10.),"end":point(a,-nx,-ny)}),
+        json!({"op":"geometry","object":object,"kind":"arc","start":point(b,-nx,-ny),"mid":point(b,ux*10.,uy*10.),"end":point(b,nx,ny)}),
+        json!({"op":"geometry","object":object,"kind":"line","start":point(a,nx,ny),"end":point(b,nx,ny)}),
+        json!({"op":"geometry","object":object,"kind":"line","start":point(a,-nx,-ny),"end":point(b,-nx,-ny)}),
+    ];
+    for (kind, args) in [
+        ("Tangent", json!([first, 1, first + 2, 1])),
+        ("Tangent", json!([first, 2, first + 3, 1])),
+        ("Tangent", json!([first + 1, 2, first + 2, 2])),
+        ("Tangent", json!([first + 1, 1, first + 3, 2])),
+        ("Equal", json!([first, first + 1])),
+        ("Coincident", json!([first, 3, selected.index, 1])),
+        ("Coincident", json!([first + 1, 3, selected.index, 2])),
+        ("Diameter", json!([first, 20.])),
+    ] {
+        edits.push(json!({"op":"constraint","object":object,"kind":kind,"args":args}));
+    }
+    Ok(edits)
+}
+
+fn mirror_geometry(snapshot: &Value, index: i32) -> Option<&Value> {
+    geometry(snapshot, index).or_else(|| {
+        snapshot["sketch"]["externals"]
+            .as_array()?
+            .iter()
+            .find(|g| g["geometry_index"].as_i64() == Some(index as i64))
+            .map(|g| &g["geometry"])
+    })
+}
+
+/// Legacy native Copy/Move/array use whole internal curves and standalone
+/// points. Endpoints may accompany curves but do not become source geometry.
+pub fn copy_sources(snapshot: &Value, selection: &[SketchElement]) -> Result<Vec<i32>, String> {
+    let sources = mirror_sources(snapshot, selection)?;
+    if sources.iter().any(|index| *index < 0) {
+        return Err("Copy, Clone, Move and arrays require internal native geometry".into());
+    }
+    Ok(sources)
+}
+
+/// Match the pinned command's selected-edge/standalone-point extraction.
+/// Endpoint and axis picks do not become source geometry when mixed with edges.
+pub fn mirror_sources(snapshot: &Value, selection: &[SketchElement]) -> Result<Vec<i32>, String> {
+    let mut result = Vec::new();
+    for selected in selection {
+        if matches!((selected.index, selected.point), (-1, 0 | 1) | (-2, 0)) {
+            continue;
+        }
+        let geo = mirror_geometry(snapshot, selected.index)
+            .ok_or("Select native geometry from the captured sketch")?;
+        if selected.point == 0 || geo["kind"] == "point" && selected.point == 1 {
+            if result.contains(&selected.index) {
+                return Err("Select each source geometry once".into());
+            }
+            result.push(selected.index);
+        } else if !geo["handles"].as_array().is_some_and(|handles| {
+            handles
+                .iter()
+                .any(|h| h["point"].as_i64() == Some(selected.point as i64))
+        }) {
+            return Err("Choose an exposed native sketch selection".into());
+        }
+    }
+    if result.is_empty() {
+        return Err("Select whole native geometries or standalone sketch points to mirror".into());
+    }
+    Ok(result)
+}
+
+/// Reference choices carry the native IDs from the captured snapshot.
+pub fn mirror_references(snapshot: &Value) -> Vec<(SketchElement, String)> {
+    let mut result = vec![
+        (
+            SketchElement {
+                index: -1,
+                point: 0,
+            },
+            "X axis".into(),
+        ),
+        (
+            SketchElement {
+                index: -2,
+                point: 0,
+            },
+            "Y axis".into(),
+        ),
+        (
+            SketchElement {
+                index: -1,
+                point: 1,
+            },
+            "Origin".into(),
+        ),
+    ];
+    for g in snapshot["sketch"]["geometry"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .chain(
+            snapshot["sketch"]["externals"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|e| &e["geometry"]),
+        )
+    {
+        let Some(index) = g["index"].as_i64().and_then(|i| i32::try_from(i).ok()) else {
+            continue;
+        };
+        if g["kind"] == "line" {
+            result.push((SketchElement { index, point: 0 }, format!("Line {index}")));
+        }
+        for h in g["handles"].as_array().into_iter().flatten() {
+            if let Ok(element) = serde_json::from_value::<SketchElement>(
+                json!({"index":h["index"],"point":h["point"]}),
+            ) {
+                result.push((
+                    element,
+                    format!("Geometry {} point {}", element.index, element.point),
+                ));
+            }
+        }
+    }
+    result
 }
 
 /// Compile against the native snapshot and selections captured when the task
@@ -55,6 +243,22 @@ pub fn build(
         "spline_knot" => &["parameter", "multiplicity", "knot", "change"],
         "spline_pole" => &["pole", "position"],
         "spline_weight" => &["pole", "value", "release_constraints"],
+        "mirror" => &[
+            "reference",
+            "delete_original",
+            "create_symmetry_constraints",
+        ],
+        "copy" | "clone" | "move" => &["displacement", "all_geometry"],
+        "circular_pattern" => &["center", "angle", "count"],
+        "rectangular_array" => &[
+            "displacement",
+            "all_geometry",
+            "columns",
+            "rows",
+            "clone",
+            "constrain_displacement",
+            "perpendicular_scale",
+        ],
         _ => return Err("Unsupported native sketch task".into()),
     };
     if params.keys().any(|key| !allowed.contains(&key.as_str())) {
@@ -64,11 +268,104 @@ pub fn build(
         "fillet" | "chamfer" => "fillet_geometry",
         "split" => "split_geometry",
         "extend" => "extend_geometry",
+        "mirror" => "mirror_geometry",
+        "copy" => "copy_geometry",
+        "clone" => "clone_geometry",
+        "move" => "move_geometries",
         other => other,
     };
     let mut edit = json!({"op":native,"object":object});
     for (key, value) in params {
         edit[key] = value.clone();
+    }
+    if kind == "circular_pattern" {
+        if !finite_vector(&parameters["center"])
+            || !scalar(&parameters["angle"])
+            || !integer(&parameters["count"], 2, 99)
+        {
+            return Err("Enter a sketch-local center, total angle and count 2..99".into());
+        }
+        let sources = copy_sources(snapshot, selection)?;
+        for index in &sources {
+            let geo = geometry(snapshot, *index).ok_or("Source geometry changed")?;
+            if !matches!(geo["kind"].as_str(), Some("point" | "line" | "circle"))
+                || geo["persistent_id"].is_null()
+            {
+                return Err("Circular pattern supports native points, line segments and circles".into());
+            }
+        }
+        edit["indices"] = json!(sources);
+        edit["source_ids"] = json!(sources.iter().map(|i| geometry(snapshot, *i).unwrap()["persistent_id"].clone()).collect::<Vec<_>>());
+        return Ok(vec![edit]);
+    }
+    if matches!(kind, "copy" | "clone" | "move" | "rectangular_array") {
+        if !finite_vector(&parameters["displacement"])
+            || parameters["displacement"][2].as_f64() != Some(0.)
+            || parameters
+                .get("all_geometry")
+                .is_some_and(|v| !v.is_boolean())
+        {
+            return Err("Enter a sketch-local displacement and geometry scope".into());
+        }
+        let sources = if parameters["all_geometry"] == true {
+            if snapshot["sketch"]["geometry"]
+                .as_array()
+                .is_none_or(Vec::is_empty)
+            {
+                return Err("The native sketch has no internal geometry".into());
+            }
+            Vec::new()
+        } else {
+            copy_sources(snapshot, selection)?
+        };
+        if kind == "rectangular_array"
+            && (!integer(&parameters["columns"], 2, 99)
+                || !integer(&parameters["rows"], 1, 99)
+                || !scalar(&parameters["perpendicular_scale"])
+                || ["clone", "constrain_displacement"]
+                    .iter()
+                    .any(|key| parameters.get(key).is_some_and(|v| !v.is_boolean())))
+        {
+            return Err("Enter native array columns 2..99, rows 1..99 and spacing options".into());
+        }
+        edit["indices"] = json!(sources);
+        return Ok(vec![edit]);
+    }
+    if kind == "mirror" {
+        let sources = mirror_sources(snapshot, selection)?;
+        let reference: SketchElement = serde_json::from_value(parameters["reference"].clone())
+            .map_err(|_| "Choose a native Mirror reference")?;
+        if parameters["reference"]
+            .as_object()
+            .is_none_or(|r| r.len() != 2)
+            || !mirror_references(snapshot)
+                .iter()
+                .any(|(r, _)| *r == reference)
+        {
+            return Err("Choose a native line, axis or exposed point from this sketch".into());
+        }
+        if ["delete_original", "create_symmetry_constraints"]
+            .iter()
+            .any(|key| parameters.get(key).is_some_and(|v| !v.is_boolean()))
+            || parameters["delete_original"] == true
+                && parameters["create_symmetry_constraints"] == true
+        {
+            return Err("Choose either delete originals or create symmetry constraints".into());
+        }
+        if parameters["create_symmetry_constraints"] == true {
+            let capability =
+                &snapshot["sketch"]["task_capabilities"]["mirror"]["create_symmetry_constraints"];
+            if capability["available"] != true {
+                return Err(capability["reason"]
+                    .as_str()
+                    .unwrap_or(
+                        "Constrained Mirror availability is unknown; refresh the native sketch",
+                    )
+                    .into());
+            }
+        }
+        edit["indices"] = json!(sources);
+        return Ok(vec![edit]);
     }
     if kind == "carbon_copy" {
         if parameters["source"]
@@ -212,11 +509,127 @@ pub fn build(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slot_uses_one_owned_native_line_and_keeps_its_mode() {
+        let mut s = json!({"name":"Sketch","sketch":{"geometry_count":1,"geometry":[
+            {"index":0,"persistent_id":17,"editable":true,"kind":"line",
+             "start":[3.,-5.,0.],"end":[3.,25.,0.],"construction":false}]}});
+        let line = SketchElement { index: 0, point: 0 };
+        let edits = selected_line_slot(&s, &[line]).unwrap();
+        assert_eq!(edits.len(), 12);
+        assert_eq!(edits[0]["kind"], "arc");
+        assert_eq!(edits[0]["start"], json!([-7., -5., 0.]));
+        assert_eq!(edits[0]["mid"], json!([3., -15., 0.]));
+        assert_eq!(edits[4]["kind"], "Tangent");
+        assert_eq!(edits[9]["args"], json!([1, 3, 0, 1]));
+        assert_eq!(edits[11]["args"], json!([1, 20.]));
+        assert!(!edits.iter().any(|e| e["op"] == "construction"));
+        assert!(selected_line_slot(&s, &[]).is_err());
+        assert!(selected_line_slot(&s, &[SketchElement { index: 0, point: 1 }]).is_err());
+        assert!(selected_line_slot(&s, &[line, line]).is_err());
+        s["sketch"]["geometry"][0]["persistent_id"] = Value::Null;
+        assert!(selected_line_slot(&s, &[line]).is_err());
+    }
     fn snapshot() -> Value {
         json!({"name":"Sketch","sketch":{"geometry":[{"index":0,"kind":"line"},{"index":1,"kind":"arc"},{"index":2,"kind":"bspline","poles":[[0,0,0],[1,2,0],[3,0,0]]}]}})
     }
     fn select(index: i32, point: i32) -> Vec<SketchElement> {
         vec![SketchElement { index, point }]
+    }
+    #[test]
+    fn copy_tasks_keep_native_inputs_and_reject_unsafe_sources() {
+        let s = snapshot();
+        let p = json!({"displacement":["1 in",{"quantity_input":"2","default_unit":"cm"},0]});
+        for (kind, op) in [
+            ("copy", "copy_geometry"),
+            ("clone", "clone_geometry"),
+            ("move", "move_geometries"),
+        ] {
+            let edits = build(&s, kind, &select(0, 0), &p).unwrap();
+            assert_eq!(edits[0]["op"], op);
+            assert_eq!(edits[0]["indices"], json!([0]));
+            assert_eq!(edits[0]["displacement"], p["displacement"]);
+            for pick in [select(-3, 0), select(999, 0), select(0, 1), vec![]] {
+                assert!(build(&s, kind, &pick, &p).is_err());
+            }
+        }
+        let all = json!({"displacement":[0,0,0],"all_geometry":true});
+        assert_eq!(
+            build(&s, "copy", &[], &all).unwrap()[0]["indices"],
+            json!([])
+        );
+        let mut a = json!({"displacement":[1,2,0],"columns":3,"rows":2,"clone":true,
+            "constrain_displacement":true,"perpendicular_scale":0.5});
+        assert!(build(&s, "rectangular_array", &select(0, 0), &a).is_ok());
+        for (key, value) in [
+            ("columns", json!(100)),
+            ("columns", json!(1)),
+            ("rows", json!(0)),
+            ("rows", json!(2147483648_i64)),
+            ("clone", json!(1)),
+            ("displacement", json!([0, 0, 1e-10])),
+        ] {
+            let mut invalid = a.clone();
+            invalid[key] = value;
+            assert!(build(&s, "rectangular_array", &select(0, 0), &invalid).is_err());
+        }
+        a["unknown"] = json!(1);
+        assert!(build(&s, "rectangular_array", &select(0, 0), &a).is_err());
+    }
+    #[test]
+    fn mirror_compiles_supplied_ids_and_native_selection_filtering() {
+        let s = json!({"name":"Sketch","sketch":{"task_capabilities":{"mirror":{"create_symmetry_constraints":{"available":true}}},"geometry":[
+            {"index":4,"kind":"line","handles":[{"index":4,"point":1},{"index":4,"point":2}]},
+            {"index":8,"kind":"point","handles":[{"index":8,"point":1}]}],
+            "externals":[{"geometry_index":-3,"geometry":{"index":-3,"kind":"line",
+                "handles":[{"index":-3,"point":1},{"index":-3,"point":2}]}}]}});
+        let selection = vec![
+            SketchElement { index: 8, point: 1 },
+            SketchElement { index: 4, point: 0 },
+            SketchElement { index: 4, point: 2 },
+            SketchElement {
+                index: -2,
+                point: 0,
+            },
+        ];
+        let p = json!({"reference":{"index":-3,"point":0},"create_symmetry_constraints":true});
+        assert_eq!(
+            build(&s, "mirror", &selection, &p).unwrap(),
+            vec![json!({
+            "op":"mirror_geometry","object":"Sketch","indices":[8,4],
+            "reference":{"index":-3,"point":0},"create_symmetry_constraints":true})]
+        );
+        assert!(build(&s, "mirror", &select(4, 1), &p).is_err());
+        assert!(build(&s, "mirror", &select(0, 0), &p).is_err());
+        assert!(
+            build(
+                &s,
+                "mirror",
+                &select(4, 0),
+                &json!({"reference":{"index":8,"point":0}})
+            )
+            .is_err()
+        );
+        assert!(
+            build(
+                &s,
+                "mirror",
+                &select(4, 0),
+                &json!({"reference":{"index":4,"point":1},
+            "delete_original":true,"create_symmetry_constraints":true})
+            )
+            .is_err()
+        );
+        assert!(
+            build(
+                &s,
+                "mirror",
+                &select(4, 0),
+                &json!({"reference":{"index":-1,"point":0},"offset":1})
+            )
+            .is_err()
+        );
     }
     #[test]
     fn native_task_indices_units_and_explicit_releases_survive_compilation() {
@@ -276,5 +689,41 @@ mod tests {
             )
             .is_err()
         );
+    }
+}
+#[cfg(test)]
+mod circular_pattern_tests {
+    use super::*;
+    fn snapshot() -> Value {
+        json!({"name":"Sketch45","sketch":{"geometry":[
+            {"index":0,"kind":"point","editable":true,"persistent_id":81,"handles":[{"point":1}]},
+            {"index":1,"kind":"line","editable":true,"persistent_id":82,"handles":[{"point":1},{"point":2}]},
+            {"index":2,"kind":"circle","editable":true,"persistent_id":83,"handles":[{"point":3}]}]}})
+    }
+    fn parameters() -> Value {
+        json!({"center":["0 in","0 mm",0],"angle":"360 deg","count":5})
+    }
+    #[test]
+    fn circular_pattern_preserves_mixed_native_identity_and_entered_units() {
+        let selected = vec![SketchElement{index:0,point:1},SketchElement{index:1,point:0},SketchElement{index:2,point:0}];
+        let edits = build(&snapshot(), "circular_pattern", &selected, &parameters()).unwrap();
+        assert_eq!(edits, vec![json!({"op":"circular_pattern","object":"Sketch45","indices":[0,1,2],"source_ids":[81,82,83],"center":["0 in","0 mm",0],"angle":"360 deg","count":5})]);
+    }
+    #[test]
+    fn circular_pattern_rejects_unsupported_missing_identity_and_empty_selection() {
+        let selected = vec![SketchElement{index:1,point:0}];
+        for change in [json!({"kind":"arc"}),json!({"persistent_id":null})] {
+            let mut state=snapshot();
+            for (key,value) in change.as_object().unwrap() { state["sketch"]["geometry"][1][key]=value.clone(); }
+            assert!(build(&state,"circular_pattern",&selected,&parameters()).is_err());
+        }
+        assert!(build(&snapshot(),"circular_pattern",&[],&parameters()).is_err());
+    }
+    #[test]
+    fn circular_pattern_bounds_and_plane_are_checked_before_dispatch() {
+        for (key,value) in [("count",json!(1)),("count",json!(100)),("count",json!(5.5)),("center",json!([0,0,1])),("unexpected",json!(true))] {
+            let mut p=parameters();p[key]=value;
+            assert!(build(&snapshot(),"circular_pattern",&[SketchElement{index:0,point:1}],&p).is_err());
+        }
     }
 }

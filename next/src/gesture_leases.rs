@@ -48,7 +48,9 @@ fn token(request: &Value, sketch: bool) -> Result<&str, Failure> {
 fn writable(op: &str) -> bool {
     matches!(
         op,
-        "new"
+        "document_settings"
+            | "assembly_sources"
+            | "new"
             | "open"
             | "transaction"
             | "undo"
@@ -63,6 +65,23 @@ fn writable(op: &str) -> bool {
             | "sketch_cancel"
             | "export_exchange"
     )
+}
+
+// This is a private native callback, never a public request option. The native
+// side proves the reference graph and edit safety; Rust owns terminal poison.
+enum TerminalRecovery {
+    CloseDependent,
+    RemoveReferences,
+}
+
+impl TerminalRecovery {
+    fn parse(frame: &Value) -> Result<Self, Failure> {
+        match (frame["recovery"].as_str(), frame["request"]["op"].as_str()) {
+            (Some("close_dependent"), Some("close")) => Ok(Self::CloseDependent),
+            (Some("remove_references"), Some("transaction")) => Ok(Self::RemoveReferences),
+            _ => Err(("lease_protocol", "Invalid terminal recovery action")),
+        }
+    }
 }
 
 impl Leases {
@@ -83,10 +102,36 @@ impl Leases {
             .ok_or(("lease_protocol", "Missing lease action"))?;
         let request = &frame["request"];
         let op = request["op"].as_str().unwrap_or("");
-        if action == "global" {
+        if matches!(action, "global" | "terminal_recovery") {
+            let recovery = if action == "terminal_recovery" {
+                Some(TerminalRecovery::parse(frame)?)
+            } else {
+                None
+            };
             if writable(op) {
-                let any_sketch = self.documents.values().any(|s| s.sketch.is_some());
-                let any_preview = self.documents.values().any(|s| s.preview.is_some());
+                let conflicts = |(owner, state): (&String, &Lease)| {
+                    // Never exempt the requested owner's local gesture, healthy
+                    // owners, unsettled callbacks, or unrelated poisoned owners.
+                    !(recovery.is_some()
+                        && state.poisoned
+                        && state.pending.is_none()
+                        && request["document"].as_str() != Some(owner.as_str())
+                        && frame["dependencies"]
+                            .as_array()
+                            .is_some_and(|dependencies| {
+                                dependencies
+                                    .iter()
+                                    .any(|d| d.as_str() == Some(owner.as_str()))
+                            }))
+                };
+                let any_sketch = self
+                    .documents
+                    .iter()
+                    .any(|entry| conflicts(entry) && entry.1.sketch.is_some());
+                let any_preview = self
+                    .documents
+                    .iter()
+                    .any(|entry| conflicts(entry) && entry.1.preview.is_some());
                 // Python dictionary membership used to reject unhashable identifiers
                 // only when a lease was present. Preserve that public error exactly.
                 if (any_sketch || any_preview) && !matches!(op, "new" | "open") {
@@ -211,6 +256,13 @@ impl Leases {
                         "invalid_request",
                         "Sketch editing requires a nonempty edits list",
                     ))?;
+                for edit in edits {
+                    if let Some(flag) = edit.get("first_scale") {
+                        if edit["op"] != "datum" || !flag.is_boolean() {
+                            return Err(("invalid_request", "first_scale must be a boolean on a datum edit"));
+                        }
+                    }
+                }
                 if action == "sketch_edits_shape" {
                     return Ok(Value::Null);
                 }
@@ -250,6 +302,8 @@ impl Leases {
                             | "trim_geometry"
                             | "expose_internal"
                             | "external_geometry"
+                            | "auto_external_coincident"
+                            | "pierce"
                             | "external_state"
                             | "delete_external"
                             | "fillet_geometry"
@@ -260,6 +314,12 @@ impl Leases {
                             | "spline_knot"
                             | "spline_pole"
                             | "spline_weight"
+                            | "mirror_geometry"
+                            | "copy_geometry"
+                            | "clone_geometry"
+                            | "move_geometries"
+                            | "rectangular_array"
+                            | "circular_pattern"
                     ) {
                         return Err(denied);
                     }
@@ -428,6 +488,103 @@ mod tests {
             "preview_stage",
             json!({"token":"gesture"}),
             json!({"label":label}),
+        );
+    }
+    #[test]
+    fn terminal_recovery_exempts_only_foreign_poisoned_dependencies() {
+        let mut s = Leases::default();
+        begin(&mut s);
+        let request = json!({"op":"close","document":"B"});
+        let proof = json!({"recovery":"close_dependent","dependencies":["A","B"]});
+        error(
+            &mut s,
+            "terminal_recovery",
+            request.clone(),
+            proof.clone(),
+            "sketch_active",
+        );
+        ok(&mut s, "poison", json!({}), json!({}));
+        ok(&mut s, "terminal_recovery", request.clone(), proof.clone());
+        // Admission neither releases the owner nor clears terminal poison.
+        let state = ok(&mut s, "metadata", json!({}), json!({}));
+        assert_eq!(state["available"], false);
+        assert_eq!(state["sketch_edit"]["token"], "session");
+        error(
+            &mut s,
+            "global",
+            request.clone(),
+            json!({}),
+            "sketch_active",
+        );
+        error(
+            &mut s,
+            "terminal_recovery",
+            request.clone(),
+            json!({"recovery":"close_dependent","dependencies":["B"]}),
+            "sketch_active",
+        );
+        error(
+            &mut s,
+            "terminal_recovery",
+            json!({"op":"save","document":"B"}),
+            proof.clone(),
+            "lease_protocol",
+        );
+        ok(
+            &mut s,
+            "terminal_recovery",
+            json!({"op":"transaction","document":"B"}),
+            json!({"recovery":"remove_references","dependencies":["A","B"]}),
+        );
+        stage(&mut s, "Poisoned drag");
+        error(
+            &mut s,
+            "terminal_recovery",
+            request.clone(),
+            proof.clone(),
+            "sketch_active",
+        );
+        ok(
+            &mut s,
+            "preview_resolve",
+            json!({}),
+            json!({"accepted":true}),
+        );
+        ok(&mut s, "terminal_recovery", request.clone(), proof.clone());
+        let mut frame = json!({"action":"sketch_begin","document":"C","request":{"token":"healthy-task"},"object":"Sketch"});
+        assert_eq!(s.respond(&frame)["ok"], true);
+        error(
+            &mut s,
+            "terminal_recovery",
+            request.clone(),
+            proof.clone(),
+            "sketch_active",
+        );
+        frame = json!({"action":"sketch_end","document":"C"});
+        assert_eq!(s.respond(&frame)["ok"], true);
+        ok(&mut s, "sketch_end", json!({}), json!({}));
+        stage(&mut s, "Healthy preview");
+        ok(
+            &mut s,
+            "preview_resolve",
+            json!({}),
+            json!({"accepted":true}),
+        );
+        // The same test's owner A is still poisoned, so use a fresh healthy lease.
+        let mut healthy = Leases::default();
+        stage(&mut healthy, "Healthy preview");
+        ok(
+            &mut healthy,
+            "preview_resolve",
+            json!({}),
+            json!({"accepted":true}),
+        );
+        error(
+            &mut healthy,
+            "terminal_recovery",
+            request,
+            proof,
+            "preview_active",
         );
     }
     #[test]
@@ -796,6 +953,7 @@ mod tests {
             "trim_geometry",
             "expose_internal",
             "external_geometry",
+            "auto_external_coincident",
             "external_state",
             "delete_external",
             "fillet_geometry",
@@ -806,6 +964,11 @@ mod tests {
             "spline_knot",
             "spline_pole",
             "spline_weight",
+            "mirror_geometry",
+            "copy_geometry",
+            "clone_geometry",
+            "move_geometries",
+            "rectangular_array",
         ] {
             ok(
                 &mut s,
@@ -815,6 +978,32 @@ mod tests {
             );
         }
         assert_eq!(ok(&mut s, "metadata", json!({}), json!({})), before);
+    }
+
+    #[test]
+    fn symbolic_datum_keeps_sketch_lease_and_request_bytes() {
+        let mut leases = Leases::default();
+        begin(&mut leases);
+        let before = ok(&mut leases, "metadata", json!({}), json!({}));
+        let edits = json!([
+            {"op":"constraint","object":"Sketch","kind":"Angle","args":[0,1,1,1,1.0]},
+            {"op":"datum","object":"Sketch","index_from":0,"value":"45 deg"}
+        ]);
+        let saved = edits.clone();
+        ok(
+            &mut leases,
+            "sketch_edits_shape",
+            json!({}),
+            json!({"edits":edits}),
+        );
+        ok(
+            &mut leases,
+            "sketch_edits",
+            json!({}),
+            json!({"edits":edits}),
+        );
+        assert_eq!(edits, saved);
+        assert_eq!(ok(&mut leases, "metadata", json!({}), json!({})), before);
     }
     #[test]
     fn feature_history_preview_preflight_keeps_alias_and_owner_precedence() {
@@ -939,4 +1128,29 @@ mod tests {
             Value::Null
         );
     }
+    #[test]
+    fn first_scale_flag_shape_validation_preserves_owner_and_request() {
+        let mut s = Leases::default();
+        begin(&mut s);
+        let before = ok(&mut s,"metadata",json!({}),json!({}));
+        for edit in [
+            json!({"op":"datum","object":"Sketch","first_scale":null}),
+            json!({"op":"datum","object":"Sketch","first_scale":1}),
+            json!({"op":"datum","object":"Sketch","first_scale":"true"}),
+            json!({"op":"constraint","object":"Sketch","first_scale":false})
+        ] {
+            error(&mut s,"sketch_edits_shape",json!({}),json!({"edits":[edit]}),"invalid_request");
+            assert_eq!(ok(&mut s,"metadata",json!({}),json!({})),before);
+        }
+        let edits = json!([
+            {"op":"constraint","object":"Sketch","kind":"Distance","args":[0,5]},
+            {"op":"datum","object":"Sketch","index_from":0,"value":"2 in","first_scale":true}]);
+        let saved=edits.clone();
+        for action in ["sketch_edits_shape","sketch_edits"] {
+            ok(&mut s,action,json!({}),json!({"edits":edits}));
+        }
+        assert_eq!(edits,saved);
+        assert_eq!(ok(&mut s,"metadata",json!({}),json!({})),before);
+    }
+
 }

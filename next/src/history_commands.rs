@@ -118,6 +118,7 @@ pub fn build(state: &Value, request: &Value) -> Result<Vec<Value>, String> {
     let allowed: &[&str] = match op {
         "body_tip" => &["op", "object", "tip"],
         "body_reorder" => &["op", "object", "target", "after", "tip"],
+        "feature_suppression" => &["op", "object", "suppressed"],
         _ => return Err("Unsupported native history operation".into()),
     };
     if request.keys().any(|key| !allowed.contains(&key.as_str())) {
@@ -125,6 +126,24 @@ pub fn build(state: &Value, request: &Value) -> Result<Vec<Value>, String> {
     }
     let snapshot = Snapshot::read(state)?;
     let object = name(required(request, "object")?, "object")?;
+    if op == "feature_suppression" {
+        let feature = snapshot.object(object)?;
+        let suppressed = required(request, "suppressed")?
+            .as_bool()
+            .ok_or("Suppression must be a boolean")?;
+        if feature["suppression"]["can_toggle"] != true {
+            return Err(feature["suppression"]["reason"]
+                .as_str()
+                .unwrap_or("Read native suppression availability before editing")
+                .to_owned());
+        }
+        if !feature["properties"]["Suppressed"].is_boolean() {
+            return Err("Read the native suppression value before editing".into());
+        }
+        return Ok(vec![
+            json!({"op":"set","object":object,"property":"Suppressed","value":suppressed}),
+        ]);
+    }
     if op == "body_tip" {
         let body = snapshot.body(object)?;
         let members = snapshot.members(body)?;
@@ -167,6 +186,31 @@ pub fn build(state: &Value, request: &Value) -> Result<Vec<Value>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn suppression_uses_native_availability_and_boolean_input() {
+        let mut state = json!({"available":true,"objects":[{"name":"A",
+            "properties":{"Suppressed":false},"suppression":{"can_toggle":true,"reason":null}}]});
+        let request = json!({"op":"feature_suppression","object":"A","suppressed":true});
+        assert_eq!(
+            build(&state, &request).unwrap(),
+            [json!({"op":"set","object":"A","property":"Suppressed","value":true})]
+        );
+        let mut bad = request.clone();
+        bad["suppressed"] = json!("true");
+        assert!(build(&state, &bad).unwrap_err().contains("boolean"));
+        bad = request.clone();
+        bad["tip"] = Value::Null;
+        assert!(build(&state, &bad).is_err());
+        state["objects"][0]["suppression"] =
+            json!({"can_toggle":false,"reason":"Original placement unavailable"});
+        assert_eq!(
+            build(&state, &request).unwrap_err(),
+            "Original placement unavailable"
+        );
+        state["available"] = json!(false);
+        assert!(build(&state, &request).unwrap_err().contains("unavailable"));
+    }
 
     fn state() -> Value {
         json!({"available":true,"objects":[

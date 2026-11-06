@@ -6,6 +6,126 @@ use std::{
     thread::JoinHandle,
 };
 
+#[test]
+fn cube_corner_pointer_route_preserves_model_and_history() {
+    let state: Value = serde_json::from_str(include_str!(
+        "../../tests/fixtures/view_cube_corner_state.json"
+    ))
+    .unwrap();
+    let (jobs, input) = mpsc::sync_channel(1);
+    let (_output, replies) = mpsc::channel();
+    // Real Editor frames, with no worker thread/process: any emitted model job
+    // fails the test. The state is a retained completed native sketch snapshot.
+    let mut editor = Editor {
+        jobs,
+        replies,
+        busy: false,
+        registry: Registry::builtin().unwrap(),
+        state: state.clone(),
+        viewport: Viewport::default(),
+        sketch: None,
+        selected_object: None,
+        sketch_ui: SketchUi::default(),
+        sketch_creation: None,
+        body_ui: BodyUi::default(),
+        property_ui: properties::PropertyUi::default(),
+        measurement_ui: measurements::MeasurementUi::default(),
+        units_ui: Default::default(),
+        transform_ui: transforms::TransformUi::default(),
+        exchange_ui: exchange::ExchangeUi::default(),
+        draft: None,
+        sequence: 17,
+        error: None,
+        status: String::new(),
+        path: "retained-prefix.FCStd".into(),
+        file_input: String::new(),
+        file_dialog: None,
+        file_browser: file_browser::FileBrowser::default(),
+        overwrite: false,
+        dirty: true,
+        pending_file: None,
+        allow_close: false,
+        fit_next: false,
+    };
+    editor.viewport.set_view(crate::viewport::StandardView::Top);
+    let ctx = egui::Context::default();
+    let frame = |editor: &mut Editor, events| {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1280., 850.),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                eframe::App::update(editor, ctx, &mut eframe::Frame::_new_kittest());
+            },
+        )
+    };
+    frame(&mut editor, vec![]);
+    let output = frame(&mut editor, vec![]);
+    let cube = editor.viewport.view_cube_rect().unwrap();
+    let polygons: Vec<_> = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Path(path)
+                if path.closed
+                    && path.points.len() == 4
+                    && path.points.iter().all(|p| cube.contains(*p)) =>
+            {
+                Some(&path.points)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(polygons.len(), 1, "actual rendered Top cube face");
+    let pos = *polygons[0]
+        .iter()
+        .max_by(|a, b| (a.x + a.y).total_cmp(&(b.x + b.y)))
+        .unwrap();
+    assert!(pos.x > cube.center().x && pos.y > cube.center().y);
+    let before = (editor.path.clone(), editor.dirty, editor.sequence);
+    for pressed in [true, false] {
+        frame(
+            &mut editor,
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        assert_eq!(
+            editor.state, state,
+            "corner input must preserve all native/history fields"
+        );
+        assert!(
+            input.try_recv().is_err(),
+            "corner input emitted a model job"
+        );
+    }
+    let origin = editor.viewport.sketch_screen_point([0., 0., 0.]);
+    let axes = [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.]]
+        .map(|p| editor.viewport.sketch_screen_point(p) - origin);
+    assert!(axes[0].x > 0. && axes[0].y > 0.);
+    assert!(axes[1].x > 0. && axes[1].y < 0.);
+    assert!(axes[2].y < 0.);
+    // Fixed screen-space f32 subtraction bound, frozen before execution.
+    assert!(
+        axes.iter()
+            .all(|axis| (axis.length() - axes[0].length()).abs() < 1e-3)
+    );
+    assert_eq!((editor.path.clone(), editor.dirty, editor.sequence), before);
+    assert!(!editor.busy && editor.error.is_none());
+    assert!(editor.viewport.view_cube_owns_pointer());
+}
+
 struct Actor {
     jobs: Option<SyncSender<Job>>,
     replies: Receiver<Reply>,
@@ -178,10 +298,13 @@ fn actor_fixture() {
                     } else {
                         request["object"].clone()
                     };
-                    Ok(
-                        json!({"document":document,"object":object,"revision":revision,
-                        "fixture_events":events,"open_documents":documents.keys().collect::<Vec<_>>()}),
-                    )
+                    let owner = if second && doc.display_failure == "wrong_document" {
+                        "Foreign"
+                    } else {
+                        document
+                    };
+                    Ok(json!({"document":owner,"object":object,"revision":revision,
+                        "fixture_events":events,"open_documents":documents.keys().collect::<Vec<_>>()}))
                 }
                 _ => Err(("unsupported_operation", "fixture operation unsupported")),
             }
@@ -225,7 +348,12 @@ fn multiple_body_display_requires_matching_identity_and_revision_for_every_objec
     assert_eq!(initial.scenes[0].0["object"], "ShapeA");
     assert_eq!(initial.scenes[1].0["object"], "ShapeB");
     let mut state = initial.state;
-    for failure in ["second_mesh", "wrong_object", "stale_second"] {
+    for failure in [
+        "second_mesh",
+        "wrong_object",
+        "wrong_document",
+        "stale_second",
+    ] {
         let edited = actor.edit(&state, failure);
         assert!(edited.accepted && edited.error.is_some());
         assert!(

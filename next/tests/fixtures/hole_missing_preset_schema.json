@@ -1,0 +1,1448 @@
+{
+  "type": "PartDesign::Hole",
+  "properties": {
+    "AllowMultiFace": true,
+    "BaseFeature": {
+      "link": "Base"
+    },
+    "BaseProfileType": 7,
+    "CustomThreadClearance": 0.0,
+    "Depth": 1.0,
+    "DepthType": "Dimension",
+    "Diameter": 1.4,
+    "DrillForDepth": false,
+    "DrillPoint": "Angled",
+    "DrillPointAngle": 118.0,
+    "ExpressionEngine": [],
+    "FuzzyTolerance": -1.0,
+    "HoleCutCountersinkAngle": 90.0,
+    "HoleCutCustomValues": true,
+    "HoleCutDepth": 0.25,
+    "HoleCutDiameter": 1.8,
+    "HoleCutType": "ISO 4762",
+    "Label": "Hole",
+    "Label2": "",
+    "Midplane": false,
+    "ModelThread": false,
+    "Placement": {
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    "Profile": {
+      "link": "Profile",
+      "subelements": []
+    },
+    "Refine": true,
+    "Reversed": false,
+    "Suppressed": false,
+    "Tapered": false,
+    "TaperedAngle": 90.0,
+    "ThreadClass": "4G",
+    "ThreadDepth": 1.0,
+    "ThreadDepthType": "Hole Depth",
+    "ThreadDiameter": 1.2,
+    "ThreadDirection": "Right",
+    "ThreadFit": "Medium",
+    "ThreadSize": "M1.2x0.25",
+    "ThreadType": "ISOMetricProfile",
+    "Threaded": false,
+    "UpToFace": null,
+    "UpToFace2": null,
+    "UpToShape": [],
+    "UpToShape2": [],
+    "UseCustomThreadClearance": false,
+    "Visibility": true,
+    "_Body": {
+      "link": "Body"
+    },
+    "_ElementMapVersion": "15.70200.5"
+  },
+  "property_types": {
+    "AddSubShape": "Part::PropertyPartShape",
+    "AllowMultiFace": "App::PropertyBool",
+    "BaseFeature": "App::PropertyLink",
+    "BaseProfileType": "App::PropertyInteger",
+    "CustomThreadClearance": "App::PropertyLength",
+    "Depth": "App::PropertyLength",
+    "DepthType": "App::PropertyEnumeration",
+    "Diameter": "App::PropertyLength",
+    "DrillForDepth": "App::PropertyBool",
+    "DrillPoint": "App::PropertyEnumeration",
+    "DrillPointAngle": "App::PropertyAngle",
+    "ExpressionEngine": "App::PropertyExpressionEngine",
+    "FuzzyTolerance": "App::PropertyFloatConstraint",
+    "HoleCutCountersinkAngle": "App::PropertyAngle",
+    "HoleCutCustomValues": "App::PropertyBool",
+    "HoleCutDepth": "App::PropertyLength",
+    "HoleCutDiameter": "App::PropertyLength",
+    "HoleCutType": "App::PropertyEnumeration",
+    "Label": "App::PropertyString",
+    "Label2": "App::PropertyString",
+    "Midplane": "App::PropertyBool",
+    "ModelThread": "App::PropertyBool",
+    "Placement": "App::PropertyPlacement",
+    "PreviewShape": "Part::PropertyPartShape",
+    "Profile": "App::PropertyLinkSub",
+    "Refine": "App::PropertyBool",
+    "Reversed": "App::PropertyBool",
+    "Shape": "Part::PropertyPartShape",
+    "ShapeMaterial": "Materials::PropertyMaterial",
+    "Suppressed": "App::PropertyBool",
+    "SuppressedShape": "Part::PropertyPartShape",
+    "Tapered": "App::PropertyBool",
+    "TaperedAngle": "App::PropertyAngle",
+    "ThreadClass": "App::PropertyEnumeration",
+    "ThreadDepth": "App::PropertyLength",
+    "ThreadDepthType": "App::PropertyEnumeration",
+    "ThreadDiameter": "App::PropertyLength",
+    "ThreadDirection": "App::PropertyEnumeration",
+    "ThreadFit": "App::PropertyEnumeration",
+    "ThreadSize": "App::PropertyEnumeration",
+    "ThreadType": "App::PropertyEnumeration",
+    "Threaded": "App::PropertyBool",
+    "UpToFace": "App::PropertyLinkSub",
+    "UpToFace2": "App::PropertyLinkSub",
+    "UpToShape": "App::PropertyLinkSubList",
+    "UpToShape2": "App::PropertyLinkSubList",
+    "UseCustomThreadClearance": "App::PropertyBool",
+    "Visibility": "App::PropertyBool",
+    "_Body": "App::PropertyLinkHidden",
+    "_ElementMapVersion": "App::PropertyString"
+  },
+  "property_metadata": {
+    "AddSubShape": {
+      "documentation": "",
+      "editor_mode": [],
+      "group": "",
+      "hidden": false,
+      "read_only": true,
+      "status": []
+    },
+    "AllowMultiFace": {
+      "documentation": "Allow multiple faces in profile",
+      "editor_mode": [],
+      "group": "SketchBased",
+      "hidden": false,
+      "read_only": false,
+      "status": []
+    },
+    "BaseFeature": {
+      "documentation": "",
+      "editor_mode": [
+        "Hidden"
+      ],
+      "group": "",
+      "hidden": true,
+      "read_only": false,
+      "status": [
+        "Hidden"
+      ]
+    },
+    "BaseProfileType": {
+      "documentation": "Which profile feature to base the holes on",
+      "editor_mode": [],
+      "group": "Hole",
+      "hidden": false,
+      "read_only": false,
+      "status": []
+    },
+    "CustomThreadClearance": {
+      "documentation": "Custom thread clearance (overrides ThreadClass)",
+      "editor_mode": [
+        "ReadOnly"
+      ],
+      "group": "Hole",
+      "hidden": false,
+      "read_only": true,
+      "status": [
+        "ReadOnly"
+      ]
+    },
+    "Depth": {
+      "documentation": "Length",
+      "editor_mode": [],
+      "group": "Hole",
+      "hidden": false,
+      "read_only": false,
+      "status": []
+    },
+    "DepthType": {
+      "documentation": "Type",
+      "editor_mode": [],
+      "enumerations": [
+        "Dimension",
+        "ThroughAll"
+      ],
+      "group": "Hole",
+      "hidden": false,
+      "read_only": false,
+      "status": []
+    },
+    "Diameter": {
+      "documentation": "Diameter",
+      "editor_mode": [
+        "ReadOnly"
+      ],
+      "group": "Hole",
+      "hidden": false,
+      "read_only": true,
+      "status": [
+        "ReadOnly"
+      ]
+    },
+    "DrillForDepth": {
+      "documentation": "The size of the drill point will be taken into\n account for the depth of blind holes",
+      "editor_mode": [],
+      "group": "Hole",
+      "hidden": false,
+      "read_only": false,
+      "status": []
+    },
+    "DrillPoint": {
+      "documentation": "Drill point type",
+      "editor_mode": [],
+      "enumerations": [
+        "Flat",
+        "Angled"
+      ],
+      "group": "Hole",
+      "hidden": false,
+      "read_only": false,
+      "status": []
+    },
+    "DrillPointAngle": {
+      "documentation": "Drill point angle",
+      "editor_mode": [],
+      "group": "Hole",
+      "hidden": false,
+      "read_only": false,
+      "status": []
+    },
+    "ExpressionEngine": {
+      "documentation": "Property expressions",
+      "editor_mode": [
+        "Hidden"
+      ],
+      "group": "Base",
+      "hidden": true,
+      "read_only": true,
+      "status": [
+        26
+      ]
+    },
+    "FuzzyTolerance": {
+      "documentation": "Fuzzy tolerance:\nIf value > 0: use the value\nIf value = 0: leave default value\nIf value < 0: determine value",
+      "editor_mode": [],
+      "group": "Part Design",
+      "hidden": false,
+      "read_only": false,
+      "status": []
+    },
+    "HoleCutCountersinkAngle": {
+      "documentation": "Head cut countersink angle",
+      "editor_mode": [
+        "ReadOnly"
+      ],
+      "group": "Hole",
+      "hidden": false,
+      "read_only": true,
+      "status": [
+        "ReadOnly"
+      ]
+    },
+    "HoleCutCustomValues": {
+      "documentation": "Custom cut values",
+      "editor_mode": [
+        "ReadOnly"
+      ],
+      "group": "Hole",
+      "hidden": false,
+      "read_only": true,
+      "status": [
+        "ReadOnly"
+      ]
+    },
+    "HoleCutDepth": {
+      "documentation": "Head cut depth",
+      "editor_mode": [],
+      "group": "Hole",
+      "hidden": false,
+      "read_only": false,
+      "status": []
+    },
+    "HoleCutDiameter": {
+      "documentation": "Head cut diameter",
+      "editor_mode": [],
+      "group": "Hole",
+      "hidden": false,
+      "read_only": false,
+      "status": []
+    },
+    "HoleCutType": {
+      "documentation": "Head cut type",
+      "editor_mode": [],
+      "enumerations": [
+        "None",
+        "Counterbore",
+        "Countersink",
+        "Counterdrill",
+        "DIN 7984",
+        "ISO 10642",
+        "ISO 14583",
+        "ISO 14583 (partial)",
+        "ISO 2009",
+        "ISO 4762",
+        "ISO 4762 + 7089",
+        "ISO 7046"
+      ],
+      "group": "Hole",
+      "hidden": false,
+      "read_only": false,
+      "status": []
+    },
+    "Label": {
+      "documentation": "User name of the object (UTF8)",
+      "editor_mode": [],
+      "group": "Base",
+      "hidden": false,
+      "read_only": false,
+      "status": [
+        27
+      ]
+    },
+    "Label2": {
+      "documentation": "User description of the object (UTF8)",
+      "editor_mode": [
+        "Hidden"
+      ],
+      "group": "Base",
+      "hidden": true,
+      "read_only": false,
+      "status": [
+        "Output",
+        26
+      ]
+    },
+    "Midplane": {
+      "documentation": "Extrude symmetric to sketch face",
+      "editor_mode": [],
+      "group": "SketchBased",
+      "hidden": false,
+      "read_only": false,
+      "status": []
+    },
+    "ModelThread": {
+      "documentation": "Model actual thread",
+      "editor_mode": [],
+      "group": "Hole",
+      "hidden": false,
+      "read_only": false,
+      "status": []
+    },
+    "Placement": {
+      "documentation": "",
+      "editor_mode": [
+        "ReadOnly",
+        "Hidden"
+      ],
+      "group": "",
+      "hidden": true,
+      "read_only": true,
+      "status": [
+        "ReadOnly",
+        "Hidden",
+        23
+      ]
+    },
+    "PreviewShape": {
+      "documentation": "",
+      "editor_mode": [
+        "Hidden"
+      ],
+      "group": "",
+      "hidden": true,
+      "read_only": true,
+      "status": [
+        "Hidden",
+        "Transient",
+        "Output"
+      ]
+    },
+    "Profile": {
+      "documentation": "Reference to sketch",
+      "editor_mode": [],
+      "group": "SketchBased",
+      "hidden": false,
+      "read_only": false,
+      "status": []
+    },
+    "Refine": {
+      "documentation": "Refine shape (clean up redundant edges) after operations",
+      "editor_mode": [],
+      "group": "Part Design",
+      "hidden": false,
+      "read_only": false,
+      "status": []
+    },
+    "Reversed": {
+      "documentation": "Reverse extrusion direction",
+      "editor_mode": [],
+      "group": "SketchBased",
+      "hidden": false,
+      "read_only": false,
+      "status": []
+    },
+    "Shape": {
+      "documentation": "",
+      "editor_mode": [],
+      "group": "",
+      "hidden": false,
+      "read_only": true,
+      "status": []
+    },
+    "ShapeMaterial": {
+      "documentation": "",
+      "editor_mode": [],
+      "group": "",
+      "hidden": false,
+      "read_only": false,
+      "status": []
+    },
+    "Suppressed": {
+      "documentation": "Is object suppressed",
+      "editor_mode": [],
+      "group": "Base",
+      "hidden": false,
+      "read_only": false,
+      "status": []
+    },
+    "SuppressedShape": {
+      "documentation": "",
+      "editor_mode": [],
+      "group": "",
+      "hidden": false,
+      "read_only": true,
+      "status": []
+    },
+    "Tapered": {
+      "documentation": "Tapered",
+      "editor_mode": [],
+      "group": "Hole",
+      "hidden": false,
+      "read_only": false,
+      "status": []
+    },
+    "TaperedAngle": {
+      "documentation": "Tapered angle",
+      "editor_mode": [
+        "ReadOnly"
+      ],
+      "group": "Hole",
+      "hidden": false,
+      "read_only": true,
+      "status": [
+        "ReadOnly"
+      ]
+    },
+    "ThreadClass": {
+      "documentation": "Thread class",
+      "editor_mode": [
+        "ReadOnly"
+      ],
+      "enumerations": [
+        "4G",
+        "4H",
+        "5G",
+        "5H",
+        "6G",
+        "6H",
+        "7G",
+        "7H",
+        "8G",
+        "8H"
+      ],
+      "group": "Hole",
+      "hidden": false,
+      "read_only": true,
+      "status": [
+        "ReadOnly"
+      ]
+    },
+    "ThreadDepth": {
+      "documentation": "Thread Length",
+      "editor_mode": [],
+      "group": "Hole",
+      "hidden": false,
+      "read_only": false,
+      "status": []
+    },
+    "ThreadDepthType": {
+      "documentation": "Thread depth type",
+      "editor_mode": [
+        "ReadOnly"
+      ],
+      "enumerations": [
+        "Hole Depth",
+        "Dimension",
+        "Tapped (DIN76)"
+      ],
+      "group": "Hole",
+      "hidden": false,
+      "read_only": true,
+      "status": [
+        "ReadOnly"
+      ]
+    },
+    "ThreadDiameter": {
+      "documentation": "Thread major diameter",
+      "editor_mode": [
+        "ReadOnly"
+      ],
+      "group": "Hole",
+      "hidden": false,
+      "read_only": true,
+      "status": [
+        "ReadOnly"
+      ]
+    },
+    "ThreadDirection": {
+      "documentation": "Thread direction",
+      "editor_mode": [
+        "ReadOnly"
+      ],
+      "enumerations": [
+        "Right",
+        "Left"
+      ],
+      "group": "Hole",
+      "hidden": false,
+      "read_only": true,
+      "status": [
+        "ReadOnly"
+      ]
+    },
+    "ThreadFit": {
+      "documentation": "Clearance hole fit",
+      "editor_mode": [],
+      "enumerations": [
+        "Medium",
+        "Fine",
+        "Coarse"
+      ],
+      "group": "Hole",
+      "hidden": false,
+      "read_only": false,
+      "status": []
+    },
+    "ThreadSize": {
+      "documentation": "Thread size",
+      "editor_mode": [],
+      "enumerations": [
+        "M1x0.25",
+        "M1.1x0.25",
+        "M1.2x0.25",
+        "M1.4x0.3",
+        "M1.6x0.35",
+        "M1.8x0.35",
+        "M2x0.4",
+        "M2.2x0.45",
+        "M2.5x0.45",
+        "M3x0.5",
+        "M3.5x0.6",
+        "M4x0.7",
+        "M4.5x0.75",
+        "M5x0.8",
+        "M6x1.0",
+        "M7x1.0",
+        "M8x1.25",
+        "M9x1.25",
+        "M10x1.5",
+        "M11x1.5",
+        "M12x1.75",
+        "M14x2.0",
+        "M16x2.0",
+        "M18x2.5",
+        "M20x2.5",
+        "M22x2.5",
+        "M24x3.0",
+        "M27x3.0",
+        "M30x3.5",
+        "M33x3.5",
+        "M36x4.0",
+        "M39x4.0",
+        "M42x4.5",
+        "M45x4.5",
+        "M48x5.0",
+        "M52x5.0",
+        "M56x5.5",
+        "M60x5.5",
+        "M64x6.0",
+        "M68x6.0"
+      ],
+      "group": "Hole",
+      "hidden": false,
+      "read_only": false,
+      "status": []
+    },
+    "ThreadType": {
+      "documentation": "Thread type",
+      "editor_mode": [],
+      "enumerations": [
+        "None",
+        "ISOMetricProfile",
+        "ISOMetricFineProfile",
+        "UNC",
+        "UNF",
+        "UNEF",
+        "NPT",
+        "BSP",
+        "BSW",
+        "BSF",
+        "ISOTyre"
+      ],
+      "group": "Hole",
+      "hidden": false,
+      "hole_task_cut_angles": {
+        "BSF": {
+          "Counterbore": false,
+          "Counterdrill": true,
+          "Countersink": true,
+          "None": false
+        },
+        "BSP": {
+          "Counterbore": false,
+          "Counterdrill": true,
+          "Countersink": true,
+          "None": false
+        },
+        "BSW": {
+          "Counterbore": false,
+          "Counterdrill": true,
+          "Countersink": true,
+          "None": false
+        },
+        "ISOMetricFineProfile": {
+          "Counterbore": false,
+          "Counterdrill": true,
+          "Countersink": true,
+          "ISO 10642": true,
+          "ISO 12474": false,
+          "ISO 4762": false,
+          "None": false
+        },
+        "ISOMetricProfile": {
+          "Counterbore": false,
+          "Counterdrill": true,
+          "Countersink": true,
+          "DIN 7984": false,
+          "ISO 10642": true,
+          "ISO 14583": false,
+          "ISO 14583 (partial)": false,
+          "ISO 2009": true,
+          "ISO 4762": false,
+          "ISO 4762 + 7089": false,
+          "ISO 7046": true,
+          "None": false
+        },
+        "ISOTyre": {
+          "Counterbore": false,
+          "Counterdrill": true,
+          "Countersink": true,
+          "None": false
+        },
+        "NPT": {
+          "Counterbore": false,
+          "Counterdrill": true,
+          "Countersink": true,
+          "None": false
+        },
+        "None": {
+          "Counterbore": false,
+          "Counterdrill": true,
+          "Countersink": true,
+          "None": false
+        },
+        "UNC": {
+          "Counterbore": false,
+          "Counterdrill": true,
+          "Countersink": true,
+          "None": false
+        },
+        "UNEF": {
+          "Counterbore": false,
+          "Counterdrill": true,
+          "Countersink": true,
+          "None": false
+        },
+        "UNF": {
+          "Counterbore": false,
+          "Counterdrill": true,
+          "Countersink": true,
+          "None": false
+        }
+      },
+      "hole_task_enumerations": {
+        "BSF": {
+          "HoleCutType": [
+            "None",
+            "Counterbore",
+            "Countersink",
+            "Counterdrill"
+          ],
+          "ThreadClass": [
+            "Medium",
+            "Normal"
+          ],
+          "ThreadFit": [
+            "Normal",
+            "Close",
+            "Wide"
+          ],
+          "ThreadSize": [
+            "3/16",
+            "7/32",
+            "1/4",
+            "9/32",
+            "5/16",
+            "3/8",
+            "7/16",
+            "1/2",
+            "9/16",
+            "5/8",
+            "11/16",
+            "3/4",
+            "7/8",
+            "1",
+            "1 1/8",
+            "1 1/4",
+            "1 3/8",
+            "1 1/2",
+            "1 5/8",
+            "1 3/4",
+            "2",
+            "2 1/4",
+            "2 1/2",
+            "2 3/4",
+            "3",
+            "3 1/4",
+            "3 1/2",
+            "3 3/4",
+            "4",
+            "4 1/4"
+          ]
+        },
+        "BSP": {
+          "HoleCutType": [
+            "None",
+            "Counterbore",
+            "Countersink",
+            "Counterdrill"
+          ],
+          "ThreadClass": [
+            "None"
+          ],
+          "ThreadFit": [
+            "Medium",
+            "Fine",
+            "Coarse"
+          ],
+          "ThreadSize": [
+            "1/16",
+            "1/8",
+            "1/4",
+            "3/8",
+            "1/2",
+            "5/8",
+            "3/4",
+            "7/8",
+            "1",
+            "1 1/8",
+            "1 1/4",
+            "1 1/2",
+            "1 3/4",
+            "2",
+            "2 1/4",
+            "2 1/2",
+            "2 3/4",
+            "3",
+            "3 1/2",
+            "4",
+            "4 1/2",
+            "5",
+            "5 1/2",
+            "6"
+          ]
+        },
+        "BSW": {
+          "HoleCutType": [
+            "None",
+            "Counterbore",
+            "Countersink",
+            "Counterdrill"
+          ],
+          "ThreadClass": [
+            "Medium",
+            "Normal"
+          ],
+          "ThreadFit": [
+            "Normal",
+            "Close",
+            "Wide"
+          ],
+          "ThreadSize": [
+            "1/8",
+            "3/16",
+            "1/4",
+            "5/16",
+            "3/8",
+            "7/16",
+            "1/2",
+            "9/16",
+            "5/8",
+            "11/16",
+            "3/4",
+            "7/8",
+            "1",
+            "1 1/8",
+            "1 1/4",
+            "1 1/2",
+            "1 3/4",
+            "2",
+            "2 1/4",
+            "2 1/2",
+            "2 3/4",
+            "3",
+            "3 1/4",
+            "3 1/2",
+            "3 3/4",
+            "4",
+            "4 1/2",
+            "5",
+            "5 1/2",
+            "6"
+          ]
+        },
+        "ISOMetricFineProfile": {
+          "HoleCutType": [
+            "None",
+            "Counterbore",
+            "Countersink",
+            "Counterdrill",
+            "ISO 10642",
+            "ISO 12474",
+            "ISO 4762"
+          ],
+          "ThreadClass": [
+            "4G",
+            "4H",
+            "5G",
+            "5H",
+            "6G",
+            "6H",
+            "7G",
+            "7H",
+            "8G",
+            "8H"
+          ],
+          "ThreadFit": [
+            "Medium",
+            "Fine",
+            "Coarse"
+          ],
+          "ThreadSize": [
+            "M1x0.2",
+            "M1.1x0.2",
+            "M1.2x0.2",
+            "M1.4x0.2",
+            "M1.6x0.2",
+            "M1.8x0.2",
+            "M2x0.25",
+            "M2.2x0.25",
+            "M2.5x0.35",
+            "M3x0.35",
+            "M3.5x0.35",
+            "M4x0.5",
+            "M4.5x0.5",
+            "M5x0.5",
+            "M5.5x0.5",
+            "M6x0.75",
+            "M7x0.75",
+            "M8x0.75",
+            "M8x1.0",
+            "M9x0.75",
+            "M9x1.0",
+            "M10x0.75",
+            "M10x1.0",
+            "M10x1.25",
+            "M11x0.75",
+            "M11x1.0",
+            "M12x1.0",
+            "M12x1.25",
+            "M12x1.5",
+            "M14x1.0",
+            "M14x1.25",
+            "M14x1.5",
+            "M15x1.0",
+            "M15x1.5",
+            "M16x1.0",
+            "M16x1.5",
+            "M17x1.0",
+            "M17x1.5",
+            "M18x1.0",
+            "M18x1.5",
+            "M18x2.0",
+            "M20x1.0",
+            "M20x1.5",
+            "M20x2.0",
+            "M22x1.0",
+            "M22x1.5",
+            "M22x2.0",
+            "M24x1.0",
+            "M24x1.5",
+            "M24x2.0",
+            "M25x1.0",
+            "M25x1.5",
+            "M25x2.0",
+            "M27x1.0",
+            "M27x1.5",
+            "M27x2.0",
+            "M28x1.0",
+            "M28x1.5",
+            "M28x2.0",
+            "M30x1.0",
+            "M30x1.5",
+            "M30x2.0",
+            "M30x3.0",
+            "M32x1.5",
+            "M32x2.0",
+            "M33x1.5",
+            "M33x2.0",
+            "M33x3.0",
+            "M35x1.5",
+            "M35x2.0",
+            "M36x1.5",
+            "M36x2.0",
+            "M36x3.0",
+            "M39x1.5",
+            "M39x2.0",
+            "M39x3.0",
+            "M40x1.5",
+            "M40x2.0",
+            "M40x3.0",
+            "M42x1.5",
+            "M42x2.0",
+            "M42x3.0",
+            "M42x4.0",
+            "M45x1.5",
+            "M45x2.0",
+            "M45x3.0",
+            "M45x4.0",
+            "M48x1.5",
+            "M48x2.0",
+            "M48x3.0",
+            "M48x4.0",
+            "M50x1.5",
+            "M50x2.0",
+            "M50x3.0",
+            "M52x1.5",
+            "M52x2.0",
+            "M52x3.0",
+            "M52x4.0",
+            "M55x1.5",
+            "M55x2.0",
+            "M55x3.0",
+            "M55x4.0",
+            "M56x1.5",
+            "M56x2.0",
+            "M56x3.0",
+            "M56x4.0",
+            "M58x1.5",
+            "M58x2.0",
+            "M58x3.0",
+            "M58x4.0",
+            "M60x1.5",
+            "M60x2.0",
+            "M60x3.0",
+            "M60x4.0",
+            "M62x1.5",
+            "M62x2.0",
+            "M62x3.0",
+            "M62x4.0",
+            "M64x1.5",
+            "M64x2.0",
+            "M64x3.0",
+            "M64x4.0",
+            "M65x1.5",
+            "M65x2.0",
+            "M65x3.0",
+            "M65x4.0",
+            "M68x1.5",
+            "M68x2.0",
+            "M68x3.0",
+            "M68x4.0",
+            "M70x1.5",
+            "M70x2.0",
+            "M70x3.0",
+            "M70x4.0",
+            "M70x6.0",
+            "M72x1.5",
+            "M72x2.0",
+            "M72x3.0",
+            "M72x4.0",
+            "M72x6.0",
+            "M75x1.5",
+            "M75x2.0",
+            "M75x3.0",
+            "M75x4.0",
+            "M75x6.0",
+            "M76x1.5",
+            "M76x2.0",
+            "M76x3.0",
+            "M76x4.0",
+            "M76x6.0",
+            "M80x1.5",
+            "M80x2.0",
+            "M80x3.0",
+            "M80x4.0",
+            "M80x6.0",
+            "M85x2.0",
+            "M85x3.0",
+            "M85x4.0",
+            "M85x6.0",
+            "M90x2.0",
+            "M90x3.0",
+            "M90x4.0",
+            "M90x6.0",
+            "M95x2.0",
+            "M95x3.0",
+            "M95x4.0",
+            "M95x6.0",
+            "M100x2.0",
+            "M100x3.0",
+            "M100x4.0",
+            "M100x6.0"
+          ]
+        },
+        "ISOMetricProfile": {
+          "HoleCutType": [
+            "None",
+            "Counterbore",
+            "Countersink",
+            "Counterdrill",
+            "DIN 7984",
+            "ISO 10642",
+            "ISO 14583",
+            "ISO 14583 (partial)",
+            "ISO 2009",
+            "ISO 4762",
+            "ISO 4762 + 7089",
+            "ISO 7046"
+          ],
+          "ThreadClass": [
+            "4G",
+            "4H",
+            "5G",
+            "5H",
+            "6G",
+            "6H",
+            "7G",
+            "7H",
+            "8G",
+            "8H"
+          ],
+          "ThreadFit": [
+            "Medium",
+            "Fine",
+            "Coarse"
+          ],
+          "ThreadSize": [
+            "M1x0.25",
+            "M1.1x0.25",
+            "M1.2x0.25",
+            "M1.4x0.3",
+            "M1.6x0.35",
+            "M1.8x0.35",
+            "M2x0.4",
+            "M2.2x0.45",
+            "M2.5x0.45",
+            "M3x0.5",
+            "M3.5x0.6",
+            "M4x0.7",
+            "M4.5x0.75",
+            "M5x0.8",
+            "M6x1.0",
+            "M7x1.0",
+            "M8x1.25",
+            "M9x1.25",
+            "M10x1.5",
+            "M11x1.5",
+            "M12x1.75",
+            "M14x2.0",
+            "M16x2.0",
+            "M18x2.5",
+            "M20x2.5",
+            "M22x2.5",
+            "M24x3.0",
+            "M27x3.0",
+            "M30x3.5",
+            "M33x3.5",
+            "M36x4.0",
+            "M39x4.0",
+            "M42x4.5",
+            "M45x4.5",
+            "M48x5.0",
+            "M52x5.0",
+            "M56x5.5",
+            "M60x5.5",
+            "M64x6.0",
+            "M68x6.0"
+          ]
+        },
+        "ISOTyre": {
+          "HoleCutType": [
+            "None",
+            "Counterbore",
+            "Countersink",
+            "Counterdrill"
+          ],
+          "ThreadClass": [
+            "None"
+          ],
+          "ThreadFit": [
+            "Normal",
+            "Close",
+            "Wide"
+          ],
+          "ThreadSize": [
+            "5v1",
+            "5v2",
+            "6v1",
+            "8v1",
+            "9v1",
+            "10v2",
+            "12v1",
+            "13v1",
+            "8v2",
+            "10v1",
+            "11v1",
+            "13v2",
+            "15v1",
+            "16v1",
+            "17v1",
+            "17v2",
+            "17v3",
+            "19v1",
+            "20v1"
+          ]
+        },
+        "NPT": {
+          "HoleCutType": [
+            "None",
+            "Counterbore",
+            "Countersink",
+            "Counterdrill"
+          ],
+          "ThreadClass": [
+            "None"
+          ],
+          "ThreadFit": [
+            "Normal",
+            "Close",
+            "Loose"
+          ],
+          "ThreadSize": [
+            "1/16",
+            "1/8",
+            "1/4",
+            "3/8",
+            "1/2",
+            "3/4",
+            "1",
+            "1 1/4",
+            "1 1/2",
+            "2",
+            "2 1/2",
+            "3",
+            "3 1/2",
+            "4",
+            "5",
+            "6",
+            "8",
+            "10",
+            "12"
+          ]
+        },
+        "None": {
+          "HoleCutType": [
+            "None",
+            "Counterbore",
+            "Countersink",
+            "Counterdrill"
+          ],
+          "ThreadClass": [
+            "None"
+          ],
+          "ThreadFit": [
+            "-",
+            "-",
+            "-"
+          ],
+          "ThreadSize": [
+            "---"
+          ]
+        },
+        "UNC": {
+          "HoleCutType": [
+            "None",
+            "Counterbore",
+            "Countersink",
+            "Counterdrill"
+          ],
+          "ThreadClass": [
+            "1B",
+            "2B",
+            "3B"
+          ],
+          "ThreadFit": [
+            "Normal",
+            "Close",
+            "Loose"
+          ],
+          "ThreadSize": [
+            "#1",
+            "#2",
+            "#3",
+            "#4",
+            "#5",
+            "#6",
+            "#8",
+            "#10",
+            "#12",
+            "1/4",
+            "5/16",
+            "3/8",
+            "7/16",
+            "1/2",
+            "9/16",
+            "5/8",
+            "3/4",
+            "7/8",
+            "1",
+            "1 1/8",
+            "1 1/4",
+            "1 3/8",
+            "1 1/2",
+            "1 3/4",
+            "2",
+            "2 1/4",
+            "2 1/2",
+            "2 3/4",
+            "3",
+            "3 1/4",
+            "3 1/2",
+            "3 3/4",
+            "4"
+          ]
+        },
+        "UNEF": {
+          "HoleCutType": [
+            "None",
+            "Counterbore",
+            "Countersink",
+            "Counterdrill"
+          ],
+          "ThreadClass": [
+            "1B",
+            "2B",
+            "3B"
+          ],
+          "ThreadFit": [
+            "Normal",
+            "Close",
+            "Loose"
+          ],
+          "ThreadSize": [
+            "#12",
+            "1/4",
+            "5/16",
+            "3/8",
+            "7/16",
+            "1/2",
+            "9/16",
+            "5/8",
+            "11/16",
+            "3/4",
+            "13/16",
+            "7/8",
+            "15/16",
+            "1",
+            "1 1/16",
+            "1 1/8",
+            "1 1/4",
+            "1 5/16",
+            "1 3/8",
+            "1 7/16",
+            "1 1/2",
+            "1 9/16",
+            "1 5/8",
+            "1 11/16"
+          ]
+        },
+        "UNF": {
+          "HoleCutType": [
+            "None",
+            "Counterbore",
+            "Countersink",
+            "Counterdrill"
+          ],
+          "ThreadClass": [
+            "1B",
+            "2B",
+            "3B"
+          ],
+          "ThreadFit": [
+            "Normal",
+            "Close",
+            "Loose"
+          ],
+          "ThreadSize": [
+            "#0",
+            "#1",
+            "#2",
+            "#3",
+            "#4",
+            "#5",
+            "#6",
+            "#8",
+            "#10",
+            "#12",
+            "1/4",
+            "5/16",
+            "3/8",
+            "7/16",
+            "1/2",
+            "9/16",
+            "5/8",
+            "3/4",
+            "7/8",
+            "1",
+            "1 1/8",
+            "1 3/16",
+            "1 1/4",
+            "1 3/8",
+            "1 1/2"
+          ]
+        }
+      },
+      "hole_task_version": 1,
+      "read_only": false,
+      "status": []
+    },
+    "Threaded": {
+      "documentation": "Threaded",
+      "editor_mode": [],
+      "group": "Hole",
+      "hidden": false,
+      "read_only": false,
+      "status": []
+    },
+    "UpToFace": {
+      "documentation": "Face where feature will end",
+      "editor_mode": [],
+      "group": "Side1",
+      "hidden": false,
+      "read_only": false,
+      "status": []
+    },
+    "UpToFace2": {
+      "documentation": "Face where feature will end",
+      "editor_mode": [],
+      "group": "Side2",
+      "hidden": false,
+      "read_only": false,
+      "status": []
+    },
+    "UpToShape": {
+      "documentation": "Shape where feature will end",
+      "editor_mode": [],
+      "group": "Side1",
+      "hidden": false,
+      "read_only": false,
+      "status": []
+    },
+    "UpToShape2": {
+      "documentation": "Shape where feature will end",
+      "editor_mode": [],
+      "group": "Side2",
+      "hidden": false,
+      "read_only": false,
+      "status": []
+    },
+    "UseCustomThreadClearance": {
+      "documentation": "Use custom thread clearance",
+      "editor_mode": [
+        "ReadOnly"
+      ],
+      "group": "Hole",
+      "hidden": false,
+      "read_only": true,
+      "status": [
+        "ReadOnly"
+      ]
+    },
+    "Visibility": {
+      "documentation": "",
+      "editor_mode": [
+        "Hidden"
+      ],
+      "group": "",
+      "hidden": true,
+      "read_only": false,
+      "status": [
+        "Hidden",
+        "Output",
+        "NoModify"
+      ]
+    },
+    "_Body": {
+      "documentation": "",
+      "editor_mode": [
+        "ReadOnly",
+        "Hidden"
+      ],
+      "group": "Base",
+      "hidden": true,
+      "read_only": true,
+      "status": [
+        24,
+        25,
+        26,
+        27
+      ]
+    },
+    "_ElementMapVersion": {
+      "documentation": "",
+      "editor_mode": [
+        "Hidden"
+      ],
+      "group": "Base",
+      "hidden": true,
+      "read_only": true,
+      "status": [
+        25,
+        26,
+        27
+      ]
+    }
+  },
+  "expressions": {}
+}

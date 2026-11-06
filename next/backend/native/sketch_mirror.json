@@ -1,0 +1,7 @@
+{
+  "bridge_sha256": "89a02753d4e3a1271284d075d67f293958064c76aff10848f33c05c0b022ae29",
+  "runtime": {
+    "bin/FreeCADApp.dll": "efe57703f688cfefe7a6d806e3ea8592ffce516b06874c58597ab7c460780921",
+    "lib/Sketcher.pyd": "82431fac4ad665def55f6942fb2350e47e941e1d358f45a23e0ccdd4e0c56a25"
+  }
+}

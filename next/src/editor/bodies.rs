@@ -448,6 +448,32 @@ impl Editor {
     fn tree_mutable(&self) -> bool {
         self.tree_selectable() && self.draft.is_none()
     }
+    pub(super) fn toggle_feature_suppression(&mut self, name: &str) {
+        if !self.tree_mutable() {
+            return;
+        }
+        let Some(suppressed) = objects(&self.state)
+            .iter()
+            .find(|object| object["name"] == name)
+            .and_then(|object| object["properties"]["Suppressed"].as_bool())
+        else {
+            return;
+        };
+        match crate::history_commands::build(
+            &self.state,
+            &json!({"op":"feature_suppression","object":name,"suppressed":!suppressed}),
+        ) {
+            Ok(edits) => self.transaction(
+                if suppressed {
+                    "Unsuppress feature"
+                } else {
+                    "Suppress feature"
+                },
+                edits,
+            ),
+            Err(error) => self.error = Some(error),
+        }
+    }
     fn select_tree_object(&mut self, name: &str, additive: bool) {
         select_tree_name(&mut self.body_ui.selected, name, additive);
         self.selected_object = self.tree_selections().last().cloned();
@@ -465,7 +491,15 @@ impl Editor {
         let all = bodies(&self.state);
         egui::Window::new("Features")
             .id(egui::Id::new("features"))
+            .enabled(!self.units_ui.active())
             .default_pos([10., 82.])
+            .constrain_to(
+                self.viewport
+                    .response
+                    .as_ref()
+                    .filter(|_| !self.busy)
+                    .map_or_else(|| ctx.content_rect(), |response| response.rect),
+            )
             .default_width(145.)
             .resizable(false)
             .collapsible(true)
@@ -515,19 +549,27 @@ impl Editor {
         let collapsed: Vec<bool> = rows
             .iter()
             .map(|object| {
+                let origin_plane = object["type"] == "App::Plane"
+                    && matches!(
+                        object["properties"]["Role"].as_str(),
+                        Some("XY_Plane" | "XZ_Plane" | "YZ_Plane")
+                    );
                 reference_object(object)
+                    && !origin_plane
                     && !members.contains(object["name"].as_str().unwrap_or_default())
             })
             .collect();
         for (object, collapsed) in rows.iter().zip(&collapsed) {
-            if !collapsed {
+            if !collapsed && object["internal_vertex_helper"].is_null() {
                 self.feature_row(ui, object);
             }
         }
         let references: Vec<_> = rows
             .iter()
             .zip(collapsed)
-            .filter_map(|(object, collapsed)| collapsed.then_some(object))
+            .filter_map(|(object, collapsed)| {
+                (collapsed && object["internal_vertex_helper"].is_null()).then_some(object)
+            })
             .collect();
         if !references.is_empty() {
             egui::CollapsingHeader::new("References")
@@ -572,7 +614,75 @@ impl Editor {
             .iter()
             .any(|selected| selected == name)
             || self.selected_object.as_deref() == Some(name);
-        let response = ui.selectable_label(selected, text);
+        let mutable = self.tree_mutable();
+        let (response, visibility) = ui
+            .horizontal(|ui| {
+                let mut visibility = None;
+                if let Some(visible) = object["properties"]["Visibility"].as_bool() {
+                    let show = !visible;
+                    let label = format!("{} {}", if show { "Show" } else { "Hide" }, label(object));
+                    let eye = ui
+                        .add_enabled_ui(mutable, |ui| {
+                            let (_, rect) = ui.allocate_space(egui::vec2(20., 18.));
+                            let response = ui.interact(
+                                rect,
+                                egui::Id::new(("feature_visibility", name)),
+                                egui::Sense::click(),
+                            );
+                            response.widget_info(|| {
+                                egui::WidgetInfo::labeled(egui::WidgetType::Button, mutable, &label)
+                            });
+                            let center = rect.center();
+                            let color = if mutable {
+                                ui.visuals().text_color()
+                            } else {
+                                ui.visuals().weak_text_color()
+                            };
+                            let stroke = egui::Stroke::new(1.2_f32, color);
+                            ui.painter().add(egui::Shape::line(
+                                vec![
+                                    center + egui::vec2(-7., 0.),
+                                    center + egui::vec2(-3.5, -3.5),
+                                    center + egui::vec2(0., -4.5),
+                                    center + egui::vec2(3.5, -3.5),
+                                    center + egui::vec2(7., 0.),
+                                    center + egui::vec2(3.5, 3.5),
+                                    center + egui::vec2(0., 4.5),
+                                    center + egui::vec2(-3.5, 3.5),
+                                    center + egui::vec2(-7., 0.),
+                                ],
+                                stroke,
+                            ));
+                            ui.painter().circle_filled(center, 1.8, color);
+                            if !visible {
+                                ui.painter().line_segment(
+                                    [center + egui::vec2(-7., 6.), center + egui::vec2(7., -6.)],
+                                    stroke,
+                                );
+                            }
+                            response.on_hover_text(label)
+                        })
+                        .inner;
+                    if eye.clicked() {
+                        visibility = Some(show);
+                    }
+                }
+                (ui.selectable_label(selected, text), visibility)
+            })
+            .inner;
+        if let Some(show) = visibility {
+            let edits = tree_visibility_edits(&self.state, name, show);
+            if !edits.is_empty() {
+                self.transaction(
+                    if show {
+                        "Show native object"
+                    } else {
+                        "Hide native object"
+                    },
+                    edits,
+                );
+            }
+        }
         if response.clicked() && self.tree_selectable() {
             let additive = ui.input(|input| {
                 input.modifiers.ctrl || input.modifiers.shift || input.modifiers.command
@@ -598,9 +708,14 @@ impl Editor {
                 self.edit_feature(name);
             }
         }
-        let mutable = self.tree_mutable();
         response.context_menu(|ui| {
             ui.add_enabled_ui(mutable, |ui| {
+                if matches!(object["type"].as_str(), Some("App::Plane" | "PartDesign::Plane")) && ui.button("Offset plane").clicked() {
+                    self.start_offset_plane(name); ui.close();
+                }
+                if object["plane_offset"].is_object() && ui.button("Edit offset").clicked() {
+                    self.edit_offset_plane(name); ui.close();
+                }
                 if ui.button("Properties").clicked() {
                     self.edit_native_properties(name);
                     ui.close();
@@ -629,6 +744,28 @@ impl Editor {
                 {
                     self.start_reorder(name);
                     ui.close();
+                }
+                if object["suppression"].is_object() {
+                    let action = if object["properties"]["Suppressed"] == true {
+                        "Unsuppress"
+                    } else {
+                        "Suppress"
+                    };
+                    if ui
+                        .add_enabled(
+                            object["suppression"]["can_toggle"] == true,
+                            egui::Button::new(action),
+                        )
+                        .on_disabled_hover_text(
+                            object["suppression"]["reason"]
+                                .as_str()
+                                .unwrap_or("Native suppression is unavailable"),
+                        )
+                        .clicked()
+                    {
+                        self.toggle_feature_suppression(name);
+                        ui.close();
+                    }
                 }
                 if object["properties"]["Visibility"].is_boolean() {
                     let show = object["properties"]["Visibility"] == false;

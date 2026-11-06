@@ -55,6 +55,89 @@ pub fn writable(schema: &Value, property: &str) -> bool {
 /// Only changed values are written. Native computed/default properties never
 /// round-trip through the UI, and clearing an expression precedes its new value.
 pub fn build(parameters: &Value) -> Result<Vec<Value>, String> {
+    build_inner(parameters, false)
+}
+
+fn build_inner(parameters: &Value, allow_empty: bool) -> Result<Vec<Value>, String> {
+    if let Some(task) = parameters.get("part_mirror") {
+        if parameters["type"] != "Part::Mirroring" || parameters["body"].is_string() {
+            return Err("Mirror part requires a root native output".into());
+        }
+        if !task["source"].is_object() { return Err("Choose a solid source".into()); }
+        let mut candidate=parameters.clone();
+        candidate.as_object_mut().unwrap().remove("part_mirror");
+        candidate["properties"]=json!({});
+        let mut edits=build_inner(&candidate,true)?;
+        edits.push(json!({"op":"part_mirror","object":parameters["name"],"task":task}));
+        return Ok(edits);
+    }
+    if let Some(sections) = parameters.get("loft_sections") {
+        if parameters["type"] != "Part::Loft" || parameters["body"].is_string() {
+            return Err("New Loft requires a root native output".into());
+        }
+        if sections.as_array().is_none_or(|s| s.len() < 2) {
+            return Err("Choose at least two ordered loft sections".into());
+        }
+        let mut candidate = parameters.clone();
+        candidate.as_object_mut().unwrap().remove("loft_sections");
+        candidate["properties"].as_object_mut().unwrap().remove("Sections");
+        let mut edits = build_inner(&candidate, true)?;
+        edits.push(json!({"op":"loft_sections", "object":parameters["name"],
+            "feature_id":parameters["loft_feature_id"], "sections":sections}));
+        return Ok(edits);
+    }
+    if let Some(task) = parameters.get("offset_plane") {
+        if parameters["type"] != "PartDesign::Plane" {
+            return Err("Offset requires a native plane".into());
+        }
+        if task["magnitude"].as_f64().is_some_and(|v| !v.is_finite() || v < 0.) {
+            return Err("Offset magnitude must be positive; use Flip direction".into());
+        }
+        let mut candidate = parameters.clone();
+        candidate.as_object_mut().unwrap().remove("offset_plane");
+        let mut edits = build_inner(&candidate, true)?;
+        edits.push(json!({"op":"plane_offset","object":parameters["name"],
+            "body":parameters["body"],"body_id":task["body_id"],
+            "support":task["support"],"support_id":task["support_id"],
+            "feature_id":task["feature_id"],"magnitude":task["magnitude"],"flipped":task["flipped"]}));
+        return Ok(edits);
+    }
+    if let Some(point) = parameters.get("plane_point") {
+        let plane = point["plane"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .ok_or("Choose a plane")?;
+        let object = point["object"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .ok_or("Choose a vertex owner")?;
+        let subelement = point["subelement"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .ok_or("Choose a vertex")?;
+        let mapped = point["mapped_name"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .ok_or("Vertex identity is unavailable")?;
+        if parameters["create"] != true
+            || parameters["type"] != "PartDesign::Plane"
+            || parameters["body"] != point["body"]
+            || parameters["properties"]["MapMode"] != "ParallelPlane"
+            || parameters["properties"]["AttachmentSupport"]
+                != json!([
+                {"link":plane,"subelements":[]}, {"link":object,"subelements":[subelement]}])
+        {
+            return Err("Plane point references changed; select them again".into());
+        }
+        let mut candidate = parameters.clone();
+        candidate.as_object_mut().unwrap().remove("plane_point");
+        let mut edits = vec![
+            json!({"op":"validate_plane_point","object":object,"plane":plane,
+            "body":point["body"],"subelement":subelement,"mapped_name":mapped}),
+        ];
+        edits.extend(build(&candidate)?);
+        return Ok(edits);
+    }
     if let Some(selection) = parameters.get("extrusion_selection") {
         if !crate::extrusion_commands::supported(parameters["type"].as_str().unwrap_or_default()) {
             return Err("Termination selection requires Pad or Pocket".into());
@@ -100,6 +183,41 @@ pub fn build(parameters: &Value) -> Result<Vec<Value>, String> {
         edits.extend(build(&candidate)?);
         return Ok(edits);
     }
+    if let Some(region) = parameters.get("region_profile") {
+        if region["source"] != parameters["properties"]["Profile"]["link"] || region["body"] != parameters["body"] {
+            return Err("Region selection does not match this feature task".into());
+        }
+        let mut candidate=parameters.clone();
+        candidate.as_object_mut().unwrap().remove("region_profile");
+        candidate["properties"]["Profile"] = json!({"link":region["name"]});
+        if candidate["construction_axis"].is_object() { candidate["construction_axis"]["profile"] = region["name"].clone(); }
+        let mut edit=region.clone(); edit["op"]=json!("create_planar_region_profile");
+        let mut edits=vec![edit]; edits.extend(build(&candidate)?); return Ok(edits);
+    }
+    if let Some(axis) = parameters.get("construction_axis") {
+        if parameters["create"] != true
+            || parameters["type"] != "PartDesign::Revolution"
+            || axis["profile"] != parameters["properties"]["Profile"]["link"]
+            || axis["body"] != parameters["body"]
+        {
+            return Err("Construction axis does not match this Revolution task".into());
+        }
+        let helper = axis["name"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .ok_or("Missing axis dependency name")?;
+        let mut candidate = parameters.clone();
+        candidate
+            .as_object_mut()
+            .unwrap()
+            .remove("construction_axis");
+        candidate["properties"]["ReferenceAxis"] = json!({"link":helper,"subelements":[""]});
+        let mut edit = axis.clone();
+        edit["op"] = json!("create_revolve_axis");
+        let mut edits = vec![edit];
+        edits.extend(build(&candidate)?);
+        return Ok(edits);
+    }
     if parameters["transformations"].is_array() {
         return crate::transform_commands::build(parameters);
     }
@@ -117,6 +235,11 @@ pub fn build(parameters: &Value) -> Result<Vec<Value>, String> {
         let mut edit = json!({"op":"add_object","type":type_id,"name":name});
         if let Some(body) = parameters["body"].as_str().filter(|s| !s.is_empty()) {
             edit["body"] = json!(body);
+        }
+        if type_id == "Part::Helix" {
+            edit = parameters.get("helix_reference").ok_or("Select a cylindrical face or circular edge before Helix")?.clone();
+            edit["op"] = json!("create_standalone_helix");
+            edit["name"] = json!(name);
         }
         edits.push(edit);
     }
@@ -137,6 +260,7 @@ pub fn build(parameters: &Value) -> Result<Vec<Value>, String> {
     }
     // Native links must exist before dimensional properties and expressions use
     // them. Map order is otherwise irrelevant to native recomputation.
+    let value_start = edits.len();
     let mut fields: Vec<_> = properties.iter().collect();
     fields.sort_by_key(|(property, value)| {
         let controllers = [
@@ -146,9 +270,12 @@ pub fn build(parameters: &Value) -> Result<Vec<Value>, String> {
             "ThreadClass",
             "DepthType",
             "ThreadDepthType",
+            "ModelThread",
+            "UseCustomThreadClearance",
             "HoleCutType",
             "HoleCutCustomValues",
             "DrillPoint",
+            "Tapered",
             "SideType",
             "Type",
             "Type2",
@@ -163,7 +290,16 @@ pub fn build(parameters: &Value) -> Result<Vec<Value>, String> {
             .iter()
             .position(|field| *field == property.as_str())
             .unwrap_or(controllers.len());
-        if crate::extrusion_commands::supported(parameters["type"].as_str().unwrap_or_default()) {
+        if parameters["type"] == "PartDesign::Chamfer" {
+            // Creation previews recreate the default equal-distance object.
+            // Its mode enables dependent native properties synchronously.
+            (
+                usize::from(!is_reference(value)),
+                usize::from(property.as_str() != "ChamferType"),
+            )
+        } else if crate::extrusion_commands::supported(
+            parameters["type"].as_str().unwrap_or_default(),
+        ) {
             // Assemble task controllers before targets, then dimensional values.
             // Do not recompute between them: a mode can require a new target.
             let rank = match property.as_str() {
@@ -195,6 +331,35 @@ pub fn build(parameters: &Value) -> Result<Vec<Value>, String> {
         if !expression.is_null() {
             edits.push(json!({"op":"expression","object":name,"property":property,"expression":expression}));
         }
+    }
+    if parameters["type"] == "PartDesign::Hole" {
+        // Native controller expressions can change editor locks and enum
+        // domains too. Assemble them before dependent values, in the same
+        // order as literal controllers. FreeCAD evaluates every expression.
+        edits[value_start..].sort_by_key(|edit| {
+            let property = edit["property"].as_str().unwrap_or_default();
+            let property = property
+                .trim_start_matches('.')
+                .split(['.', '['])
+                .next()
+                .unwrap_or_default();
+            match property {
+                "Profile" => 0,
+                "ThreadType" => 1,
+                "Threaded" => 2,
+                "ThreadSize" => 3,
+                "ThreadClass" => 4,
+                "DepthType" => 5,
+                "ThreadDepthType" => 6,
+                "ModelThread" => 7,
+                "UseCustomThreadClearance" => 8,
+                "HoleCutType" => 9,
+                "HoleCutCustomValues" => 10,
+                "DrillPoint" => 11,
+                "Tapered" => 12,
+                _ => 13,
+            }
+        });
     }
     // Native profile/original/transform link setters can move the Body tip.
     // Creation publishes the new solid feature; editing preserves the tip
@@ -233,7 +398,7 @@ pub fn build(parameters: &Value) -> Result<Vec<Value>, String> {
             }
         }
     }
-    if edits.is_empty() {
+    if edits.is_empty() && !allow_empty {
         Err("Change a property first".into())
     } else {
         Ok(edits)
@@ -325,6 +490,28 @@ pub fn selected_links(selections: &[(String, String)], subelements: bool) -> Val
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn revolve_axis_dependency_is_created_before_the_revolution() {
+        let p = json!({"type":"PartDesign::Revolution","name":"Revolution","body":"Body",
+            "create":true,"properties":{"Profile":{"link":"Profile"},
+                "ReferenceAxis":{"link":"Profile","subelements":["V_Axis"]}},"expressions":{},
+            "construction_axis":{"name":"RevolveAxis","master":"Master","geometry_id":42,
+                "body":"Body","profile":"Profile"}});
+        let edits = build(&p).unwrap();
+        assert_eq!(edits[0]["op"], "create_revolve_axis");
+        assert_eq!(edits[0]["geometry_id"], 42);
+        assert!(edits.iter().any(|e| e["op"] == "set"
+            && e["object"] == "Revolution"
+            && e["property"] == "ReferenceAxis"
+            && e["value"] == json!({"link":"RevolveAxis","subelements":[""]})));
+        let mut stale = p.clone();
+        stale["construction_axis"]["profile"] = json!("Other");
+        assert!(build(&stale).is_err());
+        stale = p.clone();
+        stale["create"] = json!(false);
+        assert!(build(&stale).is_err());
+    }
     #[test]
     fn reference_choices_compose_before_profile_assignment_and_preserve_task_source_and_tip() {
         let state = json!({"objects":[
@@ -404,5 +591,68 @@ mod tests {
             vec![json!({"op":"add_object","name":"Box","type":"Part::Box"})]
         );
         assert!(build(&json!({"name":"Box","create":false,"properties":{}})).is_err());
+    }
+    #[test]
+    fn chamfer_creation_replays_mode_before_dependent_dimensions() {
+        for (mode, dependent, value) in [
+            (
+                "Distance and Angle",
+                "Angle",
+                json!({"quantity_input":"30 deg","default_unit":"deg"}),
+            ),
+            (
+                "Two distances",
+                "Size2",
+                json!({"quantity_input":"3 mm","default_unit":"mm"}),
+            ),
+        ] {
+            let mut properties = json!({"Base":{"link":"Fillet","subelements":["Edge15"]},
+                "ChamferType":mode,"Size":{"quantity_input":"5 mm","default_unit":"mm"}});
+            properties[dependent] = value.clone();
+            let edits = build(&json!({"name":"Chamfer","type":"PartDesign::Chamfer",
+                "body":"Body","create":true,"properties":properties}))
+            .unwrap();
+            assert_eq!(
+                edits[0],
+                json!({"op":"add_object","type":"PartDesign::Chamfer","name":"Chamfer","body":"Body"})
+            );
+            assert_eq!(edits[1]["property"], "Base");
+            assert_eq!(edits[2]["property"], "ChamferType");
+            let dimension = edits
+                .iter()
+                .find(|edit| edit["property"] == dependent)
+                .unwrap();
+            assert_eq!(dimension["value"], value);
+            assert!(
+                edits
+                    .iter()
+                    .position(|edit| edit["property"] == dependent)
+                    .unwrap()
+                    > 2
+            );
+            assert_eq!(
+                edits[edits.len() - 2],
+                json!({"op":"set","object":"Body","property":"Tip","value":{"link":"Chamfer"}})
+            );
+            assert_eq!(
+                edits.last().unwrap(),
+                &json!({"op":"set","object":"Chamfer","property":"Visibility","value":true})
+            );
+        }
+    }
+    #[test]
+    fn chamfer_mode_priority_preserves_unrelated_feature_order() {
+        let edits = build(
+            &json!({"name":"Fillet","type":"PartDesign::Fillet","create":false,
+            "properties":{"Radius":5,"Refine":true,"Base":{"link":"Pad","subelements":["Edge1"]}}}),
+        )
+        .unwrap();
+        assert_eq!(
+            edits
+                .iter()
+                .map(|edit| edit["property"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["Base", "Radius", "Refine"]
+        );
     }
 }

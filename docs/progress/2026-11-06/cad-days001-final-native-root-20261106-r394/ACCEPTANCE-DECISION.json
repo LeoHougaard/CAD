@@ -1,0 +1,36 @@
+{
+  "utc": "2026-11-06T07:02:57.213571+00:00",
+  "case": "DAYS001",
+  "decision": "QUALIFIED_INDIVIDUAL_WHOLE_WORKFLOW",
+  "individual_distinct_qualified_count": 2,
+  "target_distinct_tutorials": 100,
+  "final_same_build_mass_verified": false,
+  "goal_complete": false,
+  "artifact": "cad-days001-terra-current-whole-20261106-r297\\fresh-definition-run8\\DAYS001-final-run8.FCStd",
+  "artifact_sha256": "b0b5159244ebdf8460400c050700019437480b4f1e426f2e76324e4368b6d424",
+  "candidate_source": "../cad-region-definition-root-20261106-r386/source",
+  "source_files": 743,
+  "gui_binary_sha256": "3bf0eced09479f57659b36a88180eacbd8077be4a241996a0fbb318e64984a71",
+  "source_action_evidence": [
+    "../cad-days001-terra-current-whole-20261106-r297/run2/HANDOFF.md",
+    "../cad-days001-terra-current-whole-20261106-r297/base-drag-run3/HANDOFF.md"
+  ],
+  "corrected_history_evidence": "../cad-days001-terra-current-whole-20261106-r297/canonical-open-run5/HANDOFF.md",
+  "corrected_region_and_exact_final_reopen": "../cad-days001-terra-current-whole-20261106-r297/fresh-definition-run8/HANDOFF.md",
+  "native_evidence": "RESULT.json",
+  "native_final_solids": 1,
+  "native_volume_mm3": 527847.5655685063,
+  "final_parameters": {
+    "base_length_mm": 76.19999999999999,
+    "boss_depth_freehand_mm": 53.21629524230957,
+    "circle_radius_freehand_mm": 31.77967071533203,
+    "attachment": "Pad27.Face6"
+  },
+  "outside_region_diagnostic_sha256": "7384069a02b38d0b8063099df150f3739c53157bac95f03838652077bc92af82",
+  "actual_saved_outside_region_identity_verified": true,
+  "independent_final_and_outside_csg_zero_difference": true,
+  "native_cancel_undo_redo_undo_again_repeated_open_exact": true,
+  "actual_gui_edit_cancel_apply_undo_redo_and_exact_last_file_reopen": true,
+  "source_proof_reuse": "The existing real GUI replay covers rectangle/Undo demonstrations, authored 3 in, end-face attachment, circle, actual depth drag, planes, orbit/pan/view controls and history. Later private revisions repair the affected exterior-region and derived Open/history seams. Those exact public seams were rerun and the final saved files independently verified using the current immutable source. No previous failed receipt is migrated.",
+  "limits": "Individual whole workflow only; final 100-distinct common-build mass and hardware-GL qualification remain unverified. R267 incidental freehand policy applies. No geometry/history tolerance or BRep normalization was added. The separate applied exterior-region diagnostic proves selected native identity; it is not substituted for the intended final model."
+}

@@ -1,0 +1,1025 @@
+{
+  "records": [
+    {
+      "gate": "five_native_hole_features",
+      "passed": true,
+      "order": [
+        "Hole7",
+        "Hole3",
+        "Hole5",
+        "Hole8",
+        "Hole14"
+      ]
+    },
+    {
+      "gate": "actual_hole_Hole7",
+      "passed": true,
+      "profile": [
+        "Sketch45",
+        [
+          "Vertex1"
+        ]
+      ],
+      "fields": {
+        "Depth": 300.27237150960127,
+        "DepthType": "ThroughAll",
+        "Diameter": 6.35,
+        "DrillForDepth": false,
+        "DrillPoint": "Angled",
+        "DrillPointAngle": 118.0,
+        "HoleCutCountersinkAngle": 90.0,
+        "HoleCutCustomValues": false,
+        "HoleCutDepth": 0.0,
+        "HoleCutDiameter": 0.0,
+        "HoleCutType": "None",
+        "ModelThread": false,
+        "ThreadClass": "None",
+        "ThreadDepth": 300.27237150960127,
+        "ThreadDepthType": "Hole Depth",
+        "ThreadDiameter": 6.35,
+        "ThreadDirection": "Right",
+        "ThreadFit": "-",
+        "ThreadSize": "---",
+        "ThreadType": "None",
+        "Threaded": false
+      },
+      "volume": 307682.2820732336,
+      "cylinder_radii": [
+        3.175,
+        50.8
+      ]
+    },
+    {
+      "gate": "actual_hole_Hole3",
+      "passed": true,
+      "profile": [
+        "Sketch45",
+        [
+          "Vertex5"
+        ]
+      ],
+      "fields": {
+        "Depth": 300.27237150960127,
+        "DepthType": "ThroughAll",
+        "Diameter": 9.524999999999999,
+        "DrillForDepth": false,
+        "DrillPoint": "Angled",
+        "DrillPointAngle": 118.0,
+        "HoleCutCountersinkAngle": 90.0,
+        "HoleCutCustomValues": false,
+        "HoleCutDepth": 6.35,
+        "HoleCutDiameter": 19.049999999999997,
+        "HoleCutType": "Counterbore",
+        "ModelThread": false,
+        "ThreadClass": "None",
+        "ThreadDepth": 300.27237150960127,
+        "ThreadDepthType": "Hole Depth",
+        "ThreadDiameter": 9.524999999999999,
+        "ThreadDirection": "Right",
+        "ThreadFit": "-",
+        "ThreadSize": "---",
+        "ThreadType": "None",
+        "Threaded": false
+      },
+      "volume": 303610.0165752056,
+      "cylinder_radii": [
+        3.175,
+        4.762499999999999,
+        9.524999999999999,
+        50.8
+      ]
+    },
+    {
+      "gate": "actual_hole_Hole5",
+      "passed": true,
+      "profile": [
+        "Sketch45",
+        [
+          "Vertex4"
+        ]
+      ],
+      "fields": {
+        "Depth": 300.27237150960127,
+        "DepthType": "ThroughAll",
+        "Diameter": 9.524999999999999,
+        "DrillForDepth": false,
+        "DrillPoint": "Angled",
+        "DrillPointAngle": 118.0,
+        "HoleCutCountersinkAngle": 82.0,
+        "HoleCutCustomValues": false,
+        "HoleCutDepth": 10.957259078780114,
+        "HoleCutDiameter": 19.049999999999997,
+        "HoleCutType": "Countersink",
+        "ModelThread": false,
+        "ThreadClass": "None",
+        "ThreadDepth": 300.27237150960127,
+        "ThreadDepthType": "Hole Depth",
+        "ThreadDiameter": 9.524999999999999,
+        "ThreadDirection": "Right",
+        "ThreadFit": "-",
+        "ThreadSize": "---",
+        "ThreadType": "None",
+        "Threaded": false
+      },
+      "volume": 300374.661179326,
+      "cylinder_radii": [
+        3.175,
+        4.762499999999998,
+        4.762499999999999,
+        9.524999999999999,
+        50.8
+      ]
+    },
+    {
+      "gate": "actual_hole_Hole8",
+      "passed": true,
+      "profile": [
+        "Sketch45",
+        [
+          "Vertex3"
+        ]
+      ],
+      "fields": {
+        "Depth": 22.86,
+        "DepthType": "Dimension",
+        "Diameter": 5.1,
+        "DrillForDepth": false,
+        "DrillPoint": "Angled",
+        "DrillPointAngle": 118.0,
+        "HoleCutCountersinkAngle": 90.0,
+        "HoleCutCustomValues": false,
+        "HoleCutDepth": 0.0,
+        "HoleCutDiameter": 0.0,
+        "HoleCutType": "None",
+        "ModelThread": false,
+        "ThreadClass": "1B",
+        "ThreadDepth": 19.049999999999997,
+        "ThreadDepthType": "Dimension",
+        "ThreadDiameter": 6.35,
+        "ThreadDirection": "Right",
+        "ThreadFit": "Normal",
+        "ThreadSize": "1/4",
+        "ThreadType": "UNC",
+        "Threaded": true
+      },
+      "volume": 299897.23905596405,
+      "cylinder_radii": [
+        2.55,
+        3.175,
+        4.762499999999998,
+        4.762499999999999,
+        9.524999999999999,
+        50.8
+      ]
+    },
+    {
+      "gate": "actual_hole_Hole14",
+      "passed": true,
+      "profile": [
+        "Sketch45",
+        [
+          "Vertex2"
+        ]
+      ],
+      "fields": {
+        "Depth": 300.27237150960127,
+        "DepthType": "ThroughAll",
+        "Diameter": 12.7,
+        "DrillForDepth": false,
+        "DrillPoint": "Angled",
+        "DrillPointAngle": 118.0,
+        "HoleCutCountersinkAngle": 90.0,
+        "HoleCutCustomValues": false,
+        "HoleCutDepth": 0.0,
+        "HoleCutDiameter": 0.0,
+        "HoleCutType": "None",
+        "ModelThread": false,
+        "ThreadClass": "None",
+        "ThreadDepth": 300.27237150960127,
+        "ThreadDepthType": "Hole Depth",
+        "ThreadDiameter": 12.7,
+        "ThreadDirection": "Right",
+        "ThreadFit": "-",
+        "ThreadSize": "---",
+        "ThreadType": "None",
+        "Threaded": false
+      },
+      "volume": 295070.8503175604,
+      "cylinder_radii": [
+        2.55,
+        3.175,
+        4.762499999999998,
+        4.762499999999999,
+        6.35,
+        9.524999999999999,
+        50.8
+      ]
+    },
+    {
+      "gate": "source_tapped_drill_precision_pending",
+      "actual_drill_mm": 5.1,
+      "source_display_as_exact_mm": 5.1054,
+      "display_interpreted_as_exact_equal": false,
+      "pitch_field": null,
+      "nominal_mm": 6.35,
+      "threaded": true,
+      "standard": "UNC",
+      "size": "1/4"
+    },
+    {
+      "gate": "actual_helix",
+      "passed": true,
+      "properties": {
+        "properties": {
+          "Angle": 0.0,
+          "AttacherEngine": "Engine 3D",
+          "AttacherType": "Attacher::AttachEngine3D",
+          "AttachmentOffset": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          "AttachmentSupport": [
+            {
+              "link": "HelixCircle12",
+              "subelements": [
+                "Edge1"
+              ]
+            }
+          ],
+          "CylinderFace": {
+            "link": "HelixFace11"
+          },
+          "ExpressionEngine": [
+            [
+              ".AttachmentOffset.Rotation.Angle",
+              "StartAngle"
+            ],
+            [
+              "Height",
+              "HelixFace11.Shape.Area / HelixCircle12.Shape.Length * 1 mm"
+            ],
+            [
+              "Pitch",
+              "Height / Turns"
+            ],
+            [
+              "Radius",
+              "HelixCircle12.Shape.Length / (2 * pi) * 1 mm"
+            ]
+          ],
+          "Height": 22.86,
+          "Label": "Helix10",
+          "Label2": "",
+          "Length": 241.41659420237684,
+          "LocalCoord": "Right-handed",
+          "MapMode": "Concentric",
+          "MapPathParameter": 0.0,
+          "MapReversed": true,
+          "Pitch": 1.524,
+          "Placement": {
+            "position": [
+              -18.662181760286025,
+              -38.1,
+              -25.68628957140458
+            ],
+            "rotation": [
+              0.5,
+              -0.5,
+              -0.5,
+              -0.5
+            ]
+          },
+          "Radius": 2.55,
+          "SegmentLength": 0.0,
+          "StartAngle": 0.0,
+          "Style": "New style",
+          "Turns": 15.0,
+          "Visibility": true,
+          "_ElementMapVersion": "15.70200.5"
+        },
+        "property_types": {
+          "Angle": "App::PropertyAngle",
+          "AttacherEngine": "App::PropertyEnumeration",
+          "AttacherType": "App::PropertyString",
+          "AttachmentOffset": "App::PropertyPlacement",
+          "AttachmentSupport": "App::PropertyLinkSubList",
+          "CylinderFace": "App::PropertyLink",
+          "ExpressionEngine": "App::PropertyExpressionEngine",
+          "Height": "App::PropertyLength",
+          "Label": "App::PropertyString",
+          "Label2": "App::PropertyString",
+          "Length": "App::PropertyLength",
+          "LocalCoord": "App::PropertyEnumeration",
+          "MapMode": "App::PropertyEnumeration",
+          "MapPathParameter": "App::PropertyFloat",
+          "MapReversed": "App::PropertyBool",
+          "Pitch": "App::PropertyLength",
+          "Placement": "App::PropertyPlacement",
+          "Radius": "App::PropertyLength",
+          "SegmentLength": "App::PropertyQuantityConstraint",
+          "Shape": "Part::PropertyPartShape",
+          "ShapeMaterial": "Materials::PropertyMaterial",
+          "StartAngle": "App::PropertyAngle",
+          "Style": "App::PropertyEnumeration",
+          "Turns": "App::PropertyFloat",
+          "Visibility": "App::PropertyBool",
+          "_ElementMapVersion": "App::PropertyString"
+        },
+        "property_metadata": {
+          "Angle": {
+            "group": "Helix",
+            "documentation": "If angle is != 0 a conical otherwise a cylindircal surface is used",
+            "status": [],
+            "read_only": false,
+            "hidden": false,
+            "editor_mode": [],
+            "quantity": {
+              "display": "0.00\u00b0",
+              "input": "0 \u00b0",
+              "edit_display": "0 \u00b0",
+              "default_unit": "\u00b0",
+              "signature": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                1
+              ],
+              "value": 0.0
+            }
+          },
+          "AttacherEngine": {
+            "group": "Attachment",
+            "documentation": "Attach engine object driving the attachment.",
+            "status": [],
+            "read_only": false,
+            "hidden": false,
+            "editor_mode": [],
+            "enumerations": [
+              "Engine 3D",
+              "Engine Plane",
+              "Engine Line",
+              "Engine Point"
+            ]
+          },
+          "AttacherType": {
+            "group": "Attachment",
+            "documentation": "Class name of attach engine object driving the attachment.",
+            "status": [
+              24,
+              26
+            ],
+            "read_only": true,
+            "hidden": true,
+            "editor_mode": [
+              "ReadOnly",
+              "Hidden"
+            ]
+          },
+          "AttachmentOffset": {
+            "group": "Attachment",
+            "documentation": "Extra placement to apply in addition to attachment (in local coordinates)",
+            "status": [],
+            "read_only": false,
+            "hidden": false,
+            "editor_mode": [],
+            "quantity": {
+              "position": [
+                {
+                  "display": "0.00 mm",
+                  "input": "0 mm",
+                  "edit_display": "0 mm",
+                  "default_unit": "mm",
+                  "signature": [
+                    1,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ],
+                  "value": 0.0
+                },
+                {
+                  "display": "0.00 mm",
+                  "input": "0 mm",
+                  "edit_display": "0 mm",
+                  "default_unit": "mm",
+                  "signature": [
+                    1,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ],
+                  "value": 0.0
+                },
+                {
+                  "display": "0.00 mm",
+                  "input": "0 mm",
+                  "edit_display": "0 mm",
+                  "default_unit": "mm",
+                  "signature": [
+                    1,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ],
+                  "value": 0.0
+                }
+              ]
+            }
+          },
+          "AttachmentSupport": {
+            "group": "Attachment",
+            "documentation": "Support of the 2D geometry",
+            "status": [],
+            "read_only": false,
+            "hidden": false,
+            "editor_mode": []
+          },
+          "CylinderFace": {
+            "group": "Helix reference",
+            "documentation": "",
+            "status": [
+              "ReadOnly",
+              21
+            ],
+            "read_only": true,
+            "hidden": false,
+            "editor_mode": [
+              "ReadOnly"
+            ]
+          },
+          "ExpressionEngine": {
+            "group": "Base",
+            "documentation": "Property expressions",
+            "status": [
+              26
+            ],
+            "read_only": true,
+            "hidden": true,
+            "editor_mode": [
+              "Hidden"
+            ]
+          },
+          "Height": {
+            "group": "Helix",
+            "documentation": "The height of the helix",
+            "status": [],
+            "read_only": false,
+            "hidden": false,
+            "editor_mode": [],
+            "quantity": {
+              "display": "22.86 mm",
+              "input": "22.859999999999999 mm",
+              "edit_display": "22.860 mm",
+              "default_unit": "mm",
+              "signature": [
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "value": 22.86
+            }
+          },
+          "Label": {
+            "group": "Base",
+            "documentation": "User name of the object (UTF8)",
+            "status": [
+              27
+            ],
+            "read_only": false,
+            "hidden": false,
+            "editor_mode": []
+          },
+          "Label2": {
+            "group": "Base",
+            "documentation": "User description of the object (UTF8)",
+            "status": [
+              "Output",
+              26
+            ],
+            "read_only": false,
+            "hidden": true,
+            "editor_mode": [
+              "Hidden"
+            ]
+          },
+          "Length": {
+            "group": "Helix",
+            "documentation": "The length of the helix",
+            "status": [
+              "ReadOnly"
+            ],
+            "read_only": true,
+            "hidden": false,
+            "editor_mode": [
+              "ReadOnly"
+            ],
+            "quantity": {
+              "display": "241.42 mm",
+              "input": "241.41659420237684 mm",
+              "edit_display": "241.417 mm",
+              "default_unit": "mm",
+              "signature": [
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "value": 241.41659420237684
+            }
+          },
+          "LocalCoord": {
+            "group": "Coordinate System",
+            "documentation": "Orientation of the local coordinate system of the helix",
+            "status": [],
+            "read_only": false,
+            "hidden": false,
+            "editor_mode": [],
+            "enumerations": [
+              "Right-handed",
+              "Left-handed"
+            ]
+          },
+          "MapMode": {
+            "group": "Attachment",
+            "documentation": "Mode of attachment to other object",
+            "status": [],
+            "read_only": false,
+            "hidden": false,
+            "editor_mode": [],
+            "enumerations": [
+              "Deactivated",
+              "Translate",
+              "ObjectXY",
+              "ObjectXZ",
+              "ObjectYZ",
+              "FlatFace",
+              "TangentPlane",
+              "NormalToEdge",
+              "FrenetNB",
+              "FrenetTN",
+              "FrenetTB",
+              "Concentric",
+              "SectionOfRevolution",
+              "ThreePointsPlane",
+              "ThreePointsNormal",
+              "Folding",
+              "ObjectX",
+              "ObjectY",
+              "ObjectZ",
+              "AxisOfCurvature",
+              "Directrix1",
+              "Directrix2",
+              "Asymptote1",
+              "Asymptote2",
+              "Tangent",
+              "Normal",
+              "Binormal",
+              "TangentU",
+              "TangentV",
+              "TwoPointLine",
+              "IntersectionLine",
+              "ProximityLine",
+              "ObjectOrigin",
+              "Focus1",
+              "Focus2",
+              "OnEdge",
+              "CenterOfCurvature",
+              "CenterOfMass",
+              "IntersectionPoint",
+              "Vertex",
+              "ProximityPoint1",
+              "ProximityPoint2",
+              "AxisOfInertia1",
+              "AxisOfInertia2",
+              "AxisOfInertia3",
+              "InertialCS",
+              "FaceNormal",
+              "OZX",
+              "OZY",
+              "OXY",
+              "OXZ",
+              "OYZ",
+              "OYX",
+              "ParallelPlane",
+              "MidPoint"
+            ]
+          },
+          "MapPathParameter": {
+            "group": "Attachment",
+            "documentation": "Sets point of curve to map the sketch to. 0..1 = start..end",
+            "status": [],
+            "read_only": false,
+            "hidden": false,
+            "editor_mode": []
+          },
+          "MapReversed": {
+            "group": "Attachment",
+            "documentation": "Reverse Z-direction (flip sketch upside down)",
+            "status": [],
+            "read_only": false,
+            "hidden": false,
+            "editor_mode": []
+          },
+          "Pitch": {
+            "group": "Helix",
+            "documentation": "The pitch of the helix",
+            "status": [],
+            "read_only": false,
+            "hidden": false,
+            "editor_mode": [],
+            "quantity": {
+              "display": "1.52 mm",
+              "input": "1.524 mm",
+              "edit_display": "1.524 mm",
+              "default_unit": "mm",
+              "signature": [
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "value": 1.524
+            }
+          },
+          "Placement": {
+            "group": "",
+            "documentation": "",
+            "status": [
+              "ReadOnly",
+              23
+            ],
+            "read_only": true,
+            "hidden": false,
+            "editor_mode": [
+              "ReadOnly"
+            ],
+            "quantity": {
+              "position": [
+                {
+                  "display": "-18.66 mm",
+                  "input": "-18.662181760286025 mm",
+                  "edit_display": "-18.662 mm",
+                  "default_unit": "mm",
+                  "signature": [
+                    1,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ],
+                  "value": -18.662181760286025
+                },
+                {
+                  "display": "-38.10 mm",
+                  "input": "-38.100000000000001 mm",
+                  "edit_display": "-38.100 mm",
+                  "default_unit": "mm",
+                  "signature": [
+                    1,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ],
+                  "value": -38.1
+                },
+                {
+                  "display": "-25.69 mm",
+                  "input": "-25.686289571404579 mm",
+                  "edit_display": "-25.686 mm",
+                  "default_unit": "mm",
+                  "signature": [
+                    1,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ],
+                  "value": -25.68628957140458
+                }
+              ]
+            }
+          },
+          "Radius": {
+            "group": "Helix",
+            "documentation": "The radius of the helix",
+            "status": [],
+            "read_only": false,
+            "hidden": false,
+            "editor_mode": [],
+            "quantity": {
+              "display": "2.55 mm",
+              "input": "2.5499999999999998 mm",
+              "edit_display": "2.550 mm",
+              "default_unit": "mm",
+              "signature": [
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "value": 2.55
+            }
+          },
+          "SegmentLength": {
+            "group": "Helix",
+            "documentation": "The number of turns per helix subdivision",
+            "status": [],
+            "read_only": false,
+            "hidden": false,
+            "editor_mode": [],
+            "quantity": {
+              "display": "0.00",
+              "input": "0",
+              "edit_display": "0",
+              "default_unit": "",
+              "signature": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "value": 0.0
+            }
+          },
+          "Shape": {
+            "group": "",
+            "documentation": "",
+            "status": [],
+            "read_only": true,
+            "hidden": false,
+            "editor_mode": []
+          },
+          "ShapeMaterial": {
+            "group": "",
+            "documentation": "",
+            "status": [],
+            "read_only": false,
+            "hidden": false,
+            "editor_mode": []
+          },
+          "StartAngle": {
+            "group": "Helix",
+            "documentation": "Start angle around the reference axis",
+            "status": [
+              21
+            ],
+            "read_only": false,
+            "hidden": false,
+            "editor_mode": [],
+            "quantity": {
+              "display": "0.00\u00b0",
+              "input": "0 \u00b0",
+              "edit_display": "0 \u00b0",
+              "default_unit": "\u00b0",
+              "signature": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                1
+              ],
+              "value": 0.0
+            }
+          },
+          "Style": {
+            "group": "Helix style",
+            "documentation": "Old style creates incorrect and new style create correct helices",
+            "status": [
+              26
+            ],
+            "read_only": false,
+            "hidden": true,
+            "editor_mode": [
+              "Hidden"
+            ],
+            "enumerations": [
+              "Old style",
+              "New style"
+            ]
+          },
+          "Turns": {
+            "group": "Helix",
+            "documentation": "Number of revolutions",
+            "status": [
+              21
+            ],
+            "read_only": false,
+            "hidden": false,
+            "editor_mode": []
+          },
+          "Visibility": {
+            "group": "",
+            "documentation": "",
+            "status": [
+              "Hidden",
+              "Output",
+              "NoModify"
+            ],
+            "read_only": false,
+            "hidden": true,
+            "editor_mode": [
+              "Hidden"
+            ]
+          },
+          "_ElementMapVersion": {
+            "group": "Base",
+            "documentation": "",
+            "status": [
+              25,
+              26,
+              27
+            ],
+            "read_only": true,
+            "hidden": true,
+            "editor_mode": [
+              "Hidden"
+            ]
+          }
+        },
+        "expressions": {
+          ".AttachmentOffset.Rotation.Angle": "StartAngle",
+          "Height": "HelixFace11.Shape.Area / HelixCircle12.Shape.Length * 1 mm",
+          "Pitch": "Height / Turns",
+          "Radius": "HelixCircle12.Shape.Length / (2 * pi) * 1 mm"
+        }
+      },
+      "support": "[(<Part::Feature>, ('Edge1',))]",
+      "handedness": "Right-handed",
+      "turns": 15.0,
+      "height": 22.86,
+      "pitch": 1.524,
+      "radius": 2.55,
+      "global_placement": [
+        0.0,
+        -1.0,
+        0.0,
+        -18.662181760286025,
+        0.0,
+        0.0,
+        1.0,
+        -38.1,
+        -1.0,
+        0.0,
+        0.0,
+        -25.68628957140458,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "face_binder_support": "[(<PartDesign::Hole>, ('Face7',))]",
+      "edge_binder_support": "[(<PartDesign::Hole>, ('Edge7',))]",
+      "sampled_points": [
+        [
+          -18.662181760286025,
+          -38.1,
+          -28.23628957140458
+        ],
+        [
+          -16.85905946826034,
+          -35.242500000000206,
+          -27.489411863430412
+        ],
+        [
+          -16.112181760285974,
+          -32.38500000000055,
+          -25.686289571404757
+        ],
+        [
+          -16.859059468260266,
+          -29.52749999999881,
+          -23.883167279378785
+        ],
+        [
+          -18.662181760286547,
+          -26.670000000000528,
+          -23.13628957140468
+        ],
+        [
+          -20.465304052311453,
+          -23.812499999998927,
+          -23.883167279378558
+        ],
+        [
+          -21.212181760286033,
+          -20.955000000001444,
+          -25.686289571404814
+        ],
+        [
+          -20.46530405231185,
+          -18.097500000000373,
+          -27.489411863430178
+        ],
+        [
+          -18.662181760285996,
+          -15.239999999999998,
+          -28.23628957140458
+        ]
+      ]
+    },
+    {
+      "gate": "final_hole_cancel",
+      "passed": true,
+      "differences": []
+    },
+    {
+      "gate": "final_hole_undo0",
+      "passed": false,
+      "differences": [
+        "Body41/maps",
+        "Hole14/maps"
+      ]
+    },
+    {
+      "gate": "final_hole_redo1",
+      "passed": true,
+      "differences": []
+    },
+    {
+      "gate": "final_hole_undo2",
+      "passed": false,
+      "differences": [
+        "Body41/maps",
+        "Hole14/maps"
+      ]
+    },
+    {
+      "gate": "saved_actual_open",
+      "passed": false,
+      "differences": [
+        "Body41/maps",
+        "Hole8/maps",
+        "Hole14/maps"
+      ]
+    },
+    {
+      "gate": "repeated_actual_open",
+      "passed": true,
+      "differences": []
+    },
+    {
+      "gate": "cleanup",
+      "passed": true,
+      "documents": []
+    }
+  ]
+}

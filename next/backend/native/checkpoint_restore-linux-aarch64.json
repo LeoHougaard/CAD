@@ -1,0 +1,55 @@
+{
+  "architecture": "aarch64",
+  "python": [
+    3,
+    11,
+    14
+  ],
+  "freecad_version": [
+    "1",
+    "1",
+    "4",
+    "20260928 (Git shallow)",
+    "Unknown",
+    "2026/09/28 13:46:34",
+    "(HEAD detached at 4fd3bf320)",
+    "4fd3bf320d9566a27e60069fc8387448aaa3a094"
+  ],
+  "archive_sha256": "675d1a4295b2183e0e1d816a4b5557dcb63aeced4e60aaa28d6c3686f4c71dc9",
+  "freecad_extension": "usr/lib/FreeCAD.so",
+  "python_executable": "usr/bin/python",
+  "libraries": {
+    "app": {
+      "path": "usr/lib/libFreeCADApp.so",
+      "symbol": "_ZNK3App11Application11getDocumentEPKc"
+    },
+    "base": {
+      "path": "usr/lib/libFreeCADBase.so",
+      "symbol": "_ZN4Base11Persistence17restoreFromStreamERSi"
+    },
+    "stdlib": {
+      "path": "usr/lib/libstdc++.so.6.0.34",
+      "symbol": "_Znwm"
+    },
+    "python": {
+      "path": "usr/bin/python",
+      "symbol": "Py_GetVersion",
+      "process": true
+    }
+  },
+  "runtime": {
+    "usr/bin/python": "59eccae56e3ca64c2e8bdf0617e8bee3f652f426995a5114aa61c5f4ad21df15",
+    "usr/lib/FreeCAD.so": "207a4d70c773b14e06fda570c560e9c0d22bb4ccae768ce87c8bdb90361cd573",
+    "usr/lib/libFreeCADApp.so": "b2eea8c02ca3196517e26ca710fe929d2a946a0e15cbf73a1d3889a1e16139ad",
+    "usr/lib/libFreeCADBase.so": "6b6e0b53794f29da3a560e6aacb70db5948f9c37fa539d0d26821b48972ad061",
+    "usr/lib/libstdc++.so.6.0.34": "7b3cea87dc26b5816c3a070381633afc8ec449d961283e38a1357ca74a28f16c"
+  },
+  "adapter": "checkpoint_restore-linux-aarch64.so",
+  "adapter_sha256": "a4ffb70c17d5c622cd71034c3a7585b6600b17cdd23aa12752611f654e0add1e",
+  "symbols": {
+    "CHECKPOINT_APPLICATION": "_ZN3App11Application12_pcSingletonE",
+    "CHECKPOINT_DOCUMENT": "_ZNK3App11Application11getDocumentEPKc",
+    "CHECKPOINT_OBJECT": "_ZNK3App8Document9getObjectEPKc",
+    "CHECKPOINT_RESTORE": "_ZN4Base11Persistence17restoreFromStreamERSi"
+  }
+}

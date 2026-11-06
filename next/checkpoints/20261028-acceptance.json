@@ -1,0 +1,191 @@
+{
+  "updated_utc": "2026-10-29T08:52:39.697953+00:00",
+  "source_manifest_sha256": "2dba3a347fa78350e95e5e50e9af15d721adfdf659fbe5d0051af09cc03929a6",
+  "source_files": 296,
+  "source_reference": {
+    "url": "https://www.youtube.com/watch?v=pcU5-8PkhGg",
+    "title": "Onshape Step-By-Step Tutorial / Best Practices Training - Advanced Part Design",
+    "creator": "Too Tall Toby",
+    "start": "genuinely empty document",
+    "media": "video-only, no audio playback",
+    "complete_physical_input_trace": false,
+    "complete_reference_gaps_resolved": false
+  },
+  "full_tutorial_credit": 0,
+  "requested_minimum_tutorials": 100,
+  "selected_tutorials": 1,
+  "fixed_source_ui_cohort": {
+    "cases": [
+      "Document menu while Workspace units remains open",
+      "Front selection then plain S tool menu"
+    ],
+    "baseline": [
+      0,
+      2
+    ],
+    "current": [
+      2,
+      0
+    ],
+    "denominator": 2,
+    "not_an_overall_tutorial_success_rate": true
+  },
+  "active_tests": [
+    253,
+    0
+  ],
+  "ignored_tests": 160,
+  "cached_build_commands": [
+    9,
+    0
+  ],
+  "focused_native_editor_tests": [
+    25,
+    0
+  ],
+  "focused_native_distinct_cases": 25,
+  "expected_open_failure": "Private source Mirror candidate rejects native solve; not composed in this checkpoint.",
+  "independent_review": {
+    "passive_escape_author": [
+      4,
+      0
+    ],
+    "passive_escape_independent": [
+      4,
+      0
+    ],
+    "passive_escape_seal_sha256": "32f6642a8f71c1b6fd396d3048c04d4a0cf1ac1bd38f97767e32c7ee6144af91",
+    "constraint_name_old": [
+      0,
+      1
+    ],
+    "constraint_name_current": [
+      2,
+      0
+    ],
+    "constraint_name_seal_sha256": "5dce5295f088fcb4305341952e294505457ef4e6fabf24fd81bf21d85fc689d2",
+    "new_confirmed_findings": 0,
+    "scope": "bounded ownership repairs; no complete tutorial or integration approval"
+  },
+  "physical_current_source": false,
+  "pixel_attempt": {
+    "outcome": "stopped at Android locked/unknown guard before Linux entry",
+    "transfer": false,
+    "build": false,
+    "gui_input": false,
+    "lease_released_ack": 1379,
+    "hold_restored": true
+  },
+  "native_graceful_child_eof": "uncertified",
+  "current_ci": "unverified and not inspected",
+  "performance": "not measured",
+  "open_gates": [
+    "Mirror UI and native constrained operation",
+    "Gram/default native mass-unit mismatch",
+    "S-menu Dimension",
+    "remaining source operations and camera gaps",
+    "independent final model geometry and persistence",
+    "atomic Sketch Begin/Cancel/Redo/Restore",
+    "native graceful EOF",
+    "current CI",
+    "physical desktop acceptance",
+    "performance"
+  ],
+  "extrapolated_completion_limit": null,
+  "extrapolation_reason": "No complete tutorial passes and no qualified stable 100-tutorial execution cohort.",
+  "production_editor_sha256": "48b9791b9d8115ce04db6d310385aeb609a5ca0b0c3ba4135b0d198e589a7db6",
+  "test_binary_sha256": "06b79f8ea454f9da1735a9cc8c79b94ddaef7eb178ca997175f667558100bcb1",
+  "private_line_length_candidate_included": true,
+  "old_attempts_preserved": true,
+  "original_focused_batch_tree": "source14, fresh combined 25-case run",
+  "production_compiled_tree_manifest_sha256": "2dba3a347fa78350e95e5e50e9af15d721adfdf659fbe5d0051af09cc03929a6",
+  "test_only_batch_commands": [
+    5,
+    0
+  ],
+  "current_source12_strict_m16": [
+    1,
+    0
+  ],
+  "source11_affected_checks": [
+    2,
+    0
+  ],
+  "native_geometry_authority": {
+    "source10_exact_phases": 9,
+    "source11_exact_phases": 4,
+    "source12_actual_raw_phases_equal_source11": 4,
+    "normalization": false,
+    "per_process_session_tokens_authenticated_separately": true
+  },
+  "strict_source_boundary": {
+    "last_replayed_modeling_step": "M18",
+    "source_seconds": 494.4,
+    "stop_before_seconds": 496.1,
+    "reason": "Unrepresented camera gesture; button undetermined"
+  },
+  "modeling_only_continuation": {
+    "native_geometry_count": 8,
+    "native_persistent_ids": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8
+    ],
+    "constraints": 15,
+    "dof": 8,
+    "typed_62mm_intact": true,
+    "camera_gesture_omitted_explicitly": true,
+    "first_product_mismatch": "No directly visible Mirror control; stopped before Mirror input.",
+    "box_mirror_later_inputs": "untested",
+    "complete_tutorial_credit": 0,
+    "single_escape_select": true,
+    "box_selection": "All eight native curves selected by actual right-to-left drag",
+    "private_mirror_candidate": {
+      "included": false,
+      "native_cases": [
+        2,
+        1
+      ],
+      "source_case": "invalid_model: Native sketch solver rejected the edit",
+      "rollback": "Native sketch and history preserved; revision advances on rejection"
+    }
+  },
+  "current_source14_combined": [
+    25,
+    0
+  ],
+  "passive_escape_repair_included": true,
+  "constraint_name_escape_repair_included": true,
+  "historical_results": {
+    "source10": [
+      18,
+      1
+    ],
+    "source11_affected": [
+      2,
+      0
+    ],
+    "source12_strict_m16": [
+      1,
+      0
+    ],
+    "source13": [
+      24,
+      0
+    ],
+    "original_constraint_name_probe": [
+      0,
+      1
+    ],
+    "obsolete_two_escape_negative_control": [
+      0,
+      1
+    ]
+  },
+  "stop_assertion_tests_in_focused_cohort": 1
+}

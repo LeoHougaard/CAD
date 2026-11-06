@@ -24,8 +24,10 @@ struct Request {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Offset {
-    position: [f64; 3],
+    position: [Value; 3],
     rotation: [f64; 4],
+    #[serde(default)]
+    axis_angle: Option<Value>,
 }
 
 #[derive(Deserialize)]
@@ -208,17 +210,17 @@ pub fn build(state: &Value, request: &Value) -> Result<Vec<Value>, String> {
         );
     }
     if let Some(offset) = request.offset {
-        if !offset
-            .position
-            .iter()
-            .chain(offset.rotation.iter())
-            .all(|v| v.is_finite())
+        if !offset.position.iter().all(crate::document_units::scalar)
+            || !offset.rotation.iter().all(|v| v.is_finite())
         {
             return Err("Sketch offset must contain finite native placement values".into());
         }
+        let mut value = json!({"position":offset.position,"rotation":offset.rotation});
+        if let Some(axis_angle) = offset.axis_angle {
+            value["axis_angle"] = axis_angle;
+        }
         edits.push(
-            json!({"op":"set","object":request.name,"property":"AttachmentOffset",
-            "value":{"position":offset.position,"rotation":offset.rotation}}),
+            json!({"op":"set","object":request.name,"property":"AttachmentOffset","value":value}),
         );
     }
     if let Some(expression) = request.offset_expression {

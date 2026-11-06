@@ -265,6 +265,7 @@ fn editor() -> (Editor, Receiver<Job>) {
             body_ui: BodyUi::default(),
             property_ui: PropertyUi::default(),
             measurement_ui: super::super::measurements::MeasurementUi::default(),
+            units_ui: Default::default(),
             transform_ui: super::super::transforms::TransformUi::default(),
             exchange_ui: super::super::exchange::ExchangeUi::default(),
             draft: None,

@@ -1,0 +1,27 @@
+[
+  {
+    "path": "next/backend/freecad_worker.py",
+    "base_sha256": "56b9d5199b63ebc0de899110760df81a468f5e12f68d24088cc9b11b53d44e1a",
+    "candidate_sha256": "bc1985ab28433324c7ea68c34308e744431d178cc4c409a29abd27587968b104"
+  },
+  {
+    "path": "next/backend/standalone_helix.py",
+    "base_sha256": "4b7e14d8aece0632f5a56e81fea7404e71c34060d62d6b00f73e4a8bb376f554",
+    "candidate_sha256": "d3231bcd5656c0ff1a741bd063d44cb774e430405740421c660f7d2bfa4cc5fd"
+  },
+  {
+    "path": "next/src/editor/properties.rs",
+    "base_sha256": "ea455ba04091039b24eefbd5691146886366faa4c7b3ca72f361707e480d4fc6",
+    "candidate_sha256": "cc0f0ff9c6cd8300868a7cd4ce2fb95b8e6977e801bb24a54f6c647d358e5ea0"
+  },
+  {
+    "path": "next/src/editor/standalone_helix_tests.rs",
+    "base_sha256": "40665715eb54260a1d11cdb5a1b2963b05d2f48076ba864d9a09b0e34bbbaf58",
+    "candidate_sha256": "9de6ebbc6ecea8f7a1557b64eabe1d8abeda73d0540e0dfadc5c53decc975dff"
+  },
+  {
+    "path": "next/src/feature_commands.rs",
+    "base_sha256": "31a372eef5da26a4dba24451be27c6c9ede3d852bfe10dc4169fa8e1ef53e2ca",
+    "candidate_sha256": "90435cd1ba27a6fa9113da6540228616c1f5dfb329f37255dc2c59f02467489f"
+  }
+]
