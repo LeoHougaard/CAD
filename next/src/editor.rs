@@ -11,6 +11,10 @@ mod history;
 mod measurements;
 mod profile_references;
 mod properties;
+mod reference_field;
+mod reference_collection;
+mod task_fields;
+mod special_reference_collection;
 mod new_loft;
 mod part_mirror;
 mod recovery;
@@ -760,6 +764,13 @@ impl Editor {
         });
     }
     fn preview(&mut self) {
+        if let Some(draft)=&mut self.draft
+            && draft.parameters["create"]==true
+            && matches!(draft.parameters["type"].as_str(),Some("PartDesign::Revolution"|"PartDesign::Groove"))
+            && !draft.parameters["construction_axis"].is_object()
+            && !draft.parameters["properties"]["ReferenceAxis"].is_object() {
+                draft.changed=None;draft.valid=false;return;
+            }
         if self.select_rectangular_route() { return; }
         if self.rectangular_active() && self.rectangular_quantity_request() { return; }
         if !self.rectangular_validate(false) { return; }
@@ -1202,7 +1213,8 @@ impl Editor {
         if self.draft.is_some() {
             let mut commit = false;
             let mut cancel = false;
-            egui::Window::new("Feature")
+            let task_title=self.draft.as_ref().and_then(|d|crate::task_contract::feature_label(d.parameters["type"].as_str().unwrap_or_default())).unwrap_or("Feature");
+            egui::Window::new(task_title)
                 .default_pos([180., 85.])
                 .resizable(false)
                 .collapsible(false)
@@ -1399,8 +1411,8 @@ impl Editor {
         let axis_active = collector_input_allowed
             && self.property_ui.axis_pick
             && self.draft.as_ref().is_some_and(|draft| {
-                draft.parameters["type"] == "PartDesign::Revolution"
-                    && draft.parameters["properties"]["Profile"]["link"].as_str() == axis_profile
+                matches!(draft.parameters["type"].as_str(), Some("PartDesign::Revolution" | "PartDesign::Groove"))
+                    && draft.parameters["properties"].get("Profile").unwrap_or(&self.property_ui.schema["properties"]["Profile"])["link"].as_str() == axis_profile
                     && axis_profile.is_some()
             });
         if axis_active {
@@ -1441,7 +1453,15 @@ impl Editor {
         let loft_points = self.property_ui.loft_point_pick && collector_input_allowed && !self.busy
             && self.draft.as_ref().is_some_and(|d| d.parameters["type"] == "Part::Loft");
         self.viewport.set_loft_origins(&self.state, loft_points);
+        let previous_mode = self.viewport.selection_mode;
+        if let Some(mode) = self.reference_selection_mode() { self.viewport.selection_mode = mode; }
         let picked = self.viewport.ui(ui).is_some();
+        self.viewport.selection_mode = previous_mode;
+        if collector_input_allowed && !region_active && !axis_active && !self.busy
+            && !self.viewport.view_cube_owns_pointer() && !self.viewport.depth_owns_pointer()
+            && self.viewport.response.as_ref().is_some_and(|r| r.clicked()) {
+            self.collect_reference_field();
+        }
         if let Some((owner, length)) = self.viewport.take_depth_value() {
             self.extrude_depth_edit(&owner, length);
             self.offset_plane_edit(&owner, length);
@@ -1458,8 +1478,7 @@ impl Editor {
                         let mut keys=if draft.parameters["region_profile"]["source"]==selection.object {
                             draft.parameters["region_profile"]["regions"].as_array().cloned().unwrap_or_default()
                         } else {vec![]};
-                        if ui.input(|i|i.modifiers.shift) { if let Some(i)=keys.iter().position(|k|k==key) {keys.remove(i);} else {keys.push(json!(key));} }
-                        else { keys=vec![json!(key)]; }
+                        crate::viewport::toggle_selection(&mut keys, json!(key));
                         draft.parameters["properties"]["Profile"]=json!({"link":selection.object});
                         draft.parameters["region_profile"]=json!({"name":name,"source":selection.object,
                             "source_id":source["native_id"],"body":source["body"],"body_id":body_id,
@@ -1626,10 +1645,17 @@ impl Editor {
                     axis["body"] = body;
                     axis["profile"] = json!(profile);
                     if let Some(draft) = &mut self.draft {
-                        draft.parameters["construction_axis"] = axis;
+                        let current=&draft.parameters["construction_axis"];
+                        let same=self.property_ui.active_reference.as_deref()==Some("ReferenceAxis")
+                            && current["master"]==axis["master"] && current["master_id"]==axis["master_id"]
+                            && current["geometry_id"]==axis["geometry_id"];
+                        if same {
+                            draft.parameters.as_object_mut().unwrap().remove("construction_axis");
+                            draft.parameters["properties"]["ReferenceAxis"]=Value::Null;
+                        } else {draft.parameters["construction_axis"] = axis;}
                         draft.changed = Some(Instant::now());
                         draft.valid = false;
-                        self.property_ui.axis_pick = false;
+                        self.property_ui.axis_pick = self.property_ui.active_reference.as_deref()==Some("ReferenceAxis");
                         self.viewport.set_sketch(None);
                     }
                     return;
@@ -1662,7 +1688,7 @@ impl Editor {
                     json!({"link":profile,"subelements":[subelement]});
                 draft.changed = Some(Instant::now());
                 draft.valid = false;
-                self.property_ui.axis_pick = false;
+                self.property_ui.axis_pick = self.property_ui.active_reference.as_deref()==Some("ReferenceAxis");
                 self.viewport.set_sketch(None);
             }
         }
@@ -1734,7 +1760,7 @@ impl eframe::App for Editor {
             && self.sketch_ui.session.is_none()
             && consume_exact_key(ctx, egui::Modifiers::NONE, Key::Space)
         {
-            self.viewport.clear_selection();
+            self.viewport.clear_viewport_selection();
             self.body_ui.selected.clear();
             self.selected_object = None;
         }

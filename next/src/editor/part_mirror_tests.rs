@@ -2,11 +2,12 @@
 use super::*;
 fn mirror_fixture() -> (Editor,Receiver<Job>,Sender<Reply>) {
     let (mut e,input,output)=fixture();
+    e.state["document_uid"]=json!("mock");
     e.state["objects"]=json!([
-        {"name":"Body","type":"PartDesign::Body","label":"Body","native_id":10,"properties":{"Tip":{"link":"Pocket"}},
-         "mirror_source":{"link":"Body","native_id":10,"document_uid":"mock","body":null,"body_id":null,"frame":[1,0,0,0]}},
-        {"name":"Datum","type":"PartDesign::Plane","label":"Datum","native_id":20,
-         "mirror_plane_source":{"link":"Datum","native_id":20,"document_uid":"mock","body":"Body","body_id":10,"frame":[1,0,0,0]}},
+        {"name":"Body","type":"PartDesign::Body","label":"Body","native_id":10,"effective_visibility":true,"properties":{"Tip":{"link":"Pocket"}},
+         "mirror_source":{"link":"Body","native_id":10,"document_uid":"mock","body":null,"body_id":null,"frame":[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]}},
+        {"name":"Datum","type":"PartDesign::Plane","label":"Datum","native_id":20,"body":"Body","effective_visibility":true,
+         "mirror_plane_source":{"link":"Datum","native_id":20,"document_uid":"mock","body":"Body","body_id":10,"frame":[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]}},
         {"name":"Sketch","type":"Sketcher::SketchObject","native_id":30}]);
     e.selected_object=Some("Body".into());
     e.viewport.selected=Some(crate::viewport::Selection{object:"Body".into(),subelement:"".into()});
@@ -24,8 +25,9 @@ fn part_mirror_full_app_selected_body_plane_preview_cancel() {
     assert_eq!(p["part_mirror"]["source"]["link"],"Body");
     let edits=crate::property_commands::build(p).unwrap();
     assert_eq!(edits[0]["type"],"Part::Mirroring");assert!(edits[0].get("body").is_none());
-    e.viewport.selected=Some(crate::viewport::Selection{object:"Datum".into(),subelement:"".into()});
-    pointer(&mut e,&ctx,"Use selected plane");settle(&mut e,&ctx);
+    pointer(&mut e,&ctx,"Select entities");
+    e.viewport.selections=vec![crate::viewport::Selection{object:"Datum".into(),subelement:"".into()}];
+    e.collect_reference_field();assert!(e.error.is_none(),"{:?}",e.error);settle(&mut e,&ctx);
     let job=input.try_recv().unwrap();assert_eq!(job.op,"preview");
     assert_eq!(job.parameters["edits"].as_array().unwrap().last().unwrap()["task"]["plane"]["native_id"],20);
     let mut state=e.state.clone();state["preview"]=json!({"token":e.draft.as_ref().unwrap().token});
@@ -54,7 +56,10 @@ fn part_mirror_full_app_bad_selection_stale_reply_and_origin_controls() {
         assert!(super::super::part_mirror::reference(&e.state,n,t,false).is_err());
     }
     assert!(super::super::part_mirror::initial(&e.state,&[]).is_err());
-    pointer(&mut e,&ctx,"YZ");settle(&mut e,&ctx);let job=input.try_recv().unwrap();
+    // Native origin axes remain an explicitly developer-only payload capability.
+    e.draft.as_mut().unwrap().parameters["part_mirror"]["axis"]=json!("YZ");
+    e.draft.as_mut().unwrap().changed=Some(Instant::now());
+    settle(&mut e,&ctx);let job=input.try_recv().unwrap();
     assert_eq!(job.parameters["edits"].as_array().unwrap().last().unwrap()["task"]["axis"],"YZ");
     let state=e.state.clone();reply(&output,&mut e,&ctx,job,false,Value::Null,state);
     assert!(e.draft.is_some());assert!(!e.draft.as_ref().unwrap().valid);
@@ -69,7 +74,9 @@ fn part_mirror_full_app_open_existing_task_keeps_identity() {
     e.state["objects"].as_array_mut().unwrap().push(json!({"name":"MirrorSaved","label":"MirrorSaved",
         "type":"Part::Mirroring","native_id":90,"part_mirror":task,"properties":{}}));
     e.edit_native_properties("MirrorSaved");full_frame(&mut e,&ctx,vec![]);
-    pointer(&mut e,&ctx,"XZ");settle(&mut e,&ctx);
+    pointer(&mut e,&ctx,"Select entities");
+    e.viewport.selections=vec![crate::viewport::Selection{object:"Datum".into(),subelement:"".into()}];
+    e.collect_reference_field();settle(&mut e,&ctx);
     let job=input.try_recv().unwrap();assert_eq!(job.op,"preview");
     let edits=job.parameters["edits"].as_array().unwrap();assert_eq!(edits.len(),1);
     assert_eq!(edits[0]["object"],"MirrorSaved");assert_eq!(edits[0]["task"]["feature_id"],90);

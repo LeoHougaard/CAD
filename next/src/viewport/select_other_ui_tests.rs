@@ -113,7 +113,7 @@ fn text_rect(output: &egui::FullOutput, text: &str) -> Rect {
 }
 
 #[test]
-fn chooser_selects_hidden_native_face_and_shift_toggles_it() {
+fn chooser_adds_hidden_native_face_and_plain_click_toggles_it() {
     let mut v = viewport();
     let ctx = egui::Context::default();
     let point = Vec3::new(5., 5., 0.);
@@ -136,14 +136,14 @@ fn chooser_selects_hidden_native_face_and_shift_toggles_it() {
     let target = text_rect(&output, "Rear / Face7").center();
     pointer(&mut v, &ctx, target, egui::PointerButton::Primary, false);
     assert_eq!(v.selected, Some(rear.clone()));
-    assert_eq!(v.selections, vec![rear.clone()]);
+    assert_eq!(v.selections, vec![front.clone(), rear.clone()]);
     assert!(v.topology_references("Rear").contains(&"Face7".to_owned()));
     open(&mut v, &ctx, point);
     let output = frame(&mut v, &ctx, vec![], true);
     let target = text_rect(&output, "Rear / Face7").center();
-    pointer(&mut v, &ctx, target, egui::PointerButton::Primary, true);
-    assert!(v.selected.is_none());
-    assert!(v.selections.is_empty());
+    pointer(&mut v, &ctx, target, egui::PointerButton::Primary, false);
+    assert_eq!(v.selected, Some(front.clone()));
+    assert_eq!(v.selections, vec![front]);
 }
 
 #[test]

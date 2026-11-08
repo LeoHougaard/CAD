@@ -165,7 +165,7 @@ impl Viewport {
                     return;
                 };
                 ui.label("Select other");
-                ui.weak("Native elements, front to back. Shift toggles selection.");
+                ui.weak("Native elements, front to back. Click to toggle selection.");
                 ui.separator();
                 if picker.choices.is_empty() {
                     ui.weak("No matching face, edge or vertex at this point.");
@@ -191,10 +191,7 @@ impl Viewport {
             self.cancel_other_picker();
         }
         if let Some(selection) = chosen {
-            let toggle = ui.input(|input| {
-                input.modifiers.ctrl || input.modifiers.shift || input.modifiers.command
-            });
-            self.select_native_element(Some(selection.clone()), toggle);
+            self.toggle_native_selection(Some(selection.clone()));
             self.cancel_other_picker();
             ui.ctx().request_repaint();
             return self.selected.clone();

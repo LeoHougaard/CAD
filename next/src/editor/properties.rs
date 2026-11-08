@@ -15,7 +15,8 @@ pub(super) struct PropertyUi {
     filter: String,
     advanced: bool,
     buffers: BTreeMap<String, String>,
-    reference: super::profile_references::ProfileReferenceUi,
+    pub(super) reference: super::profile_references::ProfileReferenceUi,
+    pub(super) active_reference: Option<String>,
     pub(super) region_pick: bool,
     pub(super) loft_point_pick: bool,
     pub(super) axis_profile: Option<String>,
@@ -369,6 +370,10 @@ impl Editor {
         {
             properties.insert("Profile".into(), json!({"link":source["name"]}));
         }
+        if matches!(type_id,"PartDesign::Revolution"|"PartDesign::Groove") {
+            // A native default axis is not a user selection in the public task.
+            properties.insert("ReferenceAxis".into(),Value::Null);
+        }
         let reference_name = self.unique("Reference");
         self.property_ui = PropertyUi {
             reference: super::profile_references::ProfileReferenceUi::new(
@@ -410,6 +415,10 @@ impl Editor {
         self.sketch = None;
         self.viewport.set_sketch(None);
         self.transform_ui = super::transforms::TransformUi::default();
+        if matches!(type_id,"PartDesign::Revolution"|"PartDesign::Groove") {
+            let profile=self.draft.as_ref().unwrap().parameters["properties"]["Profile"]["link"].is_string();
+            self.activate_reference_field(if profile {"ReferenceAxis"}else{"Profile"}.into());
+        }
         if type_id == "PartDesign::MultiTransform"
             && let Some(draft) = &mut self.draft
         {
@@ -516,59 +525,8 @@ impl Editor {
             self.offset_plane_fields(ui); return;
         }
         let selected = self.native_link_selection();
-        let axis_editable = !self.busy && !self.unavailable();
         let draft = self.draft.as_mut().unwrap();
         ui.label(&draft.name);
-        if crate::feature_commands::get(draft.parameters["type"].as_str().unwrap_or("")).is_some_and(|d| d.preferred_properties.contains(&"Profile")) {
-            if ui.selectable_label(self.property_ui.region_pick, "Pick sketch regions").clicked() {
-                self.property_ui.region_pick = !self.property_ui.region_pick;
-                self.property_ui.axis_pick = false;
-            }
-        }
-        if self.property_ui.axis_profile.is_some() {
-            if ui
-                .selectable_label(self.property_ui.axis_pick, "Revolve axis (Tab)")
-                .clicked()
-            {
-                self.property_ui.axis_pick = true;
-                self.property_ui.region_pick = false;
-            }
-            if self.property_ui.axis_pick {
-                ui.label(
-                    "Pick a visible straight sketch edge or the profile's horizontal or vertical axis",
-                );
-            }
-            if let Some(master) = draft.parameters["construction_axis"]["master"].as_str() {
-                ui.label(format!("Axis dependency: construction line in {master}"));
-            }
-            if self.property_ui.axis_overlap {
-                ui.label("Axes overlap here. The construction line is selected.");
-            }
-            if let Some(profile) = &self.property_ui.axis_profile {
-                ui.add_enabled_ui(axis_editable, |ui| {
-                    ui.horizontal(|ui| {
-                        for (label, axis) in
-                            [("Profile H axis", "H_Axis"), ("Profile V axis", "V_Axis")]
-                        {
-                            if ui.button(label).clicked() {
-                                draft
-                                    .parameters
-                                    .as_object_mut()
-                                    .unwrap()
-                                    .remove("construction_axis");
-                                draft.parameters["properties"]["ReferenceAxis"] =
-                                    json!({"link":profile,"subelements":[axis]});
-                                draft.changed = Some(Instant::now());
-                                draft.valid = false;
-                                self.property_ui.axis_pick = false;
-                                self.property_ui.axis_overlap = false;
-                                self.viewport.set_sketch(None);
-                            }
-                        }
-                    });
-                });
-            }
-        }
         if let Some(error) = &self.error {
             ui.colored_label(egui::Color32::from_rgb(225, 142, 138), error);
         }
@@ -592,14 +550,9 @@ impl Editor {
             ));
             return;
         }
-        ui.horizontal(|ui| {
-            ui.add(
-                egui::TextEdit::singleline(&mut self.property_ui.filter)
-                    .hint_text("Find property")
-                    .desired_width(180.),
-            );
-            ui.checkbox(&mut self.property_ui.advanced, "All properties");
-        });
+        // Feature tasks use their public contract, never a native property browser.
+        self.property_ui.filter.clear();
+        self.property_ui.advanced = false;
         let task_schema = crate::hole_commands::task_schema(
             &crate::extrusion_commands::task_schema(&self.property_ui.schema, &draft.parameters),
             &draft.parameters,
@@ -612,7 +565,9 @@ impl Editor {
         let definition = draft.parameters["type"]
             .as_str()
             .and_then(feature_commands::get);
-        let preferred = definition.map(|d| d.preferred_properties).unwrap_or(&[]);
+        let mut changed = super::task_fields::configure(ui,&mut draft.parameters,schema);
+        let public_fields=super::task_fields::fields(&draft.parameters,schema);
+        let preferred=public_fields.as_slice();
         let mut fields = schema["property_types"]
             .as_object()
             .map(|m| m.keys().cloned().collect::<Vec<_>>())
@@ -628,7 +583,8 @@ impl Editor {
             .as_str()
             .unwrap_or_default()
             .to_owned();
-        let mut changed = false;
+        let mut picked_field = None;
+        let mut reference_updates=Vec::new();
         let nested = draft.parameters["transformations"].is_array();
         if nested {
             changed |= self.transform_ui.show(
@@ -665,9 +621,8 @@ impl Editor {
                         {
                             continue;
                         }
-                        if draft.parameters["type"] == "Part::Helix" && filter.is_empty()
-                            && !self.property_ui.advanced && !preferred.contains(&property.as_str())
-                        { continue; }
+                        if filter.is_empty() && !self.property_ui.advanced && definition.is_some()
+                            && !preferred.contains(&property.as_str()) { continue; }
                         if filter.is_empty() && !self.property_ui.advanced && (hidden || !writable)
                         {
                             continue;
@@ -691,7 +646,8 @@ impl Editor {
                                 .clone()
                         });
                         ui.push_id(&property, |ui| {
-                            let title = ui.label(&property);
+                            let label = crate::task_contract::field_label(draft.parameters["type"].as_str().unwrap_or_default(), &property).unwrap_or(&property);
+                            let title = ui.label(label);
                             title.on_hover_text(format!(
                                 "{}\n{}\n{}",
                                 metadata["group"].as_str().unwrap_or_default(),
@@ -712,6 +668,8 @@ impl Editor {
                                         let mut inward = angle["inward"].as_bool().unwrap_or(false);
                                         value_changed |= ui.checkbox(&mut inward, "Inward").changed();
                                         angle["inward"] = json!(inward);
+                                    } else if let Some(enum_changed)=super::task_fields::enumeration(ui,draft.parameters["type"].as_str().unwrap_or_default(),&property,metadata,&mut value) {
+                                        value_changed=enum_changed;
                                     } else if let Some(base) = &edge_base {
                                         let before = value.clone();
                                         fillet_edges_widget(
@@ -724,6 +682,26 @@ impl Editor {
                                             &metadata["quantity_default"],
                                         );
                                         value_changed = value != before;
+                                    } else if type_id.strip_prefix("App::Property").is_some_and(|kind| kind.starts_with("Link") || kind.starts_with("XLink")) {
+                                        // Native reference encoding is retained behind a shared collector field.
+                                        let mut shown = if property == "ReferenceAxis" && draft.parameters["construction_axis"].is_object() {
+                                            json!({"link":draft.parameters["construction_axis"]["master"],"subelements":["Edge"]})
+                                        } else { value.clone() };
+                                        let response = super::reference_field::show(ui, &mut shown, native_objects,
+                                            self.property_ui.active_reference.as_deref() == Some(property.as_str()));
+                                        #[cfg(test)]
+                                        ui.ctx().data_mut(|d|d.insert_temp(egui::Id::new("reference_field").with(&property),response.response.clone()));
+                                        #[cfg(test)]
+                                        if property == "Profile" {
+                                            ui.ctx().data_mut(|d|d.insert_temp(egui::Id::new("convergence_profile_response"),
+                                                (response.response.clone(),ui.clip_rect(),ui.layer_id(),shown.clone())));
+                                        }
+                                        let _ = &response.response;
+                                        if response.activated { picked_field = Some(property.clone()); }
+                                        if response.changed {
+                                            value = shown;
+                                            value_changed = true;
+                                        }
                                     } else {
                                         let link_objects = if property == "Profile"
                                             || extrusion
@@ -827,7 +805,7 @@ impl Editor {
                                     expression_changed = true;
                                 }
                             }
-                            if property == "Profile"
+                            if self.property_ui.advanced && property == "Profile"
                                 && definition.is_some_and(|definition| {
                                     definition.preferred_properties.contains(&"Profile")
                                 })
@@ -849,6 +827,8 @@ impl Editor {
                             );
                             if let Some(angle) = draft_angle {
                                 draft.parameters["draft_angles"][&property] = angle;
+                            } else if type_id.strip_prefix("App::Property").is_some_and(|k|k.starts_with("Link")||k.starts_with("XLink")) {
+                                reference_updates.push((property.clone(),value));
                             } else {
                                 draft.parameters["properties"][&property] = value;
                             }
@@ -861,7 +841,7 @@ impl Editor {
                         }
                     }
                     // Component expression paths are native paths, including Placement.Base.x.
-                    egui::CollapsingHeader::new("Expression paths").show(ui, |ui| {
+                    if self.property_ui.advanced { egui::CollapsingHeader::new("Expression paths").show(ui, |ui| {
                         let path = self.property_ui.buffers.entry("@path".into()).or_default();
                         ui.add(
                             egui::TextEdit::singleline(path)
@@ -904,7 +884,7 @@ impl Editor {
                                 ui.weak(format!("{path} = {}", display(expr)));
                             }
                         }
-                    });
+                    }); }
                 });
             });
         if changed {
@@ -918,6 +898,8 @@ impl Editor {
             draft.changed = Some(Instant::now() - Duration::from_secs(1));
             draft.valid = false;
         }
+        for (property,value) in reference_updates {self.set_reference_value(&property,value);}
+        if let Some(property) = picked_field { self.activate_reference_field(property); }
     }
 }
 

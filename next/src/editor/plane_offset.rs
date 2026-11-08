@@ -3,6 +3,26 @@ use super::*;
 use crate::viewport::DepthHandle;
 use glam::Vec3;
 
+pub(super) fn support_source<'a>(state: &'a Value, parameters: &Value, name: &str, target: &str) -> Result<&'a Value,String> {
+    if !target.is_empty() { return Err("Choose a whole supported plane".into()); }
+    let source = objects(state).iter().find(|o| o["name"] == name).ok_or("Plane selection is stale")?;
+    if source["effective_visibility"] != true
+        || !matches!(source["type"].as_str(), Some("App::Plane" | "PartDesign::Plane"))
+        || source["native_id"].as_u64().is_none() || source["name"] == parameters["name"] {
+        return Err("Choose a visible supported plane".into());
+    }
+    let body = parameters["body"].as_str().ok_or("Plane body is unavailable")?;
+    let owner = crate::body_commands::body_of(state,name).ok_or("Plane ownership is unavailable")?;
+    let body_obj = objects(state).iter().find(|o| o["name"] == body).ok_or("Plane body is stale")?;
+    if state["revision"].as_u64().is_none() || state["document_uid"].as_str().is_none_or(str::is_empty)
+        || body_obj["native_id"].as_u64().is_none()
+        || owner != body || body_obj["native_id"] != parameters["offset_plane"]["body_id"]
+        || parameters["offset_plane"]["document_uid"] != state["document_uid"] {
+        return Err("Choose a plane in the current body".into());
+    }
+    Ok(source)
+}
+
 impl Editor {
     pub(super) fn start_offset_plane(&mut self, support: &str) {
         if self.busy || self.draft.is_some() || self.unavailable()
@@ -11,6 +31,8 @@ impl Editor {
         if !matches!(source["type"].as_str(), Some("App::Plane" | "PartDesign::Plane")) { return; }
         let Some(body) = crate::body_commands::body_of(&self.state, support) else { return; };
         let Some(body_id) = objects(&self.state).iter().find(|o| o["name"] == body).map(|o|o["native_id"].clone()) else { return; };
+        let candidate = json!({"name":"","body":body,"offset_plane":{"body_id":body_id,"document_uid":self.state["document_uid"]}});
+        if let Err(error) = support_source(&self.state, &candidate, support, "") { self.error = Some(error); return; }
         self.start_native_feature_for_profile("PartDesign::Plane", Some(support));
         if let Some(d) = &mut self.draft {
             d.name = "Offset plane".into();
@@ -38,13 +60,25 @@ impl Editor {
     }
 
     pub(super) fn offset_plane_fields(&mut self, ui: &mut egui::Ui) {
+        let mut activate = false;
         let d = self.draft.as_mut().unwrap();
         let task = &mut d.parameters["offset_plane"];
-        ui.label("Offset plane");
+        ui.label("Plane");
         ui.add_enabled_ui(!self.busy, |ui| {
             let mut changed = false;
+            ui.label("Entities");
+            let mut support = if task["support"].as_str().is_some_and(|s| !s.is_empty()) {
+                json!({"link":task["support"],"subelements":[]})
+            } else { Value::Null };
+            let response = super::reference_field::show(ui, &mut support, objects(&self.state),
+                self.property_ui.active_reference.as_deref() == Some("AttachmentSupport"));
+            activate = response.activated || response.changed;
+            if response.changed {
+                task["support"] = Value::Null; task["support_id"] = Value::Null;
+                changed = true;
+            }
             ui.horizontal(|ui| {
-                ui.label("Offset");
+                ui.label("Offset distance");
                 changed |= super::units::quantity_field(ui, &mut task["magnitude"],
                     &self.property_ui.schema["property_metadata"]["AttachmentOffset"]["quantity"]["position"][2]);
             });
@@ -52,7 +86,9 @@ impl Editor {
             if ui.checkbox(&mut flip, "Flip direction").changed() { task["flipped"] = json!(flip); changed = true; }
             if changed { d.valid = false; d.changed = Some(Instant::now()); }
         });
+        if task["support"].is_null() { d.parameters["properties"]["AttachmentSupport"] = json!([]); }
         if let Some(error) = &self.error { ui.colored_label(egui::Color32::LIGHT_RED, error); }
+        if activate { self.activate_special_reference("AttachmentSupport".into()); }
     }
 
     pub(super) fn offset_plane_descriptor(&self, allowed: bool) -> Option<DepthHandle> {
@@ -76,6 +112,7 @@ impl Editor {
         let length = task["magnitude"].as_f64()?;
         if !length.is_finite() || length < 0. || task["flipped"] != desc["flipped"] { return None; }
         let vector = |v: &Value| -> Option<Vec3> {
+            if v.as_array()?.len() != 3 { return None; }
             let v = Vec3::new(v[0].as_f64()? as f32,v[1].as_f64()? as f32,v[2].as_f64()? as f32);
             v.is_finite().then_some(v)
         };

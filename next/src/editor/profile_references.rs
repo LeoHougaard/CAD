@@ -27,6 +27,17 @@ impl ProfileReferenceUi {
         objects(&self.state)
     }
 
+    pub(super) fn bind(&self, parameters:&mut Value, value:&Value) {
+        if self.foreign(parameters,value) {
+            // Internal Body ownership must not ask users to copy their sketch.
+            // A new cross-owner pick stays associative; an existing explicit
+            // choice is retained while its source is unchanged.
+            if parameters["reference_choice"]["request"]["source"]!=value["link"] {
+                parameters["reference_choice"]=self.choice(parameters,value,"dependent");
+            }
+        } else {parameters.as_object_mut().unwrap().remove("reference_choice");}
+    }
+
     pub(super) fn selections(
         &self,
         own: &str,

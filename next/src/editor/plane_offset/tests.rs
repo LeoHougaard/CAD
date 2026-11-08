@@ -10,7 +10,7 @@ fn prepared() -> (Editor, std::sync::mpsc::Receiver<Job>, std::sync::mpsc::Sende
         "property_metadata":{"AttachmentOffset":{"quantity":{"position":[{},{},{"value":10.,"input":"10 mm","default_unit":"mm"}]}}}});
     e.state["document_uid"] = json!("mock-plane-document");
     e.state["preview"] = json!({"token":"plane-test"});
-    e.state["objects"] = json!([obj.clone(),{"name":"Source","body":"Body","native_id":102,"type":"PartDesign::Plane"},
+    e.state["objects"] = json!([obj.clone(),{"name":"Source","body":"Body","native_id":102,"type":"PartDesign::Plane","effective_visibility":true},
         {"name":"Body","native_id":103,"type":"PartDesign::Body"}]);
     e.property_ui.schema = obj;
     e.draft = Some(Draft { id:"native.properties".into(), name:"Offset plane".into(), token:"plane-test".into(),

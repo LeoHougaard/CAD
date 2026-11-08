@@ -1,4 +1,6 @@
 //! Actual egui widgets/menu, with native execution kept in the explicit probe.
+#[path="reference_followup_tests.rs"]
+mod reference_followup_tests;
 use super::super::*;
 use super::*;
 
@@ -328,6 +330,7 @@ fn profile_editor() -> (Editor, Receiver<Job>) {
          "property_types":{"Profile":"App::PropertyLinkSub"},
          "property_metadata":{"Profile":{"read_only":false}},"expressions":{}}
     ]});
+    for (i, object) in e.state["objects"].as_array_mut().unwrap().iter_mut().enumerate() {object["native_id"]=json!(i+101);}
     e.edit_native_properties("Pad");
     e.property_ui.filter = "Profile".into();
     e.draft.as_mut().unwrap().valid = true;
@@ -354,143 +357,87 @@ fn click_reference(e: &mut Editor, button: &str) -> Ui {
 }
 
 #[test]
-fn actual_editor_profile_rejects_stale_picks_before_filtering_and_allows_correction() {
-    let (mut e, jobs) = profile_editor();
-    let params = e.draft.as_ref().unwrap().parameters.clone();
-    let state = e.state.clone();
-    for picks in [
-        vec![("A", ""), ("Gone", "")],
-        vec![("Gone", "")],
-        vec![("Pad", "Face1"), ("Gone", "")],
-        vec![("A", ""), ("B", "")],
-        vec![("Pad", "Face1")],
-    ] {
-        pick_editor(&mut e, &picks);
-        let ui = click_reference(&mut e, "Use selection");
-        assert_eq!(e.draft.as_ref().unwrap().parameters, params);
-        assert_eq!(e.state, state);
-        assert!(e.draft.as_ref().unwrap().valid && e.draft.as_ref().unwrap().changed.is_none());
-        if picks.iter().any(|(o, _)| *o == "Gone") {
-            assert!(
-                ui.labels
-                    .iter()
-                    .any(|(text, _)| text.contains("Gone") && text.contains("stale"))
-            );
-        } else {
-            assert!(!ui.labels.iter().any(|(text, _)| text.contains("stale")));
-        }
+fn actual_field_activation_rejects_stale_and_invalid_picks_then_accepts_correction() {
+    let (mut e,jobs)=profile_editor();
+    let state=e.state.clone(); let before=e.draft.as_ref().unwrap().parameters.clone();
+    click_reference(&mut e,"Original");
+    assert_eq!(e.property_ui.active_reference.as_deref(),Some("Profile"));
+    for selected in [vec![("A",""),("Gone","")],vec![("Gone","")],
+        vec![("Pad","Face1")],vec![("A",""),("B","")]] {
+        pick_editor(&mut e,&selected);e.collect_reference_field();
+        assert_eq!(e.draft.as_ref().unwrap().parameters,before);
+        assert!(e.error.is_some());assert!(e.draft.as_ref().unwrap().valid);
         assert!(jobs.try_recv().is_err());
     }
-    pick_editor(&mut e, &[("Pad", "Face1"), ("A", "")]);
-    click_reference(&mut e, "Use selection");
-    assert_eq!(
-        e.draft.as_ref().unwrap().parameters["properties"]["Profile"],
-        json!({"link":"A","subelements":[]})
-    );
-    assert!(e.draft.as_ref().unwrap().changed.is_some() && !e.draft.as_ref().unwrap().valid);
-    assert_eq!(e.state, state);
-    assert!(jobs.try_recv().is_err());
+    pick_editor(&mut e,&[("A","")]);e.collect_reference_field();
+    assert_eq!(e.draft.as_ref().unwrap().parameters["properties"]["Profile"],json!({"link":"A","subelements":[]}));
+    assert!(!e.draft.as_ref().unwrap().valid);assert!(e.draft.as_ref().unwrap().changed.is_some());
+    assert_eq!(e.state,state);assert!(jobs.try_recv().is_err());
 }
 
 #[test]
-fn actual_editor_termination_buttons_reject_missing_picks_before_scope_filtering() {
-    for field in [
-        "UpToFace",
-        "UpToFace2",
-        "UpToShape",
-        "UpToShape2",
-        "ReferenceAxis",
-    ] {
-        let (mut e, jobs) = profile_editor();
-        let list = field.starts_with("UpToShape");
-        let pad = e.state["objects"]
-            .as_array_mut()
-            .unwrap()
-            .iter_mut()
-            .find(|o| o["name"] == "Pad")
-            .unwrap();
-        pad["properties"][field] = if list {
-            json!([{"link":"Original","subelements":["Face3"]}])
-        } else {
-            json!({"link":"Original","subelements":["Face3"]})
-        };
-        pad["property_types"][field] = json!(if list {
-            "App::PropertyLinkSubList"
-        } else {
-            "App::PropertyLinkSub"
-        });
-        pad["property_metadata"][field] = json!({"read_only":false});
-        e.edit_native_properties("Pad");
-        e.property_ui.filter = field.into();
-        let d = e.draft.as_mut().unwrap();
-        let extent = if list { "UpToShape" } else { "UpToFace" };
-        d.parameters["properties"] = if field.ends_with('2') {
-            json!({"SideType":"Two sides","Type2":extent})
-        } else if field == "ReferenceAxis" {
-            json!({"UseCustomVector":false})
-        } else {
-            json!({"Type":extent})
-        };
-        d.valid = true;
-        d.changed = None;
-        let params = d.parameters.clone();
-        let state = e.state.clone();
-        for picks in [
-            vec![("A", "Face2"), ("Gone", "Face1")],
-            vec![("Pad", "Face1"), ("Gone", "Face2")],
-            vec![("Gone", "")],
-        ] {
-            pick_editor(&mut e, &picks);
-            let ui = click_reference(&mut e, "Use native selection");
-            assert!(
-                ui.labels
-                    .iter()
-                    .any(|(text, _)| text.contains("Gone") && text.contains("retry")),
-                "{field}"
-            );
-            assert_eq!(e.draft.as_ref().unwrap().parameters, params);
-            assert_eq!(e.state, state);
-            assert!(e.draft.as_ref().unwrap().valid && e.draft.as_ref().unwrap().changed.is_none());
+fn reference_collector_checks_stale_objects_before_replacing_a_singular_target() {
+    for field in ["UpToFace","UpToFace2","UpToShape","UpToShape2","ReferenceAxis"] {
+        let (mut e,jobs)=profile_editor();
+        e.property_ui.active_reference=Some(field.into());
+        e.property_ui.schema["property_types"][field]=json!("App::PropertyLinkSub");
+        let before=e.draft.as_ref().unwrap().parameters.clone();
+        for selected in [vec![("A","Face2"),("Gone","Face1")],
+            vec![("Gone","Face1"),("A","Face2")],vec![("Gone","")]] {
+            pick_editor(&mut e,&selected);e.collect_reference_field();
+            assert!(e.error.as_deref().is_some_and(|s|s.contains("Gone")&&s.contains("stale")),"{field}");
+            assert_eq!(e.draft.as_ref().unwrap().parameters,before);
             assert!(jobs.try_recv().is_err());
         }
-        if !list {
-            pick_editor(&mut e, &[("A", "Face2"), ("A", "Face1")]);
-            click_reference(&mut e, "Use native selection");
-            assert_eq!(
-                e.draft.as_ref().unwrap().parameters,
-                params,
-                "operation-specific singular target rule"
-            );
-        }
-        pick_editor(&mut e, &[("Pad", "Face1"), ("A", "Face2")]);
-        click_reference(&mut e, "Use native selection");
-        let link = json!({"link":"A","subelements":["Face2"]});
-        assert_eq!(
-            e.draft.as_ref().unwrap().parameters["properties"][field],
-            if list { json!([link]) } else { link }
-        );
-        assert!(e.draft.as_ref().unwrap().changed.is_some());
-        assert!(jobs.try_recv().is_err());
     }
 }
 
 #[test]
-fn actual_editor_invalid_profile_pick_preserves_foreign_copy_choice() {
-    let (mut e, jobs) = profile_editor();
-    e.state["objects"][1]["body"] = json!("OtherBody");
-    e.edit_native_properties("Pad");
-    let original = json!({"link":"Original","subelements":[]});
-    let params = &mut e.draft.as_mut().unwrap().parameters;
-    params["properties"]["Profile"] = original.clone();
-    e.property_ui.reference.prepare(params, &original);
-    params["reference_choice"]["request"]["mode"] = json!("dependent");
-    e.draft.as_mut().unwrap().valid = true;
-    e.property_ui.filter = "Profile".into();
-    let before = e.draft.as_ref().unwrap().parameters.clone();
-    pick_editor(&mut e, &[("A", ""), ("Gone", "")]);
-    let ui = click_reference(&mut e, "Use selection");
-    assert!(ui.labels.iter().any(|(text, _)| text == "Dependent copy"));
-    assert_eq!(e.draft.as_ref().unwrap().parameters, before);
-    assert!(e.draft.as_ref().unwrap().valid);
-    assert!(jobs.try_recv().is_err());
+fn invalid_field_pick_preserves_existing_cross_owner_association() {
+    let (mut e,jobs)=profile_editor();
+    e.state["objects"][1]["body"]=json!("OtherBody");e.edit_native_properties("Pad");
+    let original=json!({"link":"Original","subelements":[]});
+    let params=&mut e.draft.as_mut().unwrap().parameters;
+    params["properties"]["Profile"]=original.clone();
+    e.property_ui.reference.prepare(params,&original);
+    params["reference_choice"]["request"]["mode"]=json!("dependent");
+    e.draft.as_mut().unwrap().valid=true;
+    let before=e.draft.as_ref().unwrap().parameters.clone();
+    click_reference(&mut e,"Original");
+    pick_editor(&mut e,&[("A",""),("Gone","")]);e.collect_reference_field();
+    assert_eq!(e.draft.as_ref().unwrap().parameters,before);
+    assert!(e.draft.as_ref().unwrap().valid);assert!(jobs.try_recv().is_err());
+}
+
+#[test]
+fn shared_field_removes_one_chip_without_activating_or_losing_other_selections() {
+    let mut ui=Ui::new();
+    let mut value=json!([{"link":"A","subelements":["Edge1","Edge2"]},{"link":"B"}]);
+    let objects=vec![json!({"name":"A","label":"Sketch 1"}),json!({"name":"B","label":"Sketch 2"})];
+    let mut changed=false;let mut activated=false;
+    let mut draw=|ui:&mut egui::Ui| {
+        let r=super::super::reference_field::show(ui,&mut value,&objects,false);
+        changed|=r.changed;activated|=r.activated;
+    };
+    ui.frame(vec![],&mut draw);ui.frame(vec![],&mut draw);
+    ui.click("×",&mut draw);
+    assert!(changed);assert!(!activated);
+    assert_eq!(value,json!([{"link":"A","subelements":["Edge2"]},{"link":"B"}]));
+}
+
+#[test]
+fn full_revolve_pointer_toggle_preserves_the_entered_partial_angle() {
+    let mut ui=Ui::new();
+    let mut parameters=json!({"type":"PartDesign::Revolution","properties":{"Angle":90.,"Type":"Angle","Midplane":false}});
+    let schema=json!({"properties":{}});
+    let mut draw=|ui:&mut egui::Ui| {super::super::task_fields::configure(ui,&mut parameters,&schema);};
+    ui.frame(vec![],&mut draw);ui.frame(vec![],&mut draw);
+    ui.click("Full revolve",&mut draw);
+    assert_eq!(parameters["properties"]["Angle"],360.);
+    assert_eq!(parameters["properties"]["Type"],"Angle");
+    let mut draw=|ui:&mut egui::Ui| {super::super::task_fields::configure(ui,&mut parameters,&schema);};
+    ui.frame(vec![],&mut draw);
+    ui.click("Full revolve",&mut draw);
+    assert_eq!(parameters["properties"]["Angle"],90.);
+    assert_eq!(parameters["revolve_full"],false);
 }

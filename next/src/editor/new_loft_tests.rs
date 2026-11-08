@@ -9,6 +9,7 @@ fn loft_fixture() -> (Editor, Receiver<Job>, Sender<Reply>) {
         "loft_source":{"link":format!("S{i}"),"target":"","source_id":100+i,"body":"Body","body_id":90,
             "document_uid":"uid","frame":[1,0,0,0,0,1,0,0,0,0,1,i*20,0,0,0,1]},
         "loft_vertices":{"Vertex1":"mapped-1"}})).collect::<Vec<_>>());
+    e.state["objects"].as_array_mut().unwrap().push(json!({"name":"Body","type":"PartDesign::Body","native_id":90}));
     e.start_native_feature("Part::Loft");
     let schema=input.try_recv().unwrap();assert_eq!(schema.op,"feature_schema");
     e.busy=false;
@@ -20,29 +21,33 @@ fn loft_fixture() -> (Editor, Receiver<Job>, Sender<Reply>) {
 fn new_loft_full_app_origin_order_correction_remove_and_source_unchanged() {
     let (mut e,input,_)=loft_fixture();let ctx=egui::Context::default();let original=e.state.clone();
     full_frame(&mut e,&ctx,vec![]);
-    for (name,target) in [("S0","Origin"),("S1",""),("S2","Vertex1")] {
-        e.viewport.selected=Some(crate::viewport::Selection{object:name.into(),subelement:target.into()});
-        e.viewport.selections.clear();pointer(&mut e,&ctx,"Append selection");
+    for (name,target) in [("S0","Origin"),("S1",""),("S2","Origin")] {
+        pointer(&mut e,&ctx,"Select entities");
+        e.viewport.selections=vec![crate::viewport::Selection{object:name.into(),subelement:target.into()}];
+        e.collect_reference_field();assert!(e.error.is_none(),"{:?}",e.error);
         e.draft.as_mut().unwrap().changed=None;
     }
     let p=&e.draft.as_ref().unwrap().parameters;
     assert_eq!(p["loft_sections"][0]["target"],"Origin");
-    assert_eq!(p["loft_sections"][2]["mapped_name"],"mapped-1");
+    assert_eq!(p["loft_sections"][2]["target"],"Origin");
+    assert_eq!(super::super::new_loft::section_source(&e.state,"S2","Vertex1").unwrap()["mapped_name"],"mapped-1");
     let edits=crate::property_commands::build(p).unwrap();
     assert_eq!(edits[0]["type"],"Part::Loft");assert!(edits[0].get("body").is_none());
     assert_eq!(edits.last().unwrap()["sections"],p["loft_sections"]);
-    e.viewport.selected=Some(crate::viewport::Selection{object:"S1".into(),subelement:"Face1".into()});
-    pointer(&mut e,&ctx,"Correct");
+    pointer(&mut e,&ctx,"Origin of S0");
+    assert_eq!(e.property_ui.active_reference.as_deref(),Some("Sections:0"));
+    e.viewport.selections=vec![crate::viewport::Selection{object:"S0".into(),subelement:"".into()}];
+    e.collect_reference_field();
     e.draft.as_mut().unwrap().changed=None;
-    assert_eq!(e.draft.as_ref().unwrap().parameters["loft_sections"][0]["link"],"S1");
-    pointer(&mut e,&ctx,"Remove");
+    assert_eq!(e.draft.as_ref().unwrap().parameters["loft_sections"][0]["target"],"");
+    pointer(&mut e,&ctx,"×");
     assert_eq!(e.draft.as_ref().unwrap().parameters["loft_sections"].as_array().unwrap().len(),2);
     assert_eq!(e.state,original);assert!(input.try_recv().is_err());
 }
 #[test]
 fn new_loft_full_app_origin_collector_stale_owner_and_apply_cancel_dispatch() {
     let (mut e,input,_)=loft_fixture();let ctx=egui::Context::default();
-    full_frame(&mut e,&ctx,vec![]);pointer(&mut e,&ctx,"Show sketch origins");
+    full_frame(&mut e,&ctx,vec![]);pointer(&mut e,&ctx,"Select entities");
     // The canvas precedes the task panel; consume its toggle on the next frame.
     full_frame(&mut e,&ctx,vec![]);
     assert_eq!(e.viewport.loft_origins.len(),3);
@@ -80,8 +85,9 @@ fn new_loft_full_app_rejected_preview_callback_retains_sources_and_allows_retry(
     full_frame(&mut e,&ctx,vec![]);
     assert!(!e.busy);assert!(e.draft.is_some());assert_eq!(e.state["objects"],original["objects"]);
     assert!(e.error.as_deref().unwrap().contains("stale_reference"));
-    e.viewport.selected=Some(crate::viewport::Selection{object:"S0".into(),subelement:"Origin".into()});
-    pointer(&mut e,&ctx,"Append selection");
+    pointer(&mut e,&ctx,"Select entities");
+    e.viewport.selections=vec![crate::viewport::Selection{object:"S0".into(),subelement:"Origin".into()}];
+    e.collect_reference_field();
     assert_eq!(e.draft.as_ref().unwrap().parameters["loft_sections"][0]["source_id"],100);
     assert!(input.try_recv().is_err());
 }

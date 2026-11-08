@@ -191,6 +191,7 @@ impl Editor {
     }
     pub(super) fn body_toolbar(&mut self, ui: &mut egui::Ui) {
         let all = bodies(&self.state);
+        if std::env::var_os("CAD_NATIVE_TOOLS").is_some() {
         if !all.is_empty() {
             let text = all
                 .iter()
@@ -221,6 +222,7 @@ impl Editor {
         }
         if ui.button("New body").clicked() {
             self.new_body();
+        }
         }
         if ui
             .add_enabled(
@@ -477,8 +479,11 @@ impl Editor {
     fn select_tree_object(&mut self, name: &str, additive: bool) {
         select_tree_name(&mut self.body_ui.selected, name, additive);
         self.selected_object = self.tree_selections().last().cloned();
-        if !self.measurement_keeps_selection(additive) {
-            self.viewport.clear_selection();
+        if !self.measurement_keeps_selection(additive) { self.viewport.clear_selection(); }
+        if self.draft.is_some() && self.property_ui.active_reference.is_some() {
+            self.viewport.selections=self.body_ui.selected.iter().map(|name|crate::viewport::Selection{object:name.clone(),subelement:String::new()}).collect();
+            self.viewport.selected=self.viewport.selections.last().cloned();
+            self.collect_reference_field();
         }
         if self.draft.is_none() {
             self.sketch = None;

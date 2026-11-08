@@ -428,15 +428,7 @@ impl Viewport {
             return;
         };
         if toggle {
-            if let Some(index) = self
-                .sketch_selection
-                .iter()
-                .position(|element| *element == hit)
-            {
-                self.sketch_selection.remove(index);
-            } else {
-                self.sketch_selection.push(hit);
-            }
+            super::toggle_selection(&mut self.sketch_selection, hit);
         } else {
             self.sketch_selection = vec![hit];
         }

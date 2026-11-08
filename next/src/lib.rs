@@ -7,6 +7,7 @@ pub mod document_units;
 pub mod editor;
 pub mod extrusion_commands;
 pub mod feature_commands;
+pub mod task_contract;
 mod gesture_leases;
 pub mod history_commands;
 pub mod hole_commands;

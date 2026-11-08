@@ -14,6 +14,8 @@ mod view_cube;
 pub use standard_planes::StandardPlane;
 mod select_other;
 #[cfg(test)]
+mod selection_toggle_tests;
+#[cfg(test)]
 mod select_other_ui_tests;
 #[cfg(test)]
 mod wire_visibility_tests;
@@ -31,6 +33,18 @@ pub(crate) const POINT_PICK_RADIUS: f32 = 10.;
 #[cfg(test)]
 mod pointer_forgiveness_tests;
 pub use crate::sketch_commands::SketchElement;
+
+/// Toggle one exact identity without replacing other picks. Returns whether it is now selected.
+/// Field collectors can share viewport click semantics without interpreting modifiers.
+pub fn toggle_selection<T: PartialEq>(selections: &mut Vec<T>, hit: T) -> bool {
+    if let Some(index) = selections.iter().position(|selection| selection == &hit) {
+        selections.remove(index);
+        false
+    } else {
+        selections.push(hit);
+        true
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Selection {
@@ -94,6 +108,7 @@ pub struct Viewport {
     edges: Vec<Edge>,
     vertices: Vec<Vertex>,
     topology_references: BTreeMap<String, Vec<String>>,
+    geometry_types: BTreeMap<(String,String),String>,
     topology_identities: BTreeMap<(String, String), String>,
     references: Vec<references::Reference>,
     reference_revisions: BTreeMap<String, Option<u64>>,
@@ -143,6 +158,7 @@ impl Default for Viewport {
             edges: vec![],
             vertices: vec![],
             topology_references: BTreeMap::new(),
+            geometry_types: BTreeMap::new(),
             topology_identities: BTreeMap::new(),
             references: vec![],
             reference_revisions: BTreeMap::new(),
@@ -232,21 +248,24 @@ impl Viewport {
             .chain(self.selected.iter())
             .any(|selection| selection.object == object && selection.subelement == subelement)
     }
+    /// Ordinary graphics-area click: toggle an exact native identity, or clear on blank.
+    /// Picking/filter validation belongs to the caller; this does not remap identities.
+    pub fn toggle_native_selection(&mut self, hit: Option<Selection>) {
+        self.select_native_element(hit, true);
+    }
+
+    /// Clear solid and sketch picks, including saved sketch cursor positions.
+    pub fn clear_viewport_selection(&mut self) {
+        self.clear_sketch_selection();
+    }
+
     fn select_native_element(&mut self, hit: Option<Selection>, toggle: bool) {
         let Some(hit) = hit else {
             self.clear_selection();
             return;
         };
         if toggle {
-            if let Some(index) = self
-                .selections
-                .iter()
-                .position(|selection| selection == &hit)
-            {
-                self.selections.remove(index);
-            } else {
-                self.selections.push(hit);
-            }
+            toggle_selection(&mut self.selections, hit);
         } else {
             self.selections = vec![hit];
         }
@@ -290,6 +309,7 @@ impl Viewport {
         self.edges.clear();
         self.vertices.clear();
         self.topology_references.clear();
+        self.geometry_types.clear();
         self.topology_identities.clear();
         for (mesh, topology) in scenes {
             self.append_scene(mesh, topology);
@@ -322,8 +342,14 @@ impl Viewport {
                     .map(str::to_owned)
             })
             .collect();
-        self.topology_references
-            .insert(object.to_owned(), references);
+        for group in ["edges","faces"] {
+            for element in topology[group].as_array().into_iter().flatten() {
+                if let (Some(sub),Some(kind))=(element["subelement"].as_str(),element["geometry_type"].as_str()) {
+                    self.geometry_types.insert((object.to_owned(),sub.to_owned()),kind.to_owned());
+                }
+            }
+        }
+        self.topology_references.insert(object.to_owned(), references);
         let object: Arc<str> = Arc::from(object);
         let (origin, rotation) = placement(&mesh["world_from_shape"]);
         let positions: Vec<Vec3> = mesh["positions"]
@@ -729,6 +755,9 @@ impl Viewport {
             })
             .collect()
     }
+    pub fn scene_geometry_type(&self,selection:&Selection)->Option<&str> {
+        self.geometry_types.get(&(selection.object.clone(),selection.subelement.clone())).map(String::as_str)
+    }
     pub fn scene_subelement_identity(&self, selection: &Selection) -> Option<(String, u64)> {
         Some((self.topology_identities.get(&(selection.object.clone(), selection.subelement.clone()))?.clone(),
             self.scene_revisions.get(&selection.object).copied().flatten()?))
@@ -998,14 +1027,24 @@ impl Viewport {
         }
         self.paint_depth_handle(&painter);
         let mut selection = None;
+        // Space is selection input only over an idle graphics area. Text fields,
+        // popups, tools and pointer gestures retain ownership of their input.
+        if ui.is_enabled() && response.hovered()
+            && !self.cube_consumed && !self.depth.consumed
+            && !ui.ctx().wants_keyboard_input() && !egui::Popup::is_any_open(ui.ctx())
+            && (self.sketch.is_none() || self.sketch_select_enabled || self.solid_select_in_sketch)
+            && !ui.input(|i| i.pointer.any_down())
+            && ui.input_mut(|i| i.modifiers == egui::Modifiers::NONE
+                && i.consume_key(egui::Modifiers::NONE, egui::Key::Space))
+        {
+            self.clear_viewport_selection();
+        }
         if !self.cube_consumed && !self.depth.consumed
             && response.clicked()
             && let Some(pos) = response.interact_pointer_pos()
         {
             if self.sketch.is_some() && !self.solid_select_in_sketch {
                 if self.sketch_select_enabled && self.dimension_hit(pos).is_none() {
-                    let toggle =
-                        ui.input(|i| i.modifiers.ctrl || i.modifiers.shift || i.modifiers.command);
                     let hit = self.sketch_hit(pos);
                     if let Some(hit) = hit {
                         if self.pierce_edge.is_some() {
@@ -1021,7 +1060,7 @@ impl Viewport {
                                 self.pierce_edge = None;
                             }
                         }
-                        let hit = self.select_sketch_at(pos, toggle);
+                        let hit = self.select_sketch_at(pos, true);
                         selection = hit.map(|element| Selection {
                             object: self
                                 .sketch
@@ -1031,6 +1070,11 @@ impl Viewport {
                                 .to_owned(),
                             subelement: format!("Geometry{}", element.index),
                         });
+                        self.selected = self.sketch_selection.last().map(|element| Selection {
+                            object: self.sketch.as_ref().and_then(|s| s["name"].as_str())
+                                .unwrap_or("").to_owned(),
+                            subelement: format!("Geometry{}", element.index),
+                        }).or_else(|| self.selections.last().cloned());
                     } else {
                         let edges = if matches!(
                             self.selection_mode,
@@ -1040,21 +1084,23 @@ impl Viewport {
                         } else {
                             Vec::new()
                         };
-                        self.clear_sketch_selection();
                         if let [edge] = edges.as_slice() {
-                            self.pierce_edge = Some(edge.clone());
-                            self.selections = vec![edge.selection.clone()];
-                            selection = Some(edge.selection.clone());
+                            if !self.sketch_selection.is_empty() {
+                                self.clear_sketch_selection();
+                            }
+                            self.toggle_native_selection(Some(edge.selection.clone()));
+                            // Pierce requires exactly one unambiguous native edge.
+                            self.pierce_edge = (self.selections.as_slice() == [edge.selection.clone()])
+                                .then(|| edge.clone());
+                            selection = self.selected.clone();
+                        } else {
+                            self.clear_sketch_selection();
                         }
                     }
                 }
-                self.selected = selection.clone();
             } else {
                 let hit = self.pick(pos, &triangles);
-                let toggle = ui.input(|input| {
-                    input.modifiers.ctrl || input.modifiers.shift || input.modifiers.command
-                });
-                self.select_native_element(hit, toggle);
+                self.toggle_native_selection(hit);
                 selection = self.selected.clone();
             }
         }

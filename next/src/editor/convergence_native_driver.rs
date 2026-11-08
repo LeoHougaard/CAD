@@ -186,6 +186,7 @@ impl Native {
             "toolbar"=>egui::Rect::from_min_max(egui::Pos2::ZERO,egui::pos2(1280.,80.)),
             "dialog"=>self.editor.file_browser.test_selection(&self.ctx).expect("actual file dialog").2,
             "popup"=>self.ctx.content_rect(),
+            "Feature"=>{let label=self.editor.draft.as_ref().and_then(|d|crate::task_contract::feature_label(d.parameters["type"].as_str().unwrap_or_default())).unwrap_or("Feature");self.ctx.memory(|m|m.area_rect(egui::Id::new(label))).expect("actual named feature area")},
             _=>self.ctx.memory(|m|m.area_rect(egui::Id::new(if scope=="Features" {"features"} else {scope}))).expect("actual named area"),
         }
     }
@@ -589,29 +590,17 @@ fn offline_full_app_profile_complete_schema_and_disabled_apply() {
     let state=n.editor.state.clone();
     super::reply(&output,&mut n.editor,&n.ctx,job,true,schema,state);
     n.frame(vec![]);n.frame(vec![]);
-    let (control,clip,layer,value)=n.ctx.data(|d|d.get_temp::<(egui::Response,egui::Rect,egui::LayerId,Value)>(egui::Id::new("convergence_profile_response"))).expect("actual Profile ComboBox");
+    let (control,clip,layer,value)=n.ctx.data(|d|d.get_temp::<(egui::Response,egui::Rect,egui::LayerId,Value)>(egui::Id::new("convergence_profile_response"))).expect("actual profile selection field");
     assert!(value.is_null());assert!(control.enabled());
     if clip.contains(control.rect.center()) {
         assert_eq!(n.ctx.layer_id_at(control.rect.center()),Some(layer));
     }
-    // Move the actual full native property scroll using input, retain a current
-    // response, and require an observed clipped case. No fabricated clip rect.
-    let mut clipped=false;
-    for _ in 0..12 {
-        let p=n.bounds("Feature").center();
-        n.frame(vec![egui::Event::PointerMoved(p),egui::Event::MouseWheel{unit:egui::MouseWheelUnit::Point,delta:egui::vec2(0.,-180.),modifiers:egui::Modifiers::NONE}]);
-        n.frame(vec![]);
-        if let Some((current,current_clip,_,_))=n.ctx.data(|d|d.get_temp::<(egui::Response,egui::Rect,egui::LayerId,Value)>(egui::Id::new("convergence_profile_response"))) {
-            if !current_clip.contains(current.rect.center()) {clipped=true;break;}
-        }
-    }
-    assert!(clipped,"complete-schema actual scroll must produce a clipped Profile fixture");
-    // Return with bounded wheel input, then re-resolve the actual current widget.
-    for _ in 0..12 {
-        let p=n.bounds("Feature").center();
-        n.frame(vec![egui::Event::PointerMoved(p),egui::Event::MouseWheel{unit:egui::MouseWheelUnit::Point,delta:egui::vec2(0.,180.),modifiers:egui::Modifiers::NONE}]);
-    }
+    // A selection field activates collection directly; it opens no object list.
+    let parameters=n.editor.draft.as_ref().unwrap().parameters.clone();
     n.profile_control();
+    assert_eq!(n.editor.property_ui.active_reference.as_deref(),Some("Profile"));
+    assert_eq!(n.editor.draft.as_ref().unwrap().parameters,parameters);
+    assert!(input.try_recv().is_err());
     n.note("MOCKED full App complete Pad schema/Profile and busy disabled Apply; zero native credit");
 }
 

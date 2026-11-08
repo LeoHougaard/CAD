@@ -706,7 +706,7 @@ fn region_full_app_press_release_dispatches_identity_bound_profile() {
     assert!(editor.viewport.region_hit(initial).is_some());
     frame(&mut editor,vec![egui::Event::PointerMoved(initial),egui::Event::PointerButton{
         pos:initial,pressed:true,button:egui::PointerButton::Primary,modifiers:egui::Modifiers::NONE}]);
-    assert_eq!(ctx.interaction_snapshot(|i|i.dragged),Some(egui::Id::new("Feature").with("move")));
+    assert_eq!(ctx.interaction_snapshot(|i|i.dragged),Some(egui::Id::new("Revolve").with("move")));
     assert!(!editor.viewport.response.as_ref().unwrap().is_pointer_button_down_on());
     frame(&mut editor,vec![egui::Event::PointerButton{pos:initial,pressed:false,
         button:egui::PointerButton::Primary,modifiers:egui::Modifiers::NONE}]);
@@ -741,7 +741,17 @@ fn region_full_app_press_release_dispatches_identity_bound_profile() {
     assert_eq!(region["source_token"],"mock-native-token");
     assert_eq!(region["body_id"],101);
     assert_eq!(region["source"],"Sketch");
-    editor.property_ui.region_pick=false;editor.property_ui.axis_pick=true;
+    editor.property_ui.schema=json!({"properties":{"Profile":{"link":"Sketch"},"ReferenceAxis":null},
+        "property_types":{"Profile":"App::PropertyLinkSub","ReferenceAxis":"App::PropertyLinkSub"},
+        "property_metadata":{"Profile":{"read_only":false},"ReferenceAxis":{"read_only":false}}});
+    frame(&mut editor,vec![]);frame(&mut editor,vec![]);
+    let control=ctx.data(|d|d.get_temp::<egui::Response>(egui::Id::new("reference_field").with("ReferenceAxis"))).expect("rendered Revolve axis field");
+    assert!(control.enabled());let axis_field=control.rect.center();
+    for pressed in [true,false] {frame(&mut editor,vec![egui::Event::PointerMoved(axis_field),egui::Event::PointerButton {
+        pos:axis_field,pressed,button:egui::PointerButton::Primary,modifiers:egui::Modifiers::NONE}]);}
+    assert_eq!(editor.property_ui.active_reference.as_deref(),Some("ReferenceAxis"));
+    assert!(editor.property_ui.axis_pick);assert!(!editor.property_ui.region_pick);
+
     frame(&mut editor,vec![]);
     let pos=editor.viewport.sketch_screen_point([0.,-10.,0.]);
     frame(&mut editor,vec![egui::Event::PointerMoved(pos)]);

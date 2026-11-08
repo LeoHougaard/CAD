@@ -1,0 +1,132 @@
+{
+  "status": "development checkpoint",
+  "host": {
+    "broad_passed": 416,
+    "failed": 0,
+    "ignored": 175,
+    "separate_catalog_passed": 6,
+    "warnings_denied": true
+  },
+  "native": {
+    "status": "PASS",
+    "checks": [
+      {
+        "label": "initial",
+        "angle": 90.0,
+        "volume": 19.634954084936208,
+        "expression": "90 deg"
+      },
+      {
+        "label": "preview full",
+        "angle": 360.0,
+        "volume": 78.53981633974483,
+        "expression": null
+      },
+      {
+        "label": "cancel",
+        "angle": 90.0,
+        "volume": 19.634954084936208,
+        "expression": "90 deg"
+      },
+      {
+        "label": "apply",
+        "angle": 360.0,
+        "volume": 78.53981633974483,
+        "expression": null
+      },
+      {
+        "label": "undo",
+        "angle": 90.0,
+        "volume": 19.634954084936208,
+        "expression": "90 deg"
+      },
+      {
+        "label": "redo",
+        "angle": 360.0,
+        "volume": 78.53981633974483,
+        "expression": null
+      },
+      {
+        "label": "uncheck Full revolve",
+        "angle": 90.0,
+        "volume": 19.634954084936208,
+        "expression": "90 deg"
+      },
+      {
+        "label": "restore full",
+        "angle": 360.0,
+        "volume": 78.53981633974483,
+        "expression": null
+      },
+      {
+        "label": "reopen",
+        "angle": 360.0,
+        "volume": 78.53981633974483,
+        "expression": null
+      }
+    ],
+    "artifact_sha256": "ee89bb16b23cb2b8d337a70137f8ca8c4e050be0faf4df5c83a0f749949865ce",
+    "scope": "Actual production Rust host/native worker with pointer-test command payloads; no live GUI, raw BRep or Whole claim"
+  },
+  "whole": 2,
+  "goal": 100,
+  "physical": 0,
+  "final_same_build_mass": "UNVERIFIED",
+  "build_input_source": {
+    "next/ONSHAPE-INTERACTION.md": "38fca7d5b9fa5fc460fce884ae532c71fafdba21e96ea67eee9666847243cee5",
+    "next/src/editor.rs": "c8b91bf512a5041c350f41c561366e02bf5c4adfd238cd5e7d5bc4d7972fab6a",
+    "next/src/lib.rs": "ee55ed82167e6f8b2631bd4d0c06516cefdc285a589c5049a009a1417dd5e526",
+    "next/src/task_contract.rs": "53aa3628c74623b0ead4dcd8453534bff8500b3fca8d6d9e19bc6238bd04e864",
+    "next/src/viewport.rs": "206e442805ab81d7bb3bb1195a8ee45a69af82bcff9eb2eb2d8b0854d945c5a4",
+    "next/src/editor/bodies.rs": "8a53790eed94aade2326d4bce9a4f3a75bca218718726af37f3d95228038a5a0",
+    "next/src/editor/convergence_native_driver.rs": "39848a3d5e55006bf0e35dcf8c655880b75a5024e92d00f7949e9d92d72c3532",
+    "next/src/editor/new_loft.rs": "f24d549e1677a533578218d123bad204944bfb2a9a746a75e451714201b91d2a",
+    "next/src/editor/new_loft_tests.rs": "e2d8386dd84e3a11c73465d52fe345ac464f2e7e8461615c708984bdbbb96b57",
+    "next/src/editor/part_mirror.rs": "1d9ac29c8abc4f6b9e46b80eee188254ab4100261984dc77b127f1bd099b2cdf",
+    "next/src/editor/part_mirror_tests.rs": "16f049c7cbf843bf74810b23b000c72f82eab76d861b8ac97c41917431a74eef",
+    "next/src/editor/plane_offset.rs": "17406c9ee40b1224ac2f2a59ad0acea44cabd52aa322fbe85c2439d31694e940",
+    "next/src/editor/profile_references.rs": "14dd69f791f0eb3866efa69ed160426396528e417a6aea80a2665ac1af1ac409",
+    "next/src/editor/properties.rs": "131b6bd5fb506bb322bebd1001f3c8d8888c31138fdf888e4824038472150590",
+    "next/src/editor/rectangular_extrude_tests.rs": "0bc356594b327ae89d1838a1f0000a47af0a609b226fe77d47078c71227dfe0b",
+    "next/src/editor/reference_collection.rs": "6af1584fb939d98db5efe7e6e4ecb982526be37146c13a6885a4eb87a7a6727a",
+    "next/src/editor/reference_field.rs": "aeb07e92b363f4ba85c553b2da8c7e638dd62373140356084c990cac9de121ce",
+    "next/src/editor/special_reference_collection.rs": "6daaf2f4aed643091d20fe00bf6600a20069ff58a2ee0d51a54a1f58e620297a",
+    "next/src/editor/task_fields.rs": "453b514f7e2fd3771948276d2a40c174e8e8b9f2af5d69e1ba245a473843f82c",
+    "next/src/viewport/selection_toggle_tests.rs": "6d7ca77e25a36d5bfbc7b8b4d91baf7d118560edfc2a0d5822d7f509b723d59c",
+    "next/src/viewport/select_other.rs": "508e7b4d42d01f645b7f403db01548c774babe05e193e0764fa8b2c7c8ee64dd",
+    "next/src/viewport/select_other_ui_tests.rs": "ed098cf9aef9cbf343ba51e6b1d788b2670ad9faaafddc06731f31e093e357ec",
+    "next/src/viewport/sketch.rs": "aab77b0e45a823db2a8ea1e3b8822d8eb0b21c19ba0b8a17c9b048d8d6cb4b6a",
+    "next/src/editor/plane_offset/tests.rs": "8b993186153a8b89ac8cfe8a4d5a59d0c707dfbae6e980fc76067f8360e293c4",
+    "next/src/editor/properties/reference_followup_tests.rs": "a9838a6babb9bc7f7b07ca9d0390869e60f599531dc327e976392d3bf0d2d400",
+    "next/src/editor/properties/reference_selection_tests.rs": "055dd67c2795df5b89ac7887bd87070648f3a00df2f6638b7df593c0b5192220"
+  },
+  "checked_in_source": {
+    "next/ONSHAPE-INTERACTION.md": "38fca7d5b9fa5fc460fce884ae532c71fafdba21e96ea67eee9666847243cee5",
+    "next/src/editor.rs": "9fcb77c7bc0bd68a4999fce046982c4203c453584d9f7af0530e9b7d9e996a2c",
+    "next/src/lib.rs": "ee55ed82167e6f8b2631bd4d0c06516cefdc285a589c5049a009a1417dd5e526",
+    "next/src/task_contract.rs": "53aa3628c74623b0ead4dcd8453534bff8500b3fca8d6d9e19bc6238bd04e864",
+    "next/src/viewport.rs": "1fb2b37dd669eac0015ea121625ab7d3d1d4911d45e7b1bbc6354866e8426d9e",
+    "next/src/editor/bodies.rs": "8a53790eed94aade2326d4bce9a4f3a75bca218718726af37f3d95228038a5a0",
+    "next/src/editor/convergence_native_driver.rs": "39848a3d5e55006bf0e35dcf8c655880b75a5024e92d00f7949e9d92d72c3532",
+    "next/src/editor/new_loft.rs": "6c5a4e7accf3b13c1b83c00d36f0e19e36c806ce20bcb1ee6341363e4495dd95",
+    "next/src/editor/new_loft_tests.rs": "e2d8386dd84e3a11c73465d52fe345ac464f2e7e8461615c708984bdbbb96b57",
+    "next/src/editor/part_mirror.rs": "1d9ac29c8abc4f6b9e46b80eee188254ab4100261984dc77b127f1bd099b2cdf",
+    "next/src/editor/part_mirror_tests.rs": "4c10907d1674c342927f3a0f7aed08fbd02c096a4f5d1bab51753d9310bea580",
+    "next/src/editor/plane_offset.rs": "17406c9ee40b1224ac2f2a59ad0acea44cabd52aa322fbe85c2439d31694e940",
+    "next/src/editor/profile_references.rs": "14dd69f791f0eb3866efa69ed160426396528e417a6aea80a2665ac1af1ac409",
+    "next/src/editor/properties.rs": "585ebbe6ee6585514e45d82f03bfc6c8b5012d171766dc5a913e637534834af9",
+    "next/src/editor/rectangular_extrude_tests.rs": "9d8244e4abdd7373d3ff3ba19e289270f5da59a278b4dbdb60382a8327987c3a",
+    "next/src/editor/reference_collection.rs": "6af1584fb939d98db5efe7e6e4ecb982526be37146c13a6885a4eb87a7a6727a",
+    "next/src/editor/reference_field.rs": "aeb07e92b363f4ba85c553b2da8c7e638dd62373140356084c990cac9de121ce",
+    "next/src/editor/special_reference_collection.rs": "6daaf2f4aed643091d20fe00bf6600a20069ff58a2ee0d51a54a1f58e620297a",
+    "next/src/editor/task_fields.rs": "453b514f7e2fd3771948276d2a40c174e8e8b9f2af5d69e1ba245a473843f82c",
+    "next/src/viewport/selection_toggle_tests.rs": "6d7ca77e25a36d5bfbc7b8b4d91baf7d118560edfc2a0d5822d7f509b723d59c",
+    "next/src/viewport/select_other.rs": "508e7b4d42d01f645b7f403db01548c774babe05e193e0764fa8b2c7c8ee64dd",
+    "next/src/viewport/select_other_ui_tests.rs": "105d84ffe89fae8b8b10ffec7b681bf26f5cc7577b15b44de75bc5fb9826b5f4",
+    "next/src/viewport/sketch.rs": "aab77b0e45a823db2a8ea1e3b8822d8eb0b21c19ba0b8a17c9b048d8d6cb4b6a",
+    "next/src/editor/plane_offset/tests.rs": "8b993186153a8b89ac8cfe8a4d5a59d0c707dfbae6e980fc76067f8360e293c4",
+    "next/src/editor/properties/reference_followup_tests.rs": "a9838a6babb9bc7f7b07ca9d0390869e60f599531dc327e976392d3bf0d2d400",
+    "next/src/editor/properties/reference_selection_tests.rs": "36f5414dc308d56310b53244fbab002a4e3d6c037e35641bc71202c43e4ed43d"
+  },
+  "line_endings": "Existing tracked line endings preserved; checked-in source and compiled private inputs match exactly after CRLF normalization."
+}
